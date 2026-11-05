@@ -1,0 +1,236 @@
+import SwiftUI
+import WebKit
+
+struct SnowbreakLibrary {
+    let directory: URL
+    init(directory: URL? = nil) {
+        self.directory = directory ?? FileManager.default.urls(for:.applicationSupportDirectory,in:.userDomainMask)[0]
+            .appendingPathComponent(AppIdentity.storageNamespace+"/SnowbreakLibrary",isDirectory:true)
+    }
+    var current: URL { directory.appendingPathComponent("current.snowbreak") }
+    var hasCurrent: Bool { FileManager.default.fileExists(atPath:current.path) }
+    func stage(_ data: Data) throws -> URL {
+        guard (22...128*1024*1024).contains(data.count), data.prefix(4) == Data([0x50,0x4b,3,4]) else {
+            throw CompanionError.message("请选择完整的恩雅 .snowbreak 素材包（不超过128MB）。")
+        }
+        try FileManager.default.createDirectory(at:directory,withIntermediateDirectories:true)
+        let url = directory.appendingPathComponent("staged-\(UUID().uuidString).snowbreak")
+        try data.write(to:url,options:[.atomic,.completeFileProtection]); return url
+    }
+    func commit(_ staged: URL) throws {
+        guard staged.deletingLastPathComponent().standardizedFileURL == directory.standardizedFileURL,
+              staged.lastPathComponent.hasPrefix("staged-") else { throw CompanionError.message("角色暂存路径无效。") }
+        let data = try Data(contentsOf:staged)
+        try data.write(to:current,options:[.atomic,.completeFileProtection])
+        try? FileManager.default.removeItem(at:staged)
+    }
+}
+
+final class SnowbreakScheme: NSObject, WKURLSchemeHandler {
+    let library: SnowbreakLibrary
+    init(library:SnowbreakLibrary) { self.library = library }
+    func resource(_ url:URL) throws -> (Data,String) {
+        guard url.scheme == "companion-snowbreak",url.host == "local",url.query == nil else { throw URLError(.badURL) }
+        if ["/index.html","/host.js"].contains(url.path) {
+            guard let root = Bundle.main.resourceURL?.appendingPathComponent("WebAssets") else { throw URLError(.fileDoesNotExist) }
+            return (try Data(contentsOf:root.appendingPathComponent(url.lastPathComponent)),url.path.hasSuffix(".js") ? "application/javascript" : "text/html")
+        }
+        let name = url.lastPathComponent
+        guard url.path == "/package/"+name,
+              name == "current.snowbreak" || name.range(of:"^staged-[A-Fa-f0-9-]{36}\\.snowbreak$",options:.regularExpression) != nil else { throw URLError(.badURL) }
+        let file = library.directory.appendingPathComponent(name)
+        guard let size = try file.resourceValues(forKeys:[.fileSizeKey]).fileSize,size <= 128*1024*1024 else { throw URLError(.dataLengthExceedsMaximum) }
+        return (try Data(contentsOf:file),"application/octet-stream")
+    }
+    func webView(_ webView:WKWebView,start urlSchemeTask:WKURLSchemeTask) {
+        do {
+            guard let url = urlSchemeTask.request.url else { throw URLError(.badURL) }
+            let (data,type) = try resource(url)
+            let response = HTTPURLResponse(url:url,statusCode:200,httpVersion:"HTTP/1.1",headerFields:[
+                "Content-Type":type,"Content-Length":String(data.count),"Access-Control-Allow-Origin":"*","Cache-Control":"no-store"])!
+            urlSchemeTask.didReceive(response);urlSchemeTask.didReceive(data);urlSchemeTask.didFinish()
+        } catch { urlSchemeTask.didFailWithError(error) }
+    }
+    func webView(_ webView:WKWebView,stop urlSchemeTask:WKURLSchemeTask) { }
+}
+
+struct SnowbreakTouchEvent { let id = UUID(); let label:String }
+
+@MainActor final class SnowbreakStage: NSObject, ObservableObject, WKScriptMessageHandler, WKNavigationDelegate {
+    @Published private(set) var ready = false
+    @Published private(set) var error: String?
+    @Published private(set) var notice: String?
+    @Published private(set) var activeAction: String?
+    @Published private(set) var actions: [String] = []
+    @Published private(set) var touch: SnowbreakTouchEvent?
+    private(set) var interactionRevision = 0
+    let library:SnowbreakLibrary
+    private weak var webView:WKWebView?
+    private var pageReady = false
+    private var paused = false
+    private var staged:URL?
+    private var nonce = UUID().uuidString
+    @Published private(set) var companionMode = "standing"
+    @Published private(set) var companionOutfit = "normal"
+    @Published private(set) var variantIDs:[String] = []
+    var dialogueActions:[String] { ready ? actions + (variantIDs.count == 4 ? ["enya_outfit_normal","enya_outfit_nude","enya_mode_standing","enya_mode_interaction"] : []) : [] }
+    func selectVariant(mode:String? = nil,outfit:String? = nil) {
+        let id=(mode ?? companionMode)+"_"+(outfit ?? companionOutfit)
+        guard ready,variantIDs.contains(id) else { return }
+        interactionRevision += 1;activeAction = nil;ready = false;send(["type":"variant","id":id])
+    }
+
+    init(library:SnowbreakLibrary = SnowbreakLibrary()) { self.library = library }
+    func makeView() -> WKWebView {
+        let configuration = WKWebViewConfiguration()
+        configuration.setURLSchemeHandler(SnowbreakScheme(library:library),forURLScheme:"companion-snowbreak")
+        configuration.userContentController.add(self,name:"snowbreak")
+        configuration.allowsInlineMediaPlayback = true
+        // User-initiated native menu actions should be able to play local original WAVs.
+        configuration.mediaTypesRequiringUserActionForPlayback = []
+        let view = WKWebView(frame:.zero,configuration:configuration)
+        view.navigationDelegate = self;view.isOpaque = false;view.backgroundColor = .clear
+        view.scrollView.isScrollEnabled = false
+        webView = view;pageReady = false;ready = false
+        view.load(URLRequest(url:URL(string:"companion-snowbreak://local/index.html")!));return view
+    }
+    @discardableResult func importFile(_ url:URL) -> Bool {
+        do {
+            let access = url.startAccessingSecurityScopedResource();defer { if access { url.stopAccessingSecurityScopedResource() } }
+            var coordinationError:NSError?,readError:Error?,data:Data?
+            NSFileCoordinator().coordinate(readingItemAt:url,options:[],error:&coordinationError) { file in
+                do {
+                    let size = try file.resourceValues(forKeys:[.fileSizeKey]).fileSize ?? Int.max
+                    guard size <= 128*1024*1024 else { throw CompanionError.message("角色包超过128MB。") }
+                    data = try Data(contentsOf:file)
+                } catch { readError = error }
+            }
+            if let failure = coordinationError { throw failure }
+            if let failure = readError { throw failure }
+            guard let data = data else { throw CompanionError.message("没有读到角色包。") }
+            staged = try library.stage(data);nonce = UUID().uuidString;ready = false;error = nil
+            UserDefaults.standard.set("snowbreak",forKey:"characterEngine")
+            if pageReady { loadSelected() }
+            return true
+        } catch { self.error = error.localizedDescription;return false }
+    }
+    private func loadSelected() {
+        let file = staged ?? (library.hasCurrent ? library.current : nil)
+        guard let file = file else { error = "请在设置中导入恩雅护士 .snowbreak 包。";return }
+        send(["type":"load","url":"companion-snowbreak://local/package/"+file.lastPathComponent,"nonce":nonce])
+    }
+    private func send(_ value:[String:Any]) {
+        guard pageReady,let data = try? JSONSerialization.data(withJSONObject:value),let json = String(data:data,encoding:.utf8) else { return }
+        webView?.evaluateJavaScript("window.SnowbreakHost.receive(\(json))",completionHandler:nil)
+    }
+    func userContentController(_ userContentController:WKUserContentController,didReceive message:WKScriptMessage) {
+        guard message.webView === webView,message.frameInfo.isMainFrame,
+              message.frameInfo.request.url?.scheme == "companion-snowbreak",
+              let body = message.body as? [String:Any],let type = body["type"] as? String else { return }
+        if type == "pageReady" { pageReady = true;loadSelected();return }
+        guard body["nonce"] as? String == nonce else { return }
+        switch type {
+        case "ready":
+            guard body["characterId"] as? String == "Enya" else { error = "这不是恩雅角色包。";return }
+            do {
+                if let staged = staged { try library.commit(staged);self.staged = nil }
+                let variants = body["variants"] as? [[String:String]] ?? []
+                variantIDs = variants.compactMap { v in guard let id=v["id"],["standing_normal","standing_nude","interaction_normal","interaction_nude"].contains(id) else { return nil };return id }
+                if let selected=body["selection"] as? [String:String] { companionMode=selected["mode"] ?? "standing";companionOutfit=selected["outfit"] ?? "normal" }
+                let samples = body["samples"] as? [String] ?? []
+                actions = ["head","left","right","home_login","home_invite","home_shy","home_check","home_kiss","show_02","show_03","show_04","show_05","sequence","idle_01","idle_02"].filter { samples.contains($0) }.map { "snowbreak_"+$0 }
+                let learned = body["learned"] as? [String] ?? []
+                actions += ["yuki_hello","yuki_Yes","yuki_No","yuki_Peace_hand","yuki_dance_90bpm","yuki_dance_120bpm","yuki_f_vibe_dance_60_bpm_002"].filter { learned.contains($0) && (!$0.contains("dance") || body["stance"] as? String == "standing") }.map { "enya_"+$0 }
+                ready = true;error = nil
+                if paused { send(["type":"pause"]) }
+            } catch { self.error = "角色保存失败："+error.localizedDescription }
+        case "playback":
+            let active = body["active"] as? Bool == true
+            if active,activeAction == nil { interactionRevision += 1 }
+            let status = body["status"] as? String ?? ""
+            activeAction = active ? (status.hasPrefix("learned:") ? "恩雅 · Yuki 学习动作" : "恩雅互动") : nil
+        case "touch":
+            if !paused,body["completed"] as? Bool == true,let label = body["label"] as? String,label.count <= 30 {
+                interactionRevision += 1;touch = SnowbreakTouchEvent(label:label)
+            }
+        case "error":
+            error = String((body["message"] as? String ?? "恩雅加载失败。").prefix(500));ready = false
+            if let failed = staged { try? FileManager.default.removeItem(at:failed);staged = nil }
+        case "notice": notice = String((body["message"] as? String ?? "").prefix(200))
+        default: break
+        }
+    }
+    func play(_ id:String,withVoice:Bool = true,automatic:Bool = false) {
+        if id == "stop" { stop();return }
+        if ready,dialogueActions.contains(id) {
+            if id.hasPrefix("enya_outfit_") { selectVariant(outfit:String(id.dropFirst("enya_outfit_".count)));return }
+            if id.hasPrefix("enya_mode_") { selectVariant(mode:String(id.dropFirst("enya_mode_".count)));return }
+        }
+        guard ready,actions.contains(id) else { return }
+        if !automatic { interactionRevision += 1 }
+        notice = nil
+        if id.hasPrefix("enya_yuki_") { send(["type":"learned","id":String(id.dropFirst("enya_".count))]);return }
+        send(["type":"sample","id":String(id.dropFirst("snowbreak_".count)),"withVoice":withVoice])
+    }
+    func stop() { interactionRevision += 1;send(["type":"stop"]);activeAction = nil }
+    func pause() { paused = true;interactionRevision += 1;send(["type":"pause"]);activeAction = nil }
+    func resume() { paused = false;send(["type":"resume"]) }
+    func editTouch() { interactionRevision += 1;send(["type":"edit"]) }
+    func sceneVisible(_ value:Bool) { send(["type":"scene","visible":value]) }
+    func gaze(x:CGFloat,y:CGFloat) { if ready { send(["type":"gaze","x":Double(x),"y":Double(y)]) } }
+    func editLighting() { send(["type":"lightingEdit"]) }
+    func editFrame() { interactionRevision += 1;send(["type":"frameEdit"]) }
+    func detach(_ view:WKWebView) {
+        view.evaluateJavaScript("window.SnowbreakHost?.receive({type:'dispose'})",completionHandler:nil)
+        view.stopLoading();view.navigationDelegate = nil
+        view.configuration.userContentController.removeScriptMessageHandler(forName:"snowbreak")
+        if webView === view { webView = nil;pageReady = false;ready = false }
+    }
+    func setVoice(_ value:Bool) { send(["type":"voice","enabled":value]) }
+    func webView(_ webView:WKWebView,decidePolicyFor navigationAction:WKNavigationAction,decisionHandler:@escaping(WKNavigationActionPolicy)->Void) {
+        let url = navigationAction.request.url
+        decisionHandler(url?.scheme == "companion-snowbreak" && url?.host == "local" ? .allow : .cancel)
+    }
+    func webViewWebContentProcessDidTerminate(_ webView:WKWebView) { ready = false;error = "角色渲染已中断，请切换回恩雅重新加载。" }
+}
+
+struct SnowbreakCharacterView:UIViewRepresentable {
+    @ObservedObject var stage:SnowbreakStage
+    func makeUIView(context:Context)->WKWebView { stage.makeView() }
+    func updateUIView(_ view:WKWebView,context:Context) { }
+    static func dismantleUIView(_ view:WKWebView,coordinator:()) {
+        view.evaluateJavaScript("window.SnowbreakHost?.receive({type:'dispose'})",completionHandler:nil)
+        view.stopLoading();view.navigationDelegate = nil
+        view.configuration.userContentController.removeScriptMessageHandler(forName:"snowbreak")
+    }
+}
+
+struct SnowbreakImportView:View {
+    @ObservedObject var stage:SnowbreakStage
+    @Environment(\.dismiss) private var dismiss
+    @State private var picking = false
+    @State private var local = false
+    var body:some View {
+        NavigationStack {
+            Form {
+                Section("恩雅护士 · 本地移植") {
+                    Text("沿用旧项目 V13 .snowbreak 包，包含病房、原声、待机和头部/左右手反应。")
+                    Button("选择恩雅素材包") { picking = true }.accessibilityIdentifier("importSnowbreak")
+                    Button("App 文件夹") { local = true }
+                    if stage.library.hasCurrent { Text("已保存恩雅素材，下次启动会从本机加载。") }
+                    if let error = stage.error { Text(error).foregroundStyle(.red) }
+                }
+                Section("触碰") {
+                    Text("进入恩雅后，动作菜单可播放三组原作反应及原声。首次使用精细触碰时，从动作菜单打开表面标注，为头部或左右手画上标签；未标注区域不会猜测部位。")
+                    Text("原 App 内保存的标注不会跨 App 自动读取；模型和原始互动资源可以沿用。")
+                }
+            }.navigationTitle("导入恩雅")
+        }.sheet(isPresented:$picking) {
+            CharacterDocumentPicker { result in
+                picking = false
+                if case .success(let url) = result,let url = url { choose(url) }
+            }
+        }.sheet(isPresented:$local) { LocalCharacterFileList(choose:choose) }
+    }
+    private func choose(_ url:URL) { if stage.importFile(url) { dismiss() } }
+}

@@ -1,0 +1,63 @@
+name: QibanCompanion
+options:
+  deploymentTarget:
+    iOS: "16.0"
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    STORAGE_NAMESPACE: QibanCompanion
+    KEYCHAIN_SERVICE: com.local.qibancompanion.api
+    TARGETED_DEVICE_FAMILY: "1"
+targets:
+  QibanCompanion:
+    type: application
+    platform: iOS
+    sources:
+      - Sources
+      - path: WebAssets
+        type: folder
+        buildPhase: resources
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.local.qibancompanion
+        MARKETING_VERSION: "0.13.0"
+        CURRENT_PROJECT_VERSION: "23"
+        GENERATE_INFOPLIST_FILE: YES
+    info:
+      path: Generated/Info.plist
+      properties:
+        StorageNamespace: $(STORAGE_NAMESPACE)
+        KeychainService: $(KEYCHAIN_SERVICE)
+        CFBundleDisplayName: 栖伴
+        NSMicrophoneUsageDescription: 开启语音通话或环境反馈时在本机识别；识别文字和声音类别会发送到你配置的AI接口，原始音频不上传。
+        NSSpeechRecognitionUsageDescription: 在设备支持时将你的语音本机转成对话文字。
+        NSCameraUsageDescription: 仅在开启注视跟随时使用前置相机估计视线，不上传相机画面。
+        UIFileSharingEnabled: true
+        LSSupportsOpeningDocumentsInPlace: true
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
+  QibanCompanionTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources: [Tests]
+    dependencies:
+      - target: QibanCompanion
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+  QibanCompanionUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources: [UITests]
+    dependencies:
+      - target: QibanCompanion
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+schemes:
+  QibanCompanion:
+    build:
+      targets:
+        QibanCompanion: all
+    test:
+      targets: [QibanCompanionTests, QibanCompanionUITests]

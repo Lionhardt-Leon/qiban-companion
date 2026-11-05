@@ -1,0 +1,39 @@
+import * as THREE from 'three';
+import {GLTFLoader} from 'three/addons/loaders/GLTFLoader.js';
+
+export function sceneTransform(value){
+  const valid=(a,n,limit)=>Array.isArray(a)&&a.length===n&&a.every(x=>Number.isFinite(x)&&Math.abs(x)<=limit);
+  if(!value||!valid(value.position,3,1000)||!valid(value.quaternion,4,1.01)||!valid(value.scale,3,20)||value.scale.some(x=>x<.001)||Math.abs(value.quaternion.reduce((n,x)=>n+x*x,0)-1)>.001)throw new Error('Invalid scene transform');
+  return new THREE.Matrix4().compose(new THREE.Vector3(...value.position),new THREE.Quaternion(...value.quaternion).normalize(),new THREE.Vector3(...value.scale));
+}
+
+export async function createLocalScene(runtime,parent,prepare){
+  const config=runtime.getAsset('localScene')?.data;
+  if(!config)return {root:null,setVisible(){},setRoomVisible(){},setCutaway(){},updateView(){},snapshot:()=>({available:false,originalSceneVerified:false})};
+  if(config.schema!=='snowbreak-local-scene/1'||config.characterId!==runtime.current.characterId||config.originalSceneVerified!==false||!/^[a-f0-9]{64}$/.test(config.sourceMapSha256)||!Array.isArray(config.objects)||!config.objects.length||config.objects.length>16)throw new Error('Invalid local scene');
+  const inverse=sceneTransform(config.characterWorld).invert(),root=new THREE.Group(),room=new THREE.Group(),ids=new Set(),items=[],cutawayMaterials=[];
+  root.add(room);const cutPlane=new THREE.Plane();let cutaway=true;
+  for(const item of config.objects){
+    const asset=runtime.getAsset(item.assetRole);
+    if(typeof item.id!=='string'||!/^[a-zA-Z0-9_-]{1,96}$/.test(item.id)||ids.has(item.id)||asset?.kind!=='geometry')throw new Error('Invalid scene object');
+    if((item.group!==undefined&&!['room','furniture'].includes(item.group))||(item.cutaway!==undefined&&typeof item.cutaway!=='boolean'))throw new Error('Invalid scene display group');
+    ids.add(item.id);
+    const matrix=inverse.clone().multiply(sceneTransform(item.world)),part=(await new GLTFLoader().parseAsync(asset.bytes.slice().buffer,'')).scene;
+    let triangles=0;part.traverse(m=>{if(m.isSkinnedMesh)throw new Error('Animated scene needs a separate binding');if(m.isMesh)triangles+=(m.geometry.index?.count||m.geometry.attributes.position.count)/3;});
+    const holder=new THREE.Group();holder.name=item.id;holder.matrixAutoUpdate=false;holder.matrix.copy(matrix);holder.add(part);(item.group==='room'?room:root).add(holder);prepare(part);
+    part.traverse(m=>{if(m.isMesh){if(item.group==='room')m.material.side=THREE.FrontSide;if(item.cutaway){m.material.clippingPlanes=[cutPlane];cutawayMaterials.push(m.material);}if(item.group==='room'||item.cutaway)m.material.needsUpdate=true;}});
+    items.push({id:item.id,assetRole:item.assetRole,group:item.group||'furniture',cutaway:!!item.cutaway,triangles,matrix:matrix.toArray()});
+  }
+  parent.add(root);root.updateMatrixWorld(true);
+  // Character framing can put the camera outside a closed room. Clip only the
+  // foreground walls/curtains, keeping source meshes/transforms, floor, bed and character.
+  // Recompute on camera/framing changes; no per-frame vertex scan is needed.
+  function updateView(camera,focus){
+    if(!cutawayMaterials.length)return;
+    const towards=camera.position.clone().sub(focus),distance=towards.length();if(distance<.001)return;
+    towards.divideScalar(distance);const point=focus.clone().addScaledVector(towards,Math.min(.65,distance*.5));
+    cutPlane.setFromNormalAndCoplanarPoint(towards.negate(),point);
+  }
+  function setCutaway(value){const next=!!value;if(next===cutaway)return;cutaway=next;for(const material of cutawayMaterials){material.clippingPlanes=cutaway?[cutPlane]:null;material.needsUpdate=true;}}
+  return {root,hasCutaway:cutawayMaterials.length>0,updateView,setRoomVisible:value=>{room.visible=!!value;},setCutaway,setVisible:value=>{root.visible=!!value;},snapshot:()=>({available:true,visible:root.visible,roomAvailable:room.children.length>0,roomVisible:room.visible,cutawayAvailable:cutawayMaterials.length>0,cutaway,clipPlane:[...cutPlane.normal.toArray(),cutPlane.constant],objects:items.map(x=>({...x,matrix:[...x.matrix]})),originalSceneVerified:false})};
+}

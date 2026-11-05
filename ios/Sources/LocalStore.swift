@@ -1,0 +1,180 @@
+import Foundation
+import SwiftUI
+import Security
+
+enum APIKeyStore {
+    private static var service:String { AppIdentity.keychainService }
+    static func read() throws -> String {
+        var query = base
+        query[kSecReturnData as String] = true
+        query[kSecMatchLimit as String] = kSecMatchLimitOne
+        var result: CFTypeRef?
+        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        if status == errSecItemNotFound { return "" }
+        guard status == errSecSuccess, let data = result as? Data,
+              let key = String(data: data, encoding: .utf8) else {
+            throw CompanionError.message("无法读取钥匙串密钥，请解锁设备后重试。")
+        }
+        return key
+    }
+    private static var base: [String: Any] {
+        [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service,
+         kSecAttrAccount as String: "chat-api"]
+    }
+    static func write(_ key: String) throws {
+        let status: OSStatus
+        if key.isEmpty {
+            status = SecItemDelete(base as CFDictionary)
+            if status == errSecItemNotFound { return }
+        } else {
+            let attributes: [String: Any] = [kSecValueData as String: Data(key.utf8),
+                kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlockedThisDeviceOnly]
+            let updated = SecItemUpdate(base as CFDictionary, attributes as CFDictionary)
+            if updated == errSecItemNotFound {
+                status = SecItemAdd(base.merging(attributes) { _, new in new } as CFDictionary, nil)
+            } else { status = updated }
+        }
+        guard status == errSecSuccess else { throw CompanionError.message("密钥保存失败（\(status)）。") }
+    }
+}
+
+@MainActor final class LocalStore: ObservableObject {
+    typealias ReplyProvider = (APISettings, String, [Message], String, [String]) async throws -> DialogueReply
+    @Published private(set) var archive = LocalArchive()
+    @Published private(set) var busy = false
+    @Published var error: String?
+    @Published private(set) var storageReady = false
+    @Published private(set) var dialogueAction: DialogueActionEvent?
+    private let directory: URL
+    private let file: URL
+    private var requestTask: Task<Void, Never>?
+    private var requestID: UUID?
+    private var availableActions: [String] = []
+    private let replyProvider: ReplyProvider
+    private let readKey: () throws -> String
+
+    init(directory: URL? = nil, readKey: @escaping () throws -> String = APIKeyStore.read,
+         replyProvider: @escaping ReplyProvider = { settings, key, history, memories, actions in
+             try await APIClient.reply(settings: settings, key: key, history: history, memories: memories, actions: actions)
+         }) {
+        self.readKey = readKey
+        self.replyProvider = replyProvider
+        self.directory = directory ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent(AppIdentity.storageNamespace, isDirectory: true)
+        file = self.directory.appendingPathComponent("archive-v1.json")
+        do {
+            try FileManager.default.createDirectory(at: self.directory, withIntermediateDirectories: true)
+            if FileManager.default.fileExists(atPath: file.path) {
+                let loaded = try JSONDecoder().decode(LocalArchive.self, from: Data(contentsOf: file))
+                try loaded.validate()
+                archive = loaded
+            }
+            storageReady = true
+        } catch {
+            self.error = "本地资料读取失败，已停止写入以保留原文件：\(error.localizedDescription)"
+        }
+    }
+
+    private func commit(_ next: LocalArchive) throws {
+        guard storageReady else { throw CompanionError.message("本地存储未就绪，未覆盖原数据。") }
+        try next.validate()
+        let data = try JSONEncoder().encode(next)
+        try data.write(to: file, options: [.atomic, .completeFileProtection])
+        archive = next
+    }
+
+    func saveSettings(_ settings: APISettings, key: String) throws {
+        guard !busy else { throw CompanionError.message("请等待当前回复完成。") }
+        _ = try APIClient.endpoint(settings.endpoint)
+        guard !settings.model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw CompanionError.message("请填写模型名称。")
+        }
+        let oldKey = try APIKeyStore.read()
+        try APIKeyStore.write(key)
+        var next = archive
+        next.settings = settings
+        do { try commit(next) } catch {
+            try? APIKeyStore.write(oldKey)
+            throw error
+        }
+    }
+
+    func send(_ text: String, actions: [String] = []) {
+        let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty, !busy else { return }
+        do {
+            guard text.count <= 8_000 else { throw CompanionError.message("单条消息请控制在 8000 字以内。") }
+            _ = try APIClient.endpoint(archive.settings.endpoint)
+            guard !archive.settings.model.isEmpty else { throw CompanionError.message("请先配置模型。") }
+            let key = try readKey()
+            var next = archive
+            next.messages.append(Message(role: "user", content: text))
+            try commit(next)
+            availableActions = DialogueMotion.allowed(actions)
+            beginReply(key: key)
+        } catch { self.error = error.localizedDescription }
+    }
+
+    func retry() {
+        guard !busy, archive.messages.last?.role == "user" else { return }
+        do { beginReply(key: try readKey()) }
+        catch { self.error = error.localizedDescription }
+    }
+
+    private func beginReply(key: String) {
+        busy = true
+        dialogueAction = nil
+        let id = UUID()
+        requestID = id
+        let snapshot = archive
+        let actions = availableActions
+        requestTask = Task {
+            defer { if requestID == id { busy = false; requestTask = nil; requestID = nil } }
+            do {
+                let reply = try await replyProvider(snapshot.settings, key, snapshot.messages, snapshot.memories, actions)
+                try Task.checkCancellation()
+                guard requestID == id else { return }
+                var next = archive
+                next.messages.append(Message(role: "assistant", content: reply.text))
+                try commit(next)
+                let action = DialogueMotion.isStopRequest(snapshot.messages.last?.content ?? "") ? "stop" : reply.action
+                if let action = action, action == "stop" || actions.contains(action) {
+                    dialogueAction = DialogueActionEvent(action: action, motion: action == "procedural" ? reply.motion : nil)
+                }
+            } catch is CancellationError { }
+            catch let failure as URLError where failure.code == .cancelled { }
+            catch { if requestID == id { self.error = error.localizedDescription } }
+        }
+    }
+
+    func cancel() {
+        requestTask?.cancel(); requestID = nil; requestTask = nil; busy = false; dialogueAction = nil
+    }
+    func saveMemories(_ text: String) throws {
+        var next = archive; next.memories = text; try commit(next)
+    }
+    func addDiary(_ text: String) throws {
+        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        var next = archive; next.diary.insert(JournalEntry(text: text), at: 0); try commit(next)
+    }
+    func export() throws -> Data { try JSONEncoder().encode(archive) }
+    func restore(_ data: Data) throws {
+        guard !busy else { throw CompanionError.message("请先停止当前回复再恢复备份。") }
+        guard data.count <= 50_000_000 else { throw CompanionError.message("备份超过 50MB。") }
+        let restored = try JSONDecoder().decode(LocalArchive.self, from: data)
+        try restored.validate()
+        let snapshot = directory.appendingPathComponent("before-restore-\(UUID().uuidString).json")
+        try export().write(to: snapshot, options: [.atomic, .completeFileProtection])
+        // An imported endpoint must not inherit a credential intended for another service.
+        let endpointChanged = restored.settings.endpoint != archive.settings.endpoint
+        var oldKey = ""
+        if endpointChanged {
+            oldKey = try APIKeyStore.read()
+            try APIKeyStore.write("")
+        }
+        do { try commit(restored) } catch {
+            if endpointChanged { try? APIKeyStore.write(oldKey) }
+            throw error
+        }
+    }
+}

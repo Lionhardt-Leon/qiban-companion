@@ -1,0 +1,8 @@
+research/
+dist/
+node_modules/
+ios/Generated/
+ios/*.xcodeproj/
+ios/build/
+ios/Payload/
+*.ipa

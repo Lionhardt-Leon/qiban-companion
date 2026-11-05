@@ -1,0 +1,1 @@
+{"name":"qiban-local-renderer-tools","private":true,"type":"module","scripts":{"build:web":"node tools/build-snowbreak-web.mjs"},"devDependencies":{"esbuild":"0.28.2"}}
