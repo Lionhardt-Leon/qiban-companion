@@ -190,7 +190,7 @@ import simd
         activeAction = action.name
     }
     func stopAction() {
-        interactionRevision += 1
+        interactionRevision += 1;activeAction = nil
         releasingHands = hands;hands = [];eyesClosed = false;targetBodyYaw = 0
         director.cancel(now: ProcessInfo.processInfo.systemUptime); procedural.cancel(now: ProcessInfo.processInfo.systemUptime)
     }
