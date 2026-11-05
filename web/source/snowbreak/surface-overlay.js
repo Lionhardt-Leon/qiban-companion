@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import {classifySurface} from './surface.js';
-export const SURFACE_COLORS={head:0xffd166,face:0xff8fa3,neck:0xf4c795,chest:0xf15bb5,hips:0xb19cd9,torso:0xd9a066,waist:0xe6b566,abdomen:0xff8c42,back:0x9b5de5,arm:0x00bbf9,hand:0x00f5d4,left_hand:0x00d6b4,right_hand:0x63ffe0,leg:0x90be6d,foot:0xfee440};
+export const SURFACE_COLORS={head:0xffd166,forehead:0xffd166,hair:0xddbb66,left_cheek:0xff8fa3,right_cheek:0xff8fa3,left_shoulder:0x00bbf9,right_shoulder:0x00bbf9,face:0xff8fa3,neck:0xf4c795,chest:0xf15bb5,hips:0xb19cd9,torso:0xd9a066,waist:0xe6b566,abdomen:0xff8c42,back:0x9b5de5,arm:0x00bbf9,hand:0x00f5d4,left_hand:0x00d6b4,right_hand:0x63ffe0,leg:0x90be6d,foot:0xfee440};
 export function createSurfaceOverlay(root,scene,camera){
   const group=new THREE.Group();group.visible=false;scene.add(group);const sources=new Map();root.traverse(m=>{if(m.isMesh&&m.userData.snowbreakSurfaceKey)sources.set(m.userData.snowbreakSurfaceKey,m);});
   let labels={},enabled=false,dirty=true,batches=[],count=0,truncated=false;

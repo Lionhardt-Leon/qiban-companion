@@ -185,6 +185,7 @@ struct SnowbreakTouchEvent {
                 let confidence=body["confidence"] as? Double ?? 1
                 guard confidence.isFinite,(0...1).contains(confidence) else{return}
                 interactionRevision += 1;touch = SnowbreakTouchEvent(label:label,gesture:String((body["gesture"] as? String ?? "tap").prefix(24)),confidence:confidence,source:String((body["source"] as? String ?? "manual-skinned-triangle").prefix(60)))
+                if UserDefaults.standard.object(forKey:"touchHaptics") as? Bool ?? true {UIImpactFeedbackGenerator(style:.light).impactOccurred()}
             }
         case "error":
             error = String((body["message"] as? String ?? "恩雅加载失败。").prefix(500));ready = false
@@ -223,6 +224,7 @@ struct SnowbreakTouchEvent {
         view.configuration.userContentController.removeScriptMessageHandler(forName:"snowbreak")
         if webView === view { webView = nil;pageReady = false;ready = false }
     }
+    func setTouchPolicy(_ value:Bool){send(["type":"touchPolicy","aiControlled":value])}
     func setVoice(_ value:Bool) { send(["type":"voice","enabled":value]) }
     func webView(_ webView:WKWebView,decidePolicyFor navigationAction:WKNavigationAction,decisionHandler:@escaping(WKNavigationActionPolicy)->Void) {
         let url = navigationAction.request.url

@@ -30,7 +30,7 @@ export function mountSurfaceEditor(display,canvas,host,{load,save,tracker,onEven
   function up(e){
     if(active?.id!==e.pointerId)return;e.stopPropagation();const gesture=active;active=null;
     if(gesture.mode==='paint'){if(labels.commit())persist();status.textContent=`已保存 ${labels.state().count} 个表面三角形；可撤销本次笔划。`;}
-    else if(gesture.known&&enabled()){const event=tracker.finish({pointerId:e.pointerId,x:e.clientX,y:e.clientY});if(event){event.surface=gesture.hit;status.textContent='命中已确认部位：'+event.regionLabel;display.resetContact?.();onEvent(event);}}
+    else if(gesture.known&&enabled()){const event=tracker.finish({pointerId:e.pointerId,x:e.clientX,y:e.clientY});if(event){event.surface=gesture.hit;status.textContent='命中已确认部位：'+event.regionLabel;onEvent(event);}}
     else tracker.cancel();if(canvas.hasPointerCapture(e.pointerId))canvas.releasePointerCapture(e.pointerId);
   }
   function cancel(e){if(active?.id===e.pointerId)cancelActive();}

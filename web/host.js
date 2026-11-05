@@ -7,6 +7,7 @@ import {mountSurfaceEditor} from './source/snowbreak/surface-editor.js';
 import {createTouchTracker} from './source/body/touch.js';
 import {createPresentationEditor} from './presentation-editor.js';
 
+let aiControlledTouch=true;
 const canvas=document.querySelector('#stage'), status=document.querySelector('#status'), editorHost=document.querySelector('#editor');
 let collection=null;
 let generation=0,nonce='',runtime,display,adapter,voices,editor,presentation,lighting,learned,last=0,paused=false,voiceEnabled=true;
@@ -68,7 +69,7 @@ async function load(url,id,variant){
       tracker:createTouchTracker({modelId:opened.manifest.skinId,source:'skinned-surface'}),enabled:()=>!paused,
       onEvent:async event=>{
         emit({type:'touch',region:event.region,label:event.regionLabel,gesture:event.gesture,confidence:event.confidence,source:event.regionSource,durationMs:event.durationMs,frequency:event.frequency,completed:true});
-        await adapter.dispatchSurfaceTouch(event,{withVoice:voiceEnabled});
+        if(!aiControlledTouch)await adapter.dispatchSurfaceTouch(event,{withVoice:voiceEnabled});
       }
     });
     const close=document.createElement('button');close.textContent='关闭工具';close.onclick=closeEditor;editorHost.prepend(close);
@@ -97,6 +98,7 @@ async function command(value){
     if(paused)throw new Error('模型暂停中');learned=null;adapter.stop('ai-gesture');adapter.enterStandby();display.embodiment.playGesture(value.id,value.plan);
     emit({type:'selfState',state:inspect()});return;
   }
+  if(value.type==='touchPolicy'){aiControlledTouch=!!value.aiControlled;return;}
   if(value.type==='gaze'){display.setGaze(value.x,value.y);return;}
   if(value.type==='pause'){display.embodiment.reset();display.resetSenses();learned=null;paused=true;lighting?.close();presentation?.close();canvas.dataset.snowbreakPaused='true';adapter.stop('background');closeEditor();return;}
   if(value.type==='resume'){paused=false;canvas.dataset.snowbreakPaused='false';last=performance.now();adapter.enterStandby();return;}

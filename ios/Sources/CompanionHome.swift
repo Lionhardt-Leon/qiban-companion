@@ -89,7 +89,7 @@ struct CompanionHome: View {
                                 ForEach(BodyGesture.ids.filter{availableActions.contains($0)},id:\.self){id in
                                     Button(BodyGesture.catalog.first{$0.id==id}?.meaning ?? id){
                                         if isSnowbreak {snowbreak.play(id,withVoice:false)}
-                                        else {stage.performDialogueAction(id)}
+                                        else {stage.stopAction();stage.performDialogueAction(id)}
                                     }
                                 }
                             }
@@ -218,6 +218,8 @@ struct CompanionHome: View {
         .onChange(of:store.busy) { value in if value {speech.stop();senses.prepareReply()}else {if store.error != nil {senses.replyFailed()};scheduleTouches()} }
         .onChange(of:store.conversationID) {_ in speech.stop();clearTouches()}
         .onChange(of:store.archive.settings.speech) {_ in speech.stop()}
+        .onChange(of:touchAI) {if !$0 {clearTouches()};snowbreak.setTouchPolicy($0 && !store.archive.settings.endpoint.isEmpty)}
+        .onChange(of:store.archive.settings.endpoint) {_ in snowbreak.setTouchPolicy(touchAI && !store.archive.settings.endpoint.isEmpty)}
         .onChange(of: store.dialogueAction?.id) { _ in
             guard let event = store.dialogueAction else { return }
             if sheet == nil, scenePhase == .active,
@@ -233,12 +235,12 @@ struct CompanionHome: View {
         .onChange(of:engine) { _ in clearTouches();pendingMotionRevision = nil;nativeEditing = false;resumeStage() }
         .onChange(of:nativePresentation) { value in stage.setPresentation(value);value.save() }
         .onChange(of:showBackground) { value in snowbreak.sceneVisible(value) }
-        .onChange(of:snowbreak.ready) { ready in if ready { snowbreak.sceneVisible(showBackground);snowbreak.setVoice(snowbreakVoice) } }
+        .onChange(of:snowbreak.ready) { ready in if ready { snowbreak.sceneVisible(showBackground);snowbreak.setVoice(snowbreakVoice);snowbreak.setTouchPolicy(touchAI && !store.archive.settings.endpoint.isEmpty) } }
         .onChange(of:snowbreakVoice) { value in snowbreak.setVoice(value) }
         .task { resumeStage() }
-        .onDisappear { camera.stop();senses.suspend();speech.stop();stage.stop();snowbreak.pause() }
+        .onDisappear { clearTouches();camera.stop();senses.suspend();speech.stop();stage.stop();snowbreak.pause() }
         .onChange(of: scenePhase) { phase in
-            if phase == .active, sheet == nil { resumeStage() } else { camera.stop();senses.suspend();speech.stop();stage.stop();snowbreak.pause() }
+            if phase == .active, sheet == nil { resumeStage() } else { clearTouches();camera.stop();senses.suspend();speech.stop();stage.stop();snowbreak.pause() }
         }
     }
 

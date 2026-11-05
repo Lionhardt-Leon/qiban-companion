@@ -7,7 +7,7 @@ export const CONTACT_PROFILES={
  body:{frequency:4,damping:.68,compression:.0012,limit:.003,radius:.055}
 };
 export class ContactSpring {
- constructor(region='body'){this.profile=CONTACT_PROFILES[region]||CONTACT_PROFILES.body;this.offset=0;this.velocity=0;this.pressed=false;}
+ constructor(region='body'){region=({forehead:'head',hair:'head',left_cheek:'face',right_cheek:'face'})[region]||region;this.profile=CONTACT_PROFILES[region]||CONTACT_PROFILES.body;this.offset=0;this.velocity=0;this.pressed=false;}
  press(){this.pressed=true;this.velocity=Math.min(.12,this.velocity+this.profile.compression*8);}
  release(){this.pressed=false;}
  step(dt){
