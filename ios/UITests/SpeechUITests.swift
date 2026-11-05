@@ -10,8 +10,13 @@ final class SpeechUITests:XCTestCase {
         XCTAssertTrue(entry.exists);entry.tap()
         XCTAssertTrue(app.buttons["importVoicePackage"].waitForExistence(timeout:10))
         let toggle=app.switches["speechAutoPlay"];XCTAssertTrue(toggle.exists)
-        if toggle.value as? String != "1" {toggle.coordinate(withNormalizedOffset:CGVector(dx:0.93,dy:0.5)).tap()}
-        XCTAssertEqual(toggle.value as? String,"1")
+        for _ in 0..<2 {
+            if toggle.value as? String == "1" {break}
+            toggle.coordinate(withNormalizedOffset:CGVector(dx:0.85,dy:0.5)).tap()
+            let enabled=XCTNSPredicateExpectation(predicate:NSPredicate(format:"value == %@","1"),object:toggle)
+            if XCTWaiter.wait(for:[enabled],timeout:3) == .completed {break}
+        }
+        XCTAssertEqual(toggle.value as? String,"1","Switch frame: \(toggle.frame)")
         app.buttons["speechVoicePicker"].tap();app.buttons["系统日语（非训练音色）"].tap()
         XCTAssertEqual(toggle.value as? String,"1")
         let save=app.buttons["saveSpeechSettings"]
