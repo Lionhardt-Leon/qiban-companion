@@ -84,7 +84,7 @@ struct CompanionHome: View {
                                 }
                             }
                             Button("查看当前身体状态"){showingBodyState = true}
-                            Button(senses.environment ? "停止环境聆听" : "环境声音反馈（本机）") { senses.toggleEnvironment() }
+                            Button(senses.environment ? "停止环境聆听" : "环境声音反馈（本机）") { speech.stop();senses.toggleEnvironment() }
                             if isSnowbreak {
                                 if snowbreak.variantIDs.count == 4 {
                                     Section("陪伴模式") {
