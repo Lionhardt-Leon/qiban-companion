@@ -5,7 +5,7 @@ import {weightedAnatomy} from './anatomy.js';
 export function createSurfacePicker(root,camera,canvas,occluder=null){
   const ray=new THREE.Raycaster(),alphaCache=new WeakMap();
   function refineTorso(anatomy,point){
-    if(anatomy?.id!=='torso')return anatomy;
+    if(!['torso','leg'].includes(anatomy?.id))return anatomy;
     const find=n=>root.getObjectByName(n),pos=n=>find(n)?.getWorldPosition(new THREE.Vector3());
     const pelvis=pos('Bip001-Pelvis'),neck=pos('Bip001-Neck'),left=pos('Bip001-L-UpperArm'),right=pos('Bip001-R-UpperArm'),head=pos('Bip001-Head'),eyeL=pos('EyeJoint_L'),eyeR=pos('EyeJoint_R');
     if(!pelvis||!neck||!left||!right||!head||!eyeL||!eyeR)return anatomy;
@@ -15,10 +15,12 @@ export function createSurfacePicker(root,camera,canvas,occluder=null){
     const delta=point.clone().sub(pelvis),y=delta.dot(up)/height,z=delta.dot(forward)/height,x=Math.abs(delta.dot(across))/height;
     if(x>.7)return anatomy;
     let id=null;
-    if(y>.45&&y<.95&&z>.06)id='chest';
-    else if(y>-.32&&y<.16&&z<-.06)id='hips';
-    else if(y>.05&&y<.46&&z>.06)id='abdomen';
-    else if(y>.16&&y<.95&&z<-.06)id='back';
+    if(y>-.4&&y<.16&&z<-.025)id='hips';
+    else if(anatomy.id==='torso'){
+      if(y>.45&&y<.95&&z>.06)id='chest';
+      else if(y>.05&&y<.46&&z>.06)id='abdomen';
+      else if(y>.16&&y<.95&&z<-.06)id='back';
+    }
     return id?{id,confidence:.75,source:'rig-surface-estimate'}:anatomy;
   }
   function visible(mesh){for(let p=mesh;p;p=p.parent)if(!p.visible)return false;return true;}

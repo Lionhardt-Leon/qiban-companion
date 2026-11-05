@@ -43,7 +43,19 @@ export function createEmbodiedActions(root,setYaw,frameYaw=()=>0){
  function tick(){
   const now=performance.now(),dt=Math.min(.25,(now-last)/1000);last=now;const blend=1-Math.exp(-9*dt);
   const pose=sampleGesture(now);
-  for(const [bone,v] of [[head,pose?.head],[torso,pose?.torso]])if(bone&&v){const base=bone.quaternion.clone();bone.quaternion.multiply(new THREE.Quaternion().setFromEuler(new THREE.Euler(THREE.MathUtils.degToRad(v[1]),THREE.MathUtils.degToRad(v[0]),THREE.MathUtils.degToRad(v[2]),'YXZ'))).normalize();saved.push({bone,base,applied:bone.quaternion.clone()});bone.updateWorldMatrix(false,true);}
+  if(pose){
+   root.updateWorldMatrix(true,true);const position=b=>b.getWorldPosition(new THREE.Vector3()),pelvis=root.getObjectByName('Bip001-Pelvis');
+   const up=head&&pelvis?position(head).sub(position(pelvis)).normalize():new THREE.Vector3(0,1,0);
+   let front=new THREE.Vector3(0,0,1).applyQuaternion(root.getWorldQuaternion(new THREE.Quaternion()));
+   const eyeL=root.getObjectByName('EyeJoint_L'),eyeR=root.getObjectByName('EyeJoint_R');
+   if(head&&eyeL&&eyeR){const face=position(eyeL).add(position(eyeR)).multiplyScalar(.5).sub(position(head));face.addScaledVector(up,-face.dot(up));if(face.length()>1e-5)front=face.normalize();}
+   const right=new THREE.Vector3().crossVectors(up,front).normalize();front.crossVectors(right,up).normalize();
+   for(const [bone,v] of [[head,pose.head],[torso,pose.torso]])if(bone&&v){
+    const base=bone.quaternion.clone(),parent=bone.parent.getWorldQuaternion(new THREE.Quaternion());
+    const delta=new THREE.Quaternion().setFromAxisAngle(up,THREE.MathUtils.degToRad(-v[0])).multiply(new THREE.Quaternion().setFromAxisAngle(right,THREE.MathUtils.degToRad(v[1]))).multiply(new THREE.Quaternion().setFromAxisAngle(front,THREE.MathUtils.degToRad(v[2])));
+    bone.quaternion.premultiply(parent.clone().invert().multiply(delta).multiply(parent)).normalize();saved.push({bone,base,applied:bone.quaternion.clone()});bone.updateWorldMatrix(false,true);
+   }
+  }
   yaw+=(goalYaw-yaw)*blend;setYaw(yaw);actual={left:false,right:false};root.updateWorldMatrix(true,true);
   for(const side of ['left','right']){
    weights[side]+=((held.has(side)?1:0)-weights[side])*blend;const handPose=pose?.[side+'Hand'];const w=handPose?1:weights[side],c=chains[side];if(!c||!head||w<.001)continue;

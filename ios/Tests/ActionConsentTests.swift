@@ -31,11 +31,13 @@ final class ActionConsentTests:XCTestCase {
     }
     @MainActor func testRefusalPersistsWithoutPublishingMovement() async throws {
         let path=FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString);defer{try? FileManager.default.removeItem(at:path)}
+        try FileManager.default.createDirectory(at:path,withIntermediateDirectories:true)
+        var archive=LocalArchive();archive.settings.endpoint="https://example.invalid/v1";archive.settings.model="fixture"
+        try JSONEncoder().encode(archive).write(to:path.appendingPathComponent("archive-v1.json"))
         let store=LocalStore(directory:path,readKey:{""},replyProvider:{_,_,history,_,actions in
             XCTAssertEqual(history.last?.content,"恩雅，你把右手抬起来")
             return try DialogueMotion.parse(#"{"reply":"我不想抬起来。","decision":"refuse","action":"raise_right_hand"}"#,actions:actions)
         })
-        var settings=store.archive.settings;settings.endpoint="https://example.invalid/v1";settings.model="fixture";try store.saveSettings(settings,key:"")
         store.send("恩雅，你把右手抬起来",actions:["raise_right_hand"])
         for _ in 0..<200 {if !store.busy {break};try await Task.sleep(nanoseconds:10_000_000)}
         XCTAssertEqual(store.archive.messages.last?.content,"我不想抬起来。");XCTAssertNil(store.dialogueAction)
