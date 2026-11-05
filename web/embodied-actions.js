@@ -11,11 +11,30 @@ export function createEmbodiedActions(root,setYaw,frameYaw=()=>0){
  if(head&&chains.left)available.push('raise_left_hand');if(head&&chains.right)available.push('raise_right_hand');
  if(head&&chains.left&&chains.right)available.push('raise_both_hands','lower_hands');
  if(eyes.some(e=>e.name==='L_Eye_close')&&eyes.some(e=>e.name==='R_Eye_close'))available.push('close_eyes','open_eyes');
+ if(head)available.push('gesture_nod','gesture_shake','gesture_tilt_left','gesture_tilt_right','gesture_look_left','gesture_look_right','gesture_bow');
+ if(head&&chains.left&&chains.right)available.push('gesture_open_arms','gesture_wave_left','gesture_wave_right');
+ const torso=root.getObjectByName('Bip001-Spine2')||root.getObjectByName('Bip001-Spine');
+ let gesture=null;
+ function playGesture(id,plan){
+  if(!available.includes(id)||!id.startsWith('gesture_')||!Number.isFinite(plan?.duration)||plan.duration<1||plan.duration>8||!Array.isArray(plan.poses)||plan.poses.length<2||plan.poses.length>8)throw new Error('无效肢体动作');
+  let last=-1;for(const p of plan.poses){if(!Number.isFinite(p.time)||p.time<=last||p.time<0||p.time>plan.duration)throw new Error('动作时间无效');last=p.time;for(const [key,limit] of [['head',[45,25,20]],['torso',[20,15,15]],['leftHand',[1.5,2,1.5]],['rightHand',[1.5,2,1.5]]])if(p[key]&&(!Array.isArray(p[key])||p[key].length!==3||p[key].some((n,i)=>!Number.isFinite(n)||Math.abs(n)>limit[i])))throw new Error('动作目标越界');}
+  if(plan.poses[0].time!==0||last!==plan.duration)throw new Error('动作首尾无效');
+  held.clear();gesture={id,plan,start:performance.now()};lastResult='正在执行：'+id;
+ }
+ function sampleGesture(now){
+  if(!gesture)return null;const {plan}=gesture,t=(now-gesture.start)/1000;
+  if(t>=plan.duration){lastResult='已完成：'+gesture.id;gesture=null;return null;}
+  const index=Math.max(0,plan.poses.findIndex(p=>p.time>=t)-1),a=plan.poses[index],b=plan.poses[index+1];
+  const f=THREE.MathUtils.clamp((t-a.time)/(b.time-a.time),0,1),w=f*f*(3-2*f),out={};
+  for(const k of ['head','torso','leftHand','rightHand'])if(a[k]||b[k])out[k]=[0,1,2].map(i=>(a[k]?.[i]||0)+((b[k]?.[i]||0)-(a[k]?.[i]||0))*w);
+  return out;
+ }
  let held=new Set(),closed=false,yaw=0,goalYaw=0,last=performance.now(),lastResult='尚无动作回执';
  const weights={left:0,right:0};let eyeWeight=0;const saved=[],savedEyes=[];let actual={left:false,right:false};
  function restore(){for(const s of saved)if(s.bone.quaternion.angleTo(s.applied)<1e-6)s.bone.quaternion.copy(s.base);saved.length=0;for(const e of savedEyes)if(Math.abs(e.mesh.morphTargetInfluences[e.index]-e.applied)<1e-6)e.mesh.morphTargetInfluences[e.index]=e.base;savedEyes.length=0;}
  function command(id){
   if(!available.includes(id))throw new Error('当前模型不支持该身体指令');
+  gesture=null;
   if(id==='raise_left_hand')held.add('left');if(id==='raise_right_hand')held.add('right');if(id==='raise_both_hands')held=new Set(['left','right']);if(id==='lower_hands')held.clear();
   if(id==='close_eyes')closed=true;if(id==='open_eyes')closed=false;
   if(id==='turn_left')goalYaw+=90;if(id==='turn_right')goalYaw-=90;if(id==='turn_back')goalYaw=180-frameYaw();if(id==='face_front')goalYaw=-frameYaw();
@@ -23,12 +42,15 @@ export function createEmbodiedActions(root,setYaw,frameYaw=()=>0){
  }
  function tick(){
   const now=performance.now(),dt=Math.min(.25,(now-last)/1000);last=now;const blend=1-Math.exp(-9*dt);
+  const pose=sampleGesture(now);
+  for(const [bone,v] of [[head,pose?.head],[torso,pose?.torso]])if(bone&&v){const base=bone.quaternion.clone();bone.quaternion.multiply(new THREE.Quaternion().setFromEuler(new THREE.Euler(THREE.MathUtils.degToRad(v[1]),THREE.MathUtils.degToRad(v[0]),THREE.MathUtils.degToRad(v[2]),'YXZ'))).normalize();saved.push({bone,base,applied:bone.quaternion.clone()});bone.updateWorldMatrix(false,true);}
   yaw+=(goalYaw-yaw)*blend;setYaw(yaw);actual={left:false,right:false};root.updateWorldMatrix(true,true);
   for(const side of ['left','right']){
-   weights[side]+=((held.has(side)?1:0)-weights[side])*blend;const w=weights[side],c=chains[side];if(!c||!head||w<.001)continue;
+   weights[side]+=((held.has(side)?1:0)-weights[side])*blend;const handPose=pose?.[side+'Hand'];const w=handPose?1:weights[side],c=chains[side];if(!c||!head||w<.001)continue;
    const pos=b=>b.getWorldPosition(new THREE.Vector3()),h=pos(head),a=pos(c.upper),length=a.distanceTo(pos(c.lower))+pos(c.lower).distanceTo(pos(c.hand));
    const outward=a.clone().sub(h);outward.y=0;if(outward.length()<1e-6)continue;outward.normalize();
    const target=h.clone().addScaledVector(outward,length*.45);target.y+=length*.18;
+   if(handPose){target.copy(pos(c.hand)).addScaledVector(outward,Math.abs(handPose[0])*length);target.y+=handPose[1]*length;target.addScaledVector(new THREE.Vector3(0,0,1).applyQuaternion(root.getWorldQuaternion(new THREE.Quaternion())),handPose[2]*length);}
    const pole=a.clone().addScaledVector(outward,length);pole.y-=length*.35;
    const bases=[c.upper,c.lower,c.hand].map(b=>({bone:b,base:b.quaternion.clone()}));
    try{
@@ -49,6 +71,6 @@ export function createEmbodiedActions(root,setYaw,frameYaw=()=>0){
   const eyeValue=eyes.length?eyes.reduce((n,e)=>n+(e.mesh.morphTargetInfluences[e.index]||0),0)/eyes.length:0,shown=yaw+frameYaw();return {available:[...available],eyes:eyes.length?(eyeValue>.95?'已闭合':eyeValue<.1?'睁开或自然眨眼':'半闭或眨眼'):'未绑定闭眼形态',handRaised:{...actual},
    hands:actual.left&&actual.right?'双手抬起':actual.left?'左手抬起':actual.right?'右手抬起':held.size?'正在抬手或受关节限制':'未保持举手',
    facing:Math.abs(yaw-goalYaw)>2?'正在转身':Math.abs(((shown%360)+360)%360-180)<3?'背向镜头':Math.abs(shown%360)<3?'面向镜头':`相对正面转向${Math.round(shown)}度`,yaw:shown,lastResult};}
- function reset(){restore();held.clear();closed=false;weights.left=weights.right=eyeWeight=0;yaw=goalYaw=0;setYaw(0);lastResult='已停止并复位';}
- return {command,tick,restore,snapshot,reset,releaseHands:()=>held.clear()};
+ function reset(){restore();gesture=null;held.clear();closed=false;weights.left=weights.right=eyeWeight=0;yaw=goalYaw=0;setYaw(0);lastResult='已停止并复位';}
+ return {command,playGesture,tick,restore,snapshot,reset,releaseHands:()=>{held.clear();gesture=null;}};
 }

@@ -54,7 +54,13 @@ final class SnowbreakScheme: NSObject, WKURLSchemeHandler {
     func webView(_ webView:WKWebView,stop urlSchemeTask:WKURLSchemeTask) { }
 }
 
-struct SnowbreakTouchEvent { let id = UUID(); let label:String }
+struct SnowbreakTouchEvent {
+    let id = UUID(); let label:String;var gesture="tap";var confidence=1.0;var source="manual-skinned-triangle"
+    var message:String {
+        let kind=["tap":"轻触","double_tap":"连续轻触","long_press":"按住","stroke":"抚摸","drag":"划过"][gesture] ?? "触碰"
+        return "[屏幕触碰] 用户\(kind)了你的\(label)。识别来源：\(source)，置信度\(Int(confidence*100))%。这是模型表面事件，不代表现实触觉；具体部位未确认时不能自行猜测。请按人设决定回应或拒绝，额外动作只在你接受时选择。"
+    }
+}
 
 @MainActor final class SnowbreakStage: NSObject, ObservableObject, WKScriptMessageHandler, WKNavigationDelegate {
     @Published private(set) var ready = false
@@ -165,7 +171,7 @@ struct SnowbreakTouchEvent { let id = UUID(); let label:String }
                 let learned = body["learned"] as? [String] ?? []
                 actions += ["yuki_hello","yuki_Yes","yuki_No","yuki_Peace_hand","yuki_dance_90bpm","yuki_dance_120bpm","yuki_f_vibe_dance_60_bpm_002"].filter { learned.contains($0) && (!$0.contains("dance") || body["stance"] as? String == "standing") }.map { "enya_"+$0 }
                 ready = true;error = nil
-                bodyActions = (body["bodyActions"] as? [String] ?? []).filter{BodyCommand(rawValue:$0) != nil}
+                bodyActions = (body["bodyActions"] as? [String] ?? []).filter{BodyCommand(rawValue:$0) != nil || BodyGesture.ids.contains($0)}
                 if paused { send(["type":"pause"]) }
             } catch { self.error = "角色保存失败："+error.localizedDescription }
         case "playback":
@@ -176,7 +182,9 @@ struct SnowbreakTouchEvent { let id = UUID(); let label:String }
         case "selfState": if let value = body["state"] as? [String:Any] {updateBody(value)}
         case "touch":
             if !paused,body["completed"] as? Bool == true,let label = body["label"] as? String,label.count <= 30 {
-                interactionRevision += 1;touch = SnowbreakTouchEvent(label:label)
+                let confidence=body["confidence"] as? Double ?? 1
+                guard confidence.isFinite,(0...1).contains(confidence) else{return}
+                interactionRevision += 1;touch = SnowbreakTouchEvent(label:label,gesture:String((body["gesture"] as? String ?? "tap").prefix(24)),confidence:confidence,source:String((body["source"] as? String ?? "manual-skinned-triangle").prefix(60)))
             }
         case "error":
             error = String((body["message"] as? String ?? "恩雅加载失败。").prefix(500));ready = false
@@ -186,6 +194,9 @@ struct SnowbreakTouchEvent { let id = UUID(); let label:String }
         }
     }
     func play(_ id:String,withVoice:Bool = true,automatic:Bool = false) {
+        if let plan=BodyGesture.plan(id),ready,!paused,bodyActions.contains(id),let data=try? JSONEncoder().encode(plan),let object=try? JSONSerialization.jsonObject(with:data) {
+            if !automatic {interactionRevision += 1};send(["type":"gesture","id":id,"plan":object]);return
+        }
         if let command = BodyCommand(rawValue:id) {Task{_ = await executeBody(command,automatic:automatic)};return}
         if id == "stop" { stop();return }
         if ready,dialogueActions.contains(id) {

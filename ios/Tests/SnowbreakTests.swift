@@ -96,8 +96,8 @@ final class SnowbreakTests:XCTestCase {
     func testEnyaCapabilitiesCannotSelectYukiMotions() throws {
         let allowed = ["snowbreak_head","snowbreak_left","snowbreak_right"]
         XCTAssertEqual(DialogueMotion.allowed(allowed),allowed)
-        XCTAssertNil(try DialogueMotion.parse(#"{"reply":"好","action":"hello"}"#,actions:allowed).action)
-        XCTAssertNil(try DialogueMotion.parse(#"{"reply":"好","action":"procedural","motion":{}}"#,actions:allowed).action)
-        XCTAssertEqual(try DialogueMotion.parse(#"{"reply":"好","action":"snowbreak_left"}"#,actions:allowed).action,"snowbreak_left")
+        XCTAssertNil(try DialogueMotion.parse(#"{"reply":"好","decision":"accept","action":"hello"}"#,actions:allowed).action)
+        XCTAssertNil(try DialogueMotion.parse(#"{"reply":"好","decision":"accept","action":"procedural","motion":{}}"#,actions:allowed).action)
+        XCTAssertEqual(try DialogueMotion.parse(#"{"reply":"好","decision":"accept","action":"snowbreak_left"}"#,actions:allowed).action,"snowbreak_left")
     }
 }

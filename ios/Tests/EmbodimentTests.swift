@@ -113,13 +113,13 @@ final class EmbodimentTests: XCTestCase {
         let plan = MotionPlan(duration:3,poses:[.init(time:0,leftHand:[0,0,0]),.init(time:3,leftHand:[0,0.8,0.2])])
         try plan.validate()
         XCTAssertEqual(plan.pose(at:1.5).leftHand![1],0.4,accuracy:0.0001)
-        let data = try JSONSerialization.data(withJSONObject:["reply":"试着抬起手。","action":"procedural",
+        let data = try JSONSerialization.data(withJSONObject:["reply":"试着抬起手。","decision":"accept","action":"procedural",
             "motion":JSONSerialization.jsonObject(with:JSONEncoder().encode(plan))])
         let text = String(data:data,encoding:.utf8)!
         let valid = try DialogueMotion.parse(text,actions:["procedural"])
         XCTAssertEqual(valid.motion,plan)
         XCTAssertNil(try DialogueMotion.parse(text,actions:["hello"]).motion)
-        XCTAssertNil(try DialogueMotion.parse(#"{"reply":"你好","action":"procedural","motion":{"duration":999,"poses":[]}}"#,actions:["procedural"]).action)
+        XCTAssertNil(try DialogueMotion.parse(#"{"reply":"你好","decision":"accept","action":"procedural","motion":{"duration":999,"poses":[]}}"#,actions:["procedural"]).action)
         XCTAssertThrowsError(try MotionPlan(duration:2,poses:[.init(time:0,head:[200,0,0]),.init(time:2)]).validate())
         XCTAssertThrowsError(try MotionPlan(duration:2,poses:[.init(time:1),.init(time:2)]).validate())
         XCTAssertThrowsError(try MotionPlan(duration:2,poses:[.init(time:0),.init(time:2,leftFoot:[0,0.8,0])]).validate())

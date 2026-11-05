@@ -19,15 +19,15 @@ private final class DialogueURLProtocol: URLProtocol {
 
 final class DialogueMotionTests: XCTestCase {
     func testStructuredReplyFiltersUnavailableAndUnknownActions() throws {
-        let result = try DialogueMotion.parse(#"{"reply":"祝贺你！","action":"Peace_hand"}"#, actions: ["Peace_hand"])
+        let result = try DialogueMotion.parse(#"{"reply":"祝贺你！","decision":"accept","action":"Peace_hand"}"#, actions: ["Peace_hand"])
         XCTAssertEqual(result.text, "祝贺你！")
         XCTAssertEqual(result.action, "Peace_hand")
         for id in ["Peace_hand", "delete-files", "none"] {
-            let result = try DialogueMotion.parse("{\"reply\":\"你好\",\"action\":\"\(id)\"}", actions: ["hello"])
+            let result = try DialogueMotion.parse("{\"reply\":\"你好\",\"decision\":\"accept\",\"action\":\"\(id)\"}", actions: ["hello"])
             XCTAssertEqual(result.text, "你好")
             XCTAssertNil(result.action)
         }
-        XCTAssertEqual(try DialogueMotion.parse(#"{"reply":"好，停下来。","action":"stop"}"#, actions: []).action, "stop")
+        XCTAssertEqual(try DialogueMotion.parse(#"{"reply":"好，停下来。","decision":"accept","action":"stop"}"#, actions: []).action, "stop")
         XCTAssertEqual(DialogueMotion.allowed(["hello", "hello", "injected"]), ["hello"])
     }
 
@@ -35,11 +35,11 @@ final class DialogueMotionTests: XCTestCase {
         let plain = try DialogueMotion.parse("故事里她说：你好，跳舞吧。", actions: ["hello", "dance_120bpm"])
         XCTAssertEqual(plain.text, "故事里她说：你好，跳舞吧。")
         XCTAssertNil(plain.action)
-        XCTAssertEqual(try DialogueMotion.parse("```json\n{\"reply\":\"我在听。\",\"action\":\"Yes\"}\n```", actions: ["Yes"]).action, "Yes")
+        XCTAssertEqual(try DialogueMotion.parse("```json\n{\"reply\":\"我在听。\",\"decision\":\"accept\",\"action\":\"Yes\"}\n```", actions: ["Yes"]).action, "Yes")
         XCTAssertThrowsError(try DialogueMotion.parse(#"{"reply":"半截""#, actions: ["hello"]))
-        XCTAssertThrowsError(try DialogueMotion.parse(#"{"reply":"","action":"hello"}"#, actions: ["hello"]))
-        XCTAssertThrowsError(try DialogueMotion.parse(#"{"action":"hello"}"#, actions: ["hello"]))
-        XCTAssertNil(try DialogueMotion.parse(#"{"reply":"正常回复","action":42}"#, actions: ["hello"]).action)
+        XCTAssertThrowsError(try DialogueMotion.parse(#"{"reply":"","decision":"accept","action":"hello"}"#, actions: ["hello"]))
+        XCTAssertThrowsError(try DialogueMotion.parse(#"{"decision":"accept","action":"hello"}"#, actions: ["hello"]))
+        XCTAssertNil(try DialogueMotion.parse(#"{"reply":"正常回复","decision":"accept","action":42}"#, actions: ["hello"]).action)
     }
 
     func testWireRequestAndResponseUseOneCompatibleChatCall() async throws {
@@ -65,7 +65,7 @@ final class DialogueMotionTests: XCTestCase {
         DialogueURLProtocol.handler = { _ in
             calls += 1
             return try JSONSerialization.data(withJSONObject: ["choices": [["message": [
-                "content": #"{"reply":"太棒了，为你开心！","action":"Peace_hand"}"#]]]])
+                "content": #"{"reply":"太棒了，为你开心！","decision":"accept","action":"Peace_hand"}"#]]]])
         }
         let reply = try await APIClient.reply(settings: settings, key: "test-key", history: history,
             memories: "", actions: ["Peace_hand"], session: session)

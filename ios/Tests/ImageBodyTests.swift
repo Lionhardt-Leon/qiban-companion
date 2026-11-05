@@ -48,8 +48,8 @@ final class ImageBodyTests:XCTestCase {
         XCTAssertTrue(BodyCommand.asksAppearance("你现在穿什么衣服？"))
     }
     func testChineseBodyActionAliasesStillRespectActualCapabilityWhitelist() throws {
-        XCTAssertEqual(try DialogueMotion.parse(#"{"reply":"好。","action":"转身"}"#,actions:["turn_back"]).action,"turn_back")
-        XCTAssertNil(try DialogueMotion.parse(#"{"reply":"好。","action":"闭眼"}"#,actions:["turn_back"]).action)
-        XCTAssertEqual(try DialogueMotion.parse(#"{"reply":"好。","action":"举起手"}"#,actions:["raise_right_hand"]).action,"raise_right_hand")
+        XCTAssertEqual(try DialogueMotion.parse(#"{"reply":"好。","decision":"accept","action":"转身"}"#,actions:["turn_back"]).action,"turn_back")
+        XCTAssertNil(try DialogueMotion.parse(#"{"reply":"好。","decision":"accept","action":"闭眼"}"#,actions:["turn_back"]).action)
+        XCTAssertEqual(try DialogueMotion.parse(#"{"reply":"好。","decision":"accept","action":"举起手"}"#,actions:["raise_right_hand"]).action,"raise_right_hand")
     }
 }

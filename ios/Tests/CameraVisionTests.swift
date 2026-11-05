@@ -52,7 +52,7 @@ final class CameraVisionTests:XCTestCase {
         let configuration = URLSessionConfiguration.ephemeral;configuration.protocolClasses = [VisionURLProtocol.self]
         let session = URLSession(configuration:configuration)
         defer {session.invalidateAndCancel();VisionURLProtocol.handler = nil}
-        VisionURLProtocol.handler = { _ in (200,Data(#"{"choices":[{"message":{"content":"{\"reply\":\"我看到蓝色的画面。\",\"action\":\"Yes\"}"}}]}"#.utf8)) }
+        VisionURLProtocol.handler = { _ in (200,Data(#"{"choices":[{"message":{"content":"{\"reply\":\"我看到蓝色的画面。\",\"decision\":\"accept\",\"action\":\"Yes\"}"}}]}"#.utf8)) }
         let reply = try await APIClient.reply(settings:settings,key:"",history:[Message(role:"user",content:"看看镜头")],memories:"",actions:["Yes"],image:frame(),session:session)
         XCTAssertEqual(reply.text,"我看到蓝色的画面。");XCTAssertEqual(reply.action,"Yes")
     }

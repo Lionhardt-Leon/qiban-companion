@@ -25,7 +25,7 @@ final class SpeechTests:XCTestCase {
         XCTAssertEqual(values,[4,6])
     }
     func testJapaneseDialogueKeepsTranslationAndSpokenTextSeparate() throws {
-        let reply=try DialogueMotion.parse(#"{"reply":"欢迎回来。","speech_ja":"おかえりなさい。","action":"hello"}"#,actions:["hello"])
+        let reply=try DialogueMotion.parse(#"{"reply":"欢迎回来。","speech_ja":"おかえりなさい。","decision":"accept","action":"hello"}"#,actions:["hello"])
         XCTAssertEqual(reply.text,"欢迎回来。");XCTAssertEqual(reply.action,"hello")
         let message=Message(role:"assistant",content:reply.text,spokenJapanese:reply.spokenJapanese)
         var preferences=SpeechPreferences();preferences.language="ja"

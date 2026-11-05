@@ -37,7 +37,7 @@ final class PersonaTests:XCTestCase {
         XCTAssertFalse(system.contains("unknown-action"));XCTAssertFalse(system.contains("motion={"))
         let native = try PersonaPrompt.compose(settings:settings,memories:"",actions:["procedural"],hasImage:false)
         XCTAssertTrue(native.contains("motion={"));XCTAssertTrue(native.contains("leftHand"))
-        XCTAssertEqual(try DialogueMotion.parse(#"{"reply":"我抬手了","action":"procedural"}"#,actions:["snowbreak_head"]).action,nil)
+        XCTAssertEqual(try DialogueMotion.parse(#"{"reply":"我抬手了","decision":"accept","action":"procedural"}"#,actions:["snowbreak_head"]).action,nil)
     }
     func testImportOldProjectAndTavernCoreJSONWithoutExternalResources() throws {
         let old = Data(#"{"title":"旧项目角色","name":"小栞","description":"身份","personality":"害羞","scenario":"房间","first_messages":["你好{{user}}","回来啦"],"mes_example":"{{char}}: 嗯","userDesc":"专属的我","model":"vrm","voice":"external","image":"https://example.invalid/avatar.png"}"#.utf8)

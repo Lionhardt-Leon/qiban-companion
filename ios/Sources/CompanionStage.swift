@@ -25,7 +25,7 @@ import simd
         guard scene != nil else{return []}
         return ["turn_left","turn_right","turn_back","face_front"] + (supportsProcedural ? ["raise_left_hand","raise_right_hand","raise_both_hands","lower_hands"]:[]) + (supportsClosedEyes ? ["close_eyes","open_eyes"]:[])
     }
-    var dialogueActions: [String] { actions.map(\.id) + bodyActions + (supportsProcedural ? ["procedural"] : []) }
+    var dialogueActions: [String] { actions.map(\.id) + bodyActions + (supportsProcedural ? ["procedural"] + BodyGesture.ids : []) }
     var bodyState:BodyState {
         let yaw = (presentation.yaw+bodyYaw).truncatingRemainder(dividingBy:360)
         var measured:[String] = []
@@ -193,6 +193,7 @@ import simd
         director.cancel(now: ProcessInfo.processInfo.systemUptime); procedural.cancel(now: ProcessInfo.processInfo.systemUptime)
     }
     func performDialogueAction(_ id: String, motion: MotionPlan? = nil) {
+        if let plan=BodyGesture.plan(id),supportsProcedural {performDialogueAction("procedural",motion:plan);return}
         if let command = BodyCommand(rawValue:id) {_ = executeBody(command,automatic:true)}
         else if id == "stop" { stopAction();hands = [];eyesClosed = false;targetBodyYaw = 0 }
         else if id == "procedural", supportsProcedural, let motion = motion {
@@ -212,7 +213,7 @@ import simd
         performDialogueAction("procedural",motion:plan)
     }
     func touch(in view: SCNView, point: CGPoint, kind: String) -> CharacterTouch? {
-        guard elapsed - lastTouchTime > 1.5, let skeleton = loaded?.skeleton, !skeleton.posedWorld.isEmpty,
+        guard elapsed - lastTouchTime > 0.08, let skeleton = loaded?.skeleton, !skeleton.posedWorld.isEmpty,
               let model = scene?.rootNode.childNodes.first(where: { $0.camera == nil }) else { return nil }
         let regions = CharacterTouchResolver.regions(rig:skeleton.rig,world:skeleton.posedWorld)
         let hit = CharacterTouchResolver.resolve(point:point,regions:regions) { source in

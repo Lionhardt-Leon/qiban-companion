@@ -49,8 +49,9 @@ final class BodyDynamics {
     private var pendingRegion: String?
     private var reactionStart: Double?
     private var previousElapsed: Double?
+    private var reactionRegion=""
 
-    func touch(region: String, at elapsed: Double) { pendingRegion = region; reactionStart = elapsed }
+    func touch(region: String, at elapsed: Double) { pendingRegion = region; reactionRegion=region;reactionStart = elapsed }
     func reset() { states = [:]; pendingRegion = nil; reactionStart = nil; previousElapsed = nil }
 
     func apply(frame: EmbodimentFrame, rig: HumanoidRig, local: inout [simd_float4x4]) {
@@ -65,7 +66,7 @@ final class BodyDynamics {
             local[chest][3] += SIMD4(d.x,d.y,d.z,0)
             // Translation only: scaling this parent also scales the neck, face and arms.
         }
-        if let start = reactionStart, let head = rig.named["Head_M"] {
+        if ["forehead","hair","leftCheek","rightCheek"].contains(reactionRegion),let start = reactionStart, let head = rig.named["Head_M"] {
             let t = frame.elapsed - start
             if t >= 0, t < 1 {
                 let weight = Float(sin(t * .pi))

@@ -41,9 +41,7 @@ async function load(url,id,variant){
     collection=opened.variants.length?opened:null;if(opened.selection)localStorage.setItem('enya-collection-selection',opened.selection.id);
     runtime=opened.runtime;display=nextDisplay;voices=nextVoices;
     const background=display.sceneState().available?'#201d29':'transparent';document.body.style.background=background;document.documentElement.style.background=background;
-    adapter=createSnowbreakSampleAdapter(display,{audioForSample:sample=>voices.getAudio(sample),onReactionEvent:event=>{
-      if(event.kind==='completed')emit({type:'touch',region:event.region,label:{head:'头部',left_hand:'左手',right_hand:'右手'}[event.region],completed:true});
-    }});
+    adapter=createSnowbreakSampleAdapter(display,{audioForSample:sample=>voices.getAudio(sample)});
     // The original body/face tracks, morph curves and scene transforms stay in the old renderer.
     display.showFaceCandidate(true);adapter.enterStandby();display.faceViewer();last=performance.now();
     presentation=createPresentationEditor(display,canvas,'presentation:'+(opened.selection?'enya-'+opened.selection.mode:opened.manifest.skinId),{
@@ -69,8 +67,8 @@ async function load(url,id,variant){
       load:()=>JSON.parse(localStorage.getItem(labelKey)||'{}'),save:value=>localStorage.setItem(labelKey,JSON.stringify(value)),
       tracker:createTouchTracker({modelId:opened.manifest.skinId,source:'skinned-surface'}),enabled:()=>!paused,
       onEvent:async event=>{
-        const result=await adapter.dispatchSurfaceTouch(event,{withVoice:voiceEnabled});
-        if(!result.handled)emit({type:'touch',region:event.region,label:event.regionLabel,completed:true});
+        emit({type:'touch',region:event.region,label:event.regionLabel,gesture:event.gesture,confidence:event.confidence,source:event.regionSource,durationMs:event.durationMs,frequency:event.frequency,completed:true});
+        await adapter.dispatchSurfaceTouch(event,{withVoice:voiceEnabled});
       }
     });
     const close=document.createElement('button');close.textContent='关闭工具';close.onclick=closeEditor;editorHost.prepend(close);
@@ -94,6 +92,10 @@ async function command(value){
   if(value.type==='body'){
     if(paused)throw new Error('模型暂停中');learned=null;adapter.stop('body-command');adapter.enterStandby();display.embodiment.command(value.id);
     await new Promise(resolve=>setTimeout(resolve,750));emit({type:'selfState',state:inspect(),requestId:value.requestId});return;
+  }
+  if(value.type==='gesture'){
+    if(paused)throw new Error('模型暂停中');learned=null;adapter.stop('ai-gesture');adapter.enterStandby();display.embodiment.playGesture(value.id,value.plan);
+    emit({type:'selfState',state:inspect()});return;
   }
   if(value.type==='gaze'){display.setGaze(value.x,value.y);return;}
   if(value.type==='pause'){display.embodiment.reset();display.resetSenses();learned=null;paused=true;lighting?.close();presentation?.close();canvas.dataset.snowbreakPaused='true';adapter.stop('background');closeEditor();return;}

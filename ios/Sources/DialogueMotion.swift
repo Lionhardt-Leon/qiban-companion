@@ -50,7 +50,7 @@ enum DialogueMotion {
         ("enya_yuki_dance_90bpm", "恩雅站立全身舞蹈，90 BPM，只适用于站立看板娘"),
         ("enya_yuki_dance_120bpm", "恩雅站立全身舞蹈，120 BPM，只适用于站立看板娘"),
         ("enya_yuki_f_vibe_dance_60_bpm_002", "恩雅站立全身舞蹈，60 BPM，只适用于站立看板娘")
-    ] + BodyCommand.allCases.map{(id:$0.rawValue,meaning:$0.label+"；由播放器直接控制并提供身体状态回执")}
+    ] + BodyCommand.allCases.map{(id:$0.rawValue,meaning:$0.label+"；由播放器直接控制并提供身体状态回执")} + BodyGesture.catalog
 
     static func allowed(_ ids: [String]) -> [String] {
         catalog.map(\.id).filter { ids.contains($0) }
@@ -73,7 +73,9 @@ enum DialogueMotion {
         """ : ""
         return """
         你同时控制屏幕上的伙伴。理解用户最新话语、上下文、情绪和你自己的回复，再选择至多一个合适的肢体动作。
-        请只输出一个 JSON 对象：{"reply":"给用户的自然语言回复","action":"动作ID或none或stop"}。
+        请只输出一个 JSON 对象：{"reply":"给用户的自然语言回复","decision":"accept或refuse或none","action":"动作ID或none或stop"}。
+        先理解整句话的意图，再按人设和上下文决定是否愿意执行。举起右手、抬起右手、右手抬起来、把右手举高等可以表达同一意图，不按关键词命中执行。否定、引用、假设、询问能力、第三人称叙述不是要求立即执行。
+        同意并准备执行时 decision=accept，action 给真实可用动作；拒绝时 decision=refuse、action=none，用 reply 自然解释，例如“我不想抬起来”。无动作时 decision=none。拒绝时禁止附带 motion。不要在同一轮一边拒绝一边选择执行；拒绝不会强制结束已有姿态。缺少明确 accept 的回复不会驱动新动作。
         reply 不要提及动作ID、JSON或此协议；需要的动作由播放器执行，不要仅用文字声称已执行。
         动作可选列表：
         \(entries.isEmpty ? "当前角色没有可用动作。" : entries)
@@ -103,6 +105,9 @@ enum DialogueMotion {
             let japanese = (envelope["speech_ja"] as? String)?.trimmingCharacters(in:.whitespacesAndNewlines)
             guard (japanese?.count ?? 0) <= 8_000 else {throw CompanionError.message("日文语音台词过长，请重试。")}
             let spoken = japanese?.isEmpty == false ? japanese:nil
+            guard envelope["decision"] as? String == "accept" else {
+                return DialogueReply(text:reply.trimmingCharacters(in:.whitespacesAndNewlines),action:nil,spokenJapanese:spoken)
+            }
             let id = raw.flatMap{BodyCommand.resolve($0)?.rawValue} ?? raw
             let valid = id == "stop" || allowed(actions).contains(id ?? "")
             if id == "procedural", valid {
