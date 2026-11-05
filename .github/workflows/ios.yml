@@ -13,6 +13,10 @@ jobs:
       COMPAT_KEYCHAIN: ${{ secrets.COMPAT_KEYCHAIN }}
     steps:
       - uses: actions/checkout@v4
+      - name: Prepare native offline speech SDK
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 tools/fetch-g2p-sdk.py
       - name: Install XcodeGen
         run: brew install xcodegen
       - name: Generate project

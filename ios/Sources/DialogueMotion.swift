@@ -4,6 +4,7 @@ struct DialogueReply {
     let text: String
     let action: String?
     var motion: MotionPlan? = nil
+    var spokenJapanese:String? = nil
 }
 
 struct DialogueActionEvent {
@@ -99,16 +100,19 @@ enum DialogueMotion {
                 throw CompanionError.message("模型返回的回复格式不完整，请重试。")
             }
             let raw = (envelope["action"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let japanese = (envelope["speech_ja"] as? String)?.trimmingCharacters(in:.whitespacesAndNewlines)
+            guard (japanese?.count ?? 0) <= 8_000 else {throw CompanionError.message("日文语音台词过长，请重试。")}
+            let spoken = japanese?.isEmpty == false ? japanese:nil
             let id = raw.flatMap{BodyCommand.resolve($0)?.rawValue} ?? raw
             let valid = id == "stop" || allowed(actions).contains(id ?? "")
             if id == "procedural", valid {
                 if let object = envelope["motion"], let data = try? JSONSerialization.data(withJSONObject: object),
                    let motion = try? JSONDecoder().decode(MotionPlan.self, from: data), (try? motion.validate()) != nil {
-                    return DialogueReply(text: reply.trimmingCharacters(in: .whitespacesAndNewlines), action: id, motion: motion)
+                    return DialogueReply(text: reply.trimmingCharacters(in: .whitespacesAndNewlines), action: id, motion: motion,spokenJapanese:spoken)
                 }
-                return DialogueReply(text: reply.trimmingCharacters(in: .whitespacesAndNewlines), action: nil)
+                return DialogueReply(text: reply.trimmingCharacters(in: .whitespacesAndNewlines), action: nil,spokenJapanese:spoken)
             }
-            return DialogueReply(text: reply.trimmingCharacters(in: .whitespacesAndNewlines), action: valid ? id : nil)
+            return DialogueReply(text: reply.trimmingCharacters(in: .whitespacesAndNewlines), action: valid ? id : nil,spokenJapanese:spoken)
         }
         // A provider may ignore the JSON instruction. Plain text remains usable, with no guessed motion.
         guard !original.isEmpty else { throw CompanionError.message("没有收到有效回复。") }

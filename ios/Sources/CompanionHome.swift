@@ -2,12 +2,13 @@ import SwiftUI
 import SceneKit
 
 private enum HomeSheet: String, Identifiable {
-    case settings, character, api, history, diary, memory, embodiment, snowbreak, persona
+    case settings, character, api, history, diary, memory, embodiment, snowbreak, persona, speech
     var id: String { rawValue }
 }
 
 struct CompanionHome: View {
     @EnvironmentObject private var store: LocalStore
+    @EnvironmentObject private var speech:CompanionSpeech
     @Environment(\.scenePhase) private var scenePhase
     @StateObject private var stage = CompanionStage()
     @StateObject private var snowbreak = SnowbreakStage()
@@ -182,9 +183,10 @@ struct CompanionHome: View {
             case .embodiment: withClose { EmbodimentSettingsView() }
             case .snowbreak: withClose { SnowbreakImportView(stage:snowbreak) }
             case .persona: PersonaView(modelKey:modelKey,modelName:modelLabel,actions:availableActions,onClose:{sheet = nil})
+            case .speech: withClose {SpeechSettingsView()}
             }
         }
-        .onChange(of: sheet) { if $0 != nil { camera.stop();senses.suspend();stage.stop();snowbreak.pause() } }
+        .onChange(of: sheet) { if $0 != nil { camera.stop();senses.suspend();speech.stop();stage.stop();snowbreak.pause() } }
         .onChange(of:camera.enabled) { value in if !value { store.discardCameraFrame() } }
         .onChange(of:senses.utterance?.id) { _ in
             guard let event=senses.utterance,!store.busy else{return};send(event.text,origin:"语音转录")
@@ -193,10 +195,19 @@ struct CompanionHome: View {
             guard let event=senses.sound,!store.busy,!store.archive.settings.endpoint.isEmpty else{return}
             store.send("[环境聆听] "+event.text,actions:availableActions,context:companionContext("环境声音分类"));pendingMotionRevision=currentRevision
         }
-        .onChange(of:store.archive.messages.last?.id) { _ in
-            if let last=store.archive.messages.last,last.role == "assistant" {senses.speak(last.content)}
+        .onChange(of:store.replyForSpeech?.id) { _ in
+            guard scenePhase == .active,let reply=store.replyForSpeech else{return}
+            let preferences=store.archive.settings.speech ?? SpeechPreferences()
+            if preferences.autoPlay || senses.conversation {
+                senses.preparePlayback()
+                speech.speak(reply,preferences:preferences,inCall:senses.conversation) {success in
+                    if success {senses.resumeAfterPlayback()}else{senses.stop()}
+                }
+            }
         }
-        .onChange(of:store.busy) { value in if !value,store.error != nil {senses.replyFailed()} }
+        .onChange(of:store.busy) { value in if value {speech.stop();senses.prepareReply()}else if store.error != nil {senses.replyFailed()} }
+        .onChange(of:store.conversationID) {_ in speech.stop()}
+        .onChange(of:store.archive.settings.speech) {_ in speech.stop()}
         .onChange(of: store.dialogueAction?.id) { _ in
             guard let event = store.dialogueAction else { return }
             if let direct = directlyControlledUser,store.archive.messages.dropLast().last?.id == direct {pendingMotionRevision = nil;return}
@@ -219,9 +230,9 @@ struct CompanionHome: View {
         .onChange(of:snowbreak.ready) { ready in if ready { snowbreak.sceneVisible(showBackground);snowbreak.setVoice(snowbreakVoice) } }
         .onChange(of:snowbreakVoice) { value in snowbreak.setVoice(value) }
         .task { resumeStage() }
-        .onDisappear { camera.stop();senses.suspend();stage.stop();snowbreak.pause() }
+        .onDisappear { camera.stop();senses.suspend();speech.stop();stage.stop();snowbreak.pause() }
         .onChange(of: scenePhase) { phase in
-            if phase == .active, sheet == nil { resumeStage() } else { camera.stop();senses.suspend();stage.stop();snowbreak.pause() }
+            if phase == .active, sheet == nil { resumeStage() } else { camera.stop();senses.suspend();speech.stop();stage.stop();snowbreak.pause() }
         }
     }
 
@@ -283,6 +294,8 @@ struct CompanionHome: View {
                 Button("在设置中连接你的 API") { sheet = .api }.font(.footnote).foregroundStyle(.white.opacity(0.8))
             }
             if !senses.status.isEmpty {Text(senses.status).font(.caption).foregroundStyle(.white).lineLimit(2)}
+            if !speech.status.isEmpty {Text(speech.status).font(.caption).foregroundStyle(.white).lineLimit(2).padding(.horizontal)}
+            if speech.busy {Button("停止朗读"){speech.stop();senses.resumeAfterPlayback()}.font(.caption)}
             if !camera.status.isEmpty {Text(camera.status).font(.caption2).foregroundStyle(.white).lineLimit(2).padding(.horizontal)}
             HStack(spacing: 8) {
                 circle("paperplane", label: "发送消息", enabled: !store.busy && !preparingSend && (!draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || attachedImage != nil)) { send() }
@@ -291,7 +304,7 @@ struct CompanionHome: View {
                     .background(.ultraThinMaterial, in: Capsule()).overlay(Capsule().stroke(.white.opacity(0.2)))
                     .accessibilityIdentifier("homeMessageInput")
                 circle(camera.enabled ? "video.fill" : "video.slash", label:camera.enabled || camera.starting ? "关闭后置视频" : "开启后置视频") { camera.toggle() }
-                circle(senses.conversation ? "phone.down.fill" : "mic", label:senses.conversation ? "结束语音通话" : "开始语音通话",enabled: !store.busy || senses.conversation) { if store.archive.settings.endpoint.isEmpty {sheet = .api}else{senses.toggleVoice()} }
+                circle(senses.conversation ? "phone.down.fill" : "mic", label:senses.conversation ? "结束语音通话" : "开始语音通话",enabled: !store.busy || senses.conversation) { if store.archive.settings.endpoint.isEmpty {sheet = .api}else{speech.stop();senses.toggleVoice()} }
             }.padding(.horizontal, 14)
         }.padding(.top, 28).padding(.bottom, 12)
             .background(LinearGradient(colors: [.clear, .black.opacity(0.6)], startPoint: .top, endPoint: .bottom))
@@ -311,6 +324,7 @@ struct CompanionHome: View {
         let text = explicitText ?? (draft.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty && selectedImage != nil ? (selectedImage?.source == .selfPortrait ? "这是你自己的模型画面，看看你现在的样子。":"请看看这张图片，告诉我你看到了什么。"):draft)
         guard !text.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty else { return }
         preparingSend = true
+        speech.stop()
         let conversationID = store.conversationID
         Task { @MainActor in
             defer { preparingSend = false }
@@ -376,7 +390,7 @@ struct CompanionHome: View {
                 circle("chevron.left", label: "返回陪伴") { sheet = nil }
                 Text("设置").font(.system(size: 34, weight: .bold))
                 RestartConversationButton {
-                    senses.suspend();pendingMotionRevision = nil;directlyControlledUser = nil;draft = "";attachedImage = nil
+                    senses.suspend();speech.stop();pendingMotionRevision = nil;directlyControlledUser = nil;draft = "";attachedImage = nil
                 }
                 VStack(alignment: .leading, spacing: 10) {
                     Text("我的伙伴").foregroundStyle(.secondary)
@@ -426,6 +440,8 @@ struct CompanionHome: View {
                     settingsRow("模型与自定义 API", icon: "slider.horizontal.3") { sheet = .api }
                     Divider().padding(.leading,50)
                     settingsRow("人设与陪伴",icon:"person.text.rectangle") {sheet = .persona}
+                    Divider().padding(.leading,50)
+                    settingsRow("离线语音与中／日配音",icon:"speaker.wave.2") {sheet = .speech}
                     Divider().padding(.leading, 50)
                     settingsRow("聊天记录", icon: "bubble.left.and.bubble.right") { sheet = .history }
                     Divider().padding(.leading, 50)

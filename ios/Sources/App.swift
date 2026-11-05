@@ -3,6 +3,7 @@ import UniformTypeIdentifiers
 
 @main struct QibanCompanionApp: App {
     @StateObject private var store = LocalStore()
+    @StateObject private var speech = CompanionSpeech()
     init() {
         #if DEBUG
         if ProcessInfo.processInfo.arguments.contains("--ui-enya-fixture") {
@@ -70,7 +71,7 @@ import UniformTypeIdentifiers
     }
     var body: some Scene {
         WindowGroup {
-            RootView().environmentObject(store)
+            RootView().environmentObject(store).environmentObject(speech)
                 .alert("提示", isPresented: Binding(get: { store.error != nil }, set: { if !$0 { store.error = nil } })) {
                     Button("知道了") { store.error = nil }
                 } message: { Text(store.error ?? "") }
@@ -86,6 +87,7 @@ struct RootView: View {
 
 struct ConversationView: View {
     @EnvironmentObject private var store: LocalStore
+    @EnvironmentObject private var speech:CompanionSpeech
     @State private var draft = ""
     var body: some View {
         NavigationStack {
@@ -110,6 +112,12 @@ struct ConversationView: View {
                                 VStack(alignment: .leading, spacing: 5) {
                                     Text(message.role == "user" ? "你" : "伴侣").font(.caption).foregroundStyle(.secondary)
                                     Text(message.content).textSelection(.enabled)
+                                    if let japanese=message.spokenJapanese {
+                                        Text(japanese).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
+                                    }
+                                    if message.role=="assistant" {
+                                        Button {speech.speak(message,preferences:store.archive.settings.speech ?? SpeechPreferences())} label:{Label("朗读",systemImage:"speaker.wave.2")}.font(.caption)
+                                    }
                                 }
                                 .padding(12).frame(maxWidth: .infinity, alignment: .leading)
                                 .background(message.role == "user" ? Color.indigo.opacity(0.09) : Color.secondary.opacity(0.07))

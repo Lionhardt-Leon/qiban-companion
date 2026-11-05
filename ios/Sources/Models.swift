@@ -6,15 +6,17 @@ struct APISettings: Codable {
     var persona = "你是一位温柔、自然的中文 AI 伴侣。认真倾听，回复简洁，不编造共同经历。"
     var temperature = 0.7
     var personas:PersonaLibrary? = nil
+    var speech:SpeechPreferences? = nil
     var runtimeContext:CompanionContext? = nil
     var runtimeImages:[CameraFrame] = []
-    private enum CodingKeys:String,CodingKey {case endpoint,model,persona,temperature,personas}
+    private enum CodingKeys:String,CodingKey {case endpoint,model,persona,temperature,personas,speech}
 }
 
 struct Message: Codable, Identifiable {
     var id = UUID()
     var role: String
     var content: String
+    var spokenJapanese:String? = nil
     var createdAt = Date()
 }
 
@@ -35,6 +37,7 @@ struct LocalArchive: Codable {
 
     func validate() throws {
         try settings.personas?.validate()
+        try settings.speech?.validate()
         let saved = Array((personaConversations ?? [:]).values)
         guard saved.count <= 51,
               saved.reduce(messages.count,{$0+$1.messages.count}) <= 100_000,

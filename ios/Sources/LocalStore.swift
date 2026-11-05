@@ -46,7 +46,8 @@ enum APIKeyStore {
     @Published var error: String?
     @Published private(set) var storageReady = false
     @Published private(set) var dialogueAction: DialogueActionEvent?
-    private(set) var conversationID = UUID()
+    @Published private(set) var replyForSpeech:Message?
+    @Published private(set) var conversationID = UUID()
     private let directory: URL
     private let file: URL
     private var requestTask: Task<Void, Never>?
@@ -186,10 +187,13 @@ enum APIKeyStore {
         error = nil
         busy = true
         dialogueAction = nil
+        replyForSpeech = nil
         let id = UUID()
         requestID = id
         let snapshot = archive
-        var settings = snapshot.settings;settings.runtimeContext = context;settings.runtimeImages = pendingExtraImages
+        var settings = snapshot.settings
+        var latestContext = context;latestContext.speechLanguage = settings.speech?.language ?? "zh"
+        settings.runtimeContext = latestContext;settings.runtimeImages = pendingExtraImages
         let actions = availableActions
         let image = pendingImage
         requestTask = Task {
@@ -201,8 +205,10 @@ enum APIKeyStore {
                 try Task.checkCancellation()
                 guard requestID == id else { return }
                 var next = archive
-                next.messages.append(Message(role: "assistant", content: reply.text))
+                let assistant=Message(role: "assistant", content: reply.text,spokenJapanese:reply.spokenJapanese)
+                next.messages.append(assistant)
                 try commit(next)
+                replyForSpeech=assistant
                 pendingImage = nil
                 pendingExtraImages = []
                 let action = DialogueMotion.isStopRequest(snapshot.messages.last?.content ?? "") ? "stop" : reply.action
@@ -216,9 +222,14 @@ enum APIKeyStore {
     }
 
     func cancel() {
-        requestTask?.cancel(); requestID = nil; requestTask = nil; busy = false; dialogueAction = nil; pendingImage = nil;pendingExtraImages = []
+        requestTask?.cancel(); requestID = nil; requestTask = nil; busy = false; dialogueAction = nil;replyForSpeech=nil; pendingImage = nil;pendingExtraImages = []
     }
     func discardCameraFrame() { if pendingImage?.source == .camera {pendingImage = nil};pendingExtraImages.removeAll{$0.source == .camera} }
+    func saveSpeech(_ preferences:SpeechPreferences) throws {
+        guard !busy else {throw CompanionError.message("请等待当前回复完成后切换配音。")}
+        try preferences.validate()
+        var next = archive;next.settings.speech = preferences;try commit(next)
+    }
     func restartConversation() throws {
         var next = archive
         next.messages = [];next.memories = ""

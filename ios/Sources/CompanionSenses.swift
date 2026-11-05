@@ -54,6 +54,8 @@ struct SenseTextEvent { let id=UUID();let text:String }
     private func finishUtterance(_ text:String,ticket:Int){guard ticket==generation,!text.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty else{return};stopAudio();utterance=SenseTextEvent(text:text);status="等待回复…"}
     private func stopAudio(){generation+=1;silence?.cancel();silence=nil;engine?.stop();if tapInstalled{engine?.inputNode.removeTap(onBus:0);tapInstalled=false};engine=nil;request?.endAudio();speechTask?.cancel();speechTask=nil;request=nil;analyzer?.removeAllRequests();analyzer=nil;listening=false;environment=false;try? AVAudioSession.sharedInstance().setActive(false,options:.notifyOthersOnDeactivation)}
     func prepareReply(){if conversation{stopAudio();status="等待回复…"}}
+    func preparePlayback(){if conversation{stopAudio();status="正在朗读回复…"}}
+    func resumeAfterPlayback(){if conversation{Task{await startAudio(ambient:false)}}}
     func replyFailed(){if conversation{stop();status="AI回复失败，请检查接口后重试"}}
     func stop(){conversation=false;stopAudio();speaker?.stopSpeaking(at:.immediate);status=""}
     func suspend(){stop()}
