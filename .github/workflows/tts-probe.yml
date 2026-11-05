@@ -1,0 +1,21 @@
+name: Offline speech portability
+on:
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  probe:
+    runs-on: macos-15
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile and test native text processing and iOS libraries
+        run: python3 tools/probe-tts-ios.py --work "$RUNNER_TEMP/qiban-tts-probe" --output "$RUNNER_TEMP/qiban-tts-output"
+      - name: Save SDK to draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TAG="qiban-tts-${GITHUB_RUN_ID}"
+          gh release create "$TAG" --draft --target '${{ github.sha }}' --title 'Offline speech native SDK probe' --notes 'Public runtime code only. No speaker weights or recordings. Not a completed mobile speech engine.'
+          gh release upload "$TAG" "$RUNNER_TEMP/qiban-tts-output/QibanG2P-xcframework.zip" "$RUNNER_TEMP/qiban-tts-output/portability.json"
