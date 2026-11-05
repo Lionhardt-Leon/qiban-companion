@@ -44,7 +44,10 @@ final class CharacterImportUITests: XCTestCase {
         app.buttons["自由动作示范：抬手"].tap()
         XCTAssertTrue(active.waitForExistence(timeout:3))
         XCTAssertTrue(active.label.contains("自由骨骼动作"))
-        active.tap()
+        // The short demo may finish while XCTest resolves the transient status button.
+        // Use the persistent stop command; transient stop-button behavior is covered above.
+        actions.tap()
+        app.buttons["停止动作"].tap()
         XCTAssertEqual(XCTWaiter.wait(for:[XCTNSPredicateExpectation(predicate:NSPredicate(format:"exists == false"),object:active)],timeout:5),.completed)
         // Fixture head + local forehead offset projected through the orthographic stage camera.
         let surface = app.otherElements["companionScene"]
