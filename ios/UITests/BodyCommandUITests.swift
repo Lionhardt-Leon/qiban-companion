@@ -8,7 +8,7 @@ final class BodyCommandUITests:XCTestCase {
         XCTAssertTrue(app.buttons["App 文件夹"].waitForExistence(timeout:10));app.buttons["App 文件夹"].tap()
         app.buttons["UITest-Triangle.json"].tap();XCTAssertTrue(app.staticTexts["导入完成：UI import triangle"].waitForExistence(timeout:20));app.buttons["完成"].tap()
         let input = app.descendants(matching:.any)["homeMessageInput"]
-        XCTAssertTrue(input.waitForExistence(timeout:10));input.tap();input.typeText("拒绝抬手");app.buttons["发送消息"].tap()
+        XCTAssertTrue(input.waitForExistence(timeout:10));input.tap();input.typeText("举起右手");app.buttons["发送消息"].tap()
         XCTAssertTrue(app.buttons["latestCompanionReply"].waitForExistence(timeout:10));XCTAssertTrue(app.buttons["latestCompanionReply"].label.contains("我不想抬起来"))
         app.buttons["characterActions"].tap();app.buttons["查看当前身体状态"].tap()
         XCTAssertTrue(app.staticTexts.matching(NSPredicate(format:"label CONTAINS %@","未测到举手")).firstMatch.waitForExistence(timeout:8));capture(app,"AI拒绝不执行动作");app.buttons["关闭"].tap()

@@ -26,7 +26,7 @@ import UniformTypeIdentifiers
                     try await Task.sleep(nanoseconds: 200_000_000)
                     let input=history.last?.content ?? ""
                     let command=BodyCommand.resolve(input)?.rawValue ?? "hello"
-                    if input == "拒绝抬手" {return try DialogueMotion.parse(#"{"reply":"我不想抬起来。","decision":"refuse","action":"raise_right_hand"}"#,actions:actions)}
+                    if input == "举起右手" {return try DialogueMotion.parse(#"{"reply":"我不想抬起来。","decision":"refuse","action":"raise_right_hand"}"#,actions:actions)}
                     let data=try JSONSerialization.data(withJSONObject:["reply":"欢迎回来。","decision":"accept","action":command])
                     return try DialogueMotion.parse(String(decoding:data,as:UTF8.self),actions:actions)
                 }))
