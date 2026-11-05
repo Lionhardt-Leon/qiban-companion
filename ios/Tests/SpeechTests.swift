@@ -1,9 +1,29 @@
 import XCTest
 import CryptoKit
 import zlib
+import OnnxRuntimeBindings
 @testable import QibanCompanion
 
 final class SpeechTests:XCTestCase {
+    @MainActor func testSpeechPreferencesPersistAcrossResetAndReload() throws {
+        let directory=FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString);defer{try? FileManager.default.removeItem(at:directory)}
+        let store=LocalStore(directory:directory)
+        var preferences=SpeechPreferences();preferences.autoPlay=true;preferences.voiceID="enya.ja";preferences.language="ja"
+        try store.saveSpeech(preferences);try store.restartConversation()
+        XCTAssertEqual(store.archive.settings.speech,preferences)
+        XCTAssertEqual(LocalStore(directory:directory).archive.settings.speech,preferences)
+    }
+    func testOnDeviceRuntimeExecutesSyntheticGraph() throws {
+        let url=FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString+".onnx");defer{try? FileManager.default.removeItem(at:url)}
+        try XCTUnwrap(Data(base64Encoded:"CAk6TgoOCgF4CgF5EgF6IgNBZGQSCXN5bnRoZXRpY1oPCgF4EgoKCAgBEgQKAggCWg8KAXkSCgoICAESBAoCCAJiDwoBehIKCggIARIECgIIAkIECgAQFA==")).write(to:url)
+        let env=try ORTEnv(loggingLevel:.warning),options=try ORTSessionOptions()
+        let session=try ORTSession(env:env,modelPath:url.path,sessionOptions:options)
+        func tensor(_ samples:[Float]) throws -> ORTValue {try samples.withUnsafeBufferPointer{try ORTValue(tensorData:NSMutableData(data:Data(buffer:$0)),elementType:.float,shape:[2])}}
+        let output=try session.run(withInputs:["x":tensor([1,2]),"y":tensor([3,4])],outputNames:Set(["z"]),runOptions:nil)
+        let bytes=try XCTUnwrap(output["z"]).tensorData() as Data
+        let values=bytes.withUnsafeBytes{[$0.loadUnaligned(as:Float.self),$0.loadUnaligned(fromByteOffset:4,as:Float.self)]}
+        XCTAssertEqual(values,[4,6])
+    }
     func testJapaneseDialogueKeepsTranslationAndSpokenTextSeparate() throws {
         let reply=try DialogueMotion.parse(#"{"reply":"欢迎回来。","speech_ja":"おかえりなさい。","action":"hello"}"#,actions:["hello"])
         XCTAssertEqual(reply.text,"欢迎回来。");XCTAssertEqual(reply.action,"hello")

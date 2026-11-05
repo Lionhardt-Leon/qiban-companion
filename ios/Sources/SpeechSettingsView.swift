@@ -6,6 +6,7 @@ struct SpeechSettingsView:View {
     @State private var draft=SpeechPreferences()
     @State private var picking=false
     @State private var notice=""
+    @State private var loaded=false
     private var choices:[VoiceManifest.Voice] {[
         .init(id:"system.zh",title:"系统中文（非训练音色）",language:"zh",directory:""),
         .init(id:"system.ja",title:"系统日语（非训练音色）",language:"ja",directory:"")]+speech.voices}
@@ -45,7 +46,7 @@ struct SpeechSettingsView:View {
                     .font(.caption).foregroundStyle(.secondary)}
             }.navigationTitle("离线语音").navigationBarTitleDisplayMode(.inline)
         }
-        .onAppear {draft=store.archive.settings.speech ?? SpeechPreferences()}
+        .onAppear {if !loaded {draft=store.archive.settings.speech ?? SpeechPreferences();loaded=true}}
         .onChange(of:draft.voiceID) {id in if let choice=choices.first(where:{$0.id==id}) {draft.language=choice.language}}
         .onChange(of:speech.importing) {value in
             if !value,speech.error==nil,!speech.voices.isEmpty {
