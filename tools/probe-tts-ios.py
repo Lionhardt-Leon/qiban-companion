@@ -46,8 +46,8 @@ def main():
     for name,sdk in [('device','iphoneos'),('simulator','iphonesimulator')]:
         build=work/name
         run(['cmake','-S',str(native),'-B',str(build),'-G','Xcode',*common,'-DCMAKE_SYSTEM_NAME=iOS','-DCMAKE_OSX_SYSROOT='+sdk,'-DCMAKE_OSX_ARCHITECTURES=arm64','-DCMAKE_OSX_DEPLOYMENT_TARGET=16.0','-DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED=NO'])
-        run(['cmake','--build',str(build),'--config','Release','-j','3','--','CODE_SIGNING_ALLOWED=NO'])
-        archives=[str(p) for p in build.rglob('*.a') if p.name in ['libQibanG2P.a','libcpp-pinyin.a','libopenjtalk.a','libhts_engine_API.a'] and ('Release-iphoneos' in str(p) or 'Release-iphonesimulator' in str(p))]
+        run(['cmake','--build',str(build),'--target','QibanG2P','--config','Release','-j','3','--','CODE_SIGNING_ALLOWED=NO'])
+        archives=[str(p) for p in build.rglob('*.a') if p.name in ['libQibanG2P.a','libcpp-pinyin.a','libopenjtalk.a','libhts_engine_API.a']]
         assert len(archives)==4,archives
         combined=work/('libQibanG2P-'+name+'.a');run(['xcrun','libtool','-static','-o',str(combined),*archives]);libraries.append(combined)
     headers=work/'Headers';headers.mkdir(exist_ok=True);shutil.copyfile(native/'QibanG2P.h',headers/'QibanG2P.h');(headers/'module.modulemap').write_text('module QibanG2P { header "QibanG2P.h" export * }\n',encoding='utf-8')
