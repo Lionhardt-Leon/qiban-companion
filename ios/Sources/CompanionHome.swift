@@ -12,6 +12,8 @@ struct CompanionHome: View {
     @StateObject private var stage = CompanionStage()
     @StateObject private var snowbreak = SnowbreakStage()
     @StateObject private var senses = CompanionSenses()
+    @StateObject private var camera = RearCamera()
+    @State private var preparingSend = false
     @AppStorage("characterEngine") private var engine = "native"
     @State private var sheet: HomeSheet?
     @State private var draft = ""
@@ -97,10 +99,21 @@ struct CompanionHome: View {
                         Text("LOCAL").font(.system(size: 8, weight: .medium)).tracking(3).opacity(0.6)
                     }.padding(.top, 8)
                     Spacer()
-                    VStack(spacing: 12) {
+                    VStack(alignment:.trailing,spacing: 12) {
                         circle("person.crop.circle", label: "日记") { sheet = .diary }
                         circle("rectangle.on.rectangle", label: "画中画，尚未接入", enabled: false) { }
-                    }
+                        if camera.enabled, let session = camera.session {
+                            VStack(spacing:6) {
+                                RearCameraPreview(session:session).frame(width:112,height:164)
+                                    .background(.black).clipShape(RoundedRectangle(cornerRadius:18))
+                                    .overlay(alignment:.topLeading) { Text("后置主摄 · 1×").font(.system(size:9)).padding(5).background(.black.opacity(0.5),in:Capsule()).padding(5) }
+                                    .accessibilityLabel("后置主摄实时预览").accessibilityIdentifier("rearCameraPreview")
+                                Button("看看镜头") { send("看看镜头里的内容，告诉我你看到了什么。") }
+                                    .font(.caption).padding(7).background(.ultraThinMaterial,in:Capsule())
+                                    .disabled(store.busy || preparingSend).accessibilityIdentifier("analyzeCameraFrame")
+                            }
+                        }
+                    }.frame(width:46,alignment:.trailing)
                 }.padding(.horizontal, 18).padding(.top, 8)
                 Spacer()
             }
@@ -122,10 +135,10 @@ struct CompanionHome: View {
             case .snowbreak: withClose { SnowbreakImportView(stage:snowbreak) }
             }
         }
-        .onChange(of: sheet) { if $0 != nil { senses.suspend();stage.stop();snowbreak.pause() } }
-        .onChange(of:senses.gazeRevision) { _ in let value=senses.gaze; if isSnowbreak { snowbreak.gaze(x:value.x,y:value.y) } else {stage.gaze(x:value.x,y:value.y)} }
+        .onChange(of: sheet) { if $0 != nil { camera.stop();senses.suspend();stage.stop();snowbreak.pause() } }
+        .onChange(of:camera.enabled) { value in if !value { store.discardCameraFrame() } }
         .onChange(of:senses.utterance?.id) { _ in
-            guard let event=senses.utterance,!store.busy else{return};let saved=draft;draft=event.text;send();if draft.isEmpty{draft=saved}
+            guard let event=senses.utterance,!store.busy else{return};send(event.text)
         }
         .onChange(of:senses.sound?.id) { _ in
             guard let event=senses.sound,!store.busy,!store.archive.settings.endpoint.isEmpty else{return}
@@ -156,9 +169,9 @@ struct CompanionHome: View {
         .onChange(of:snowbreak.ready) { ready in if ready { snowbreak.sceneVisible(showBackground);snowbreak.setVoice(snowbreakVoice) } }
         .onChange(of:snowbreakVoice) { value in snowbreak.setVoice(value) }
         .task { resumeStage() }
-        .onDisappear { senses.suspend();stage.stop();snowbreak.pause() }
+        .onDisappear { camera.stop();senses.suspend();stage.stop();snowbreak.pause() }
         .onChange(of: scenePhase) { phase in
-            if phase == .active, sheet == nil { resumeStage() } else { senses.suspend();stage.stop();snowbreak.pause() }
+            if phase == .active, sheet == nil { resumeStage() } else { camera.stop();senses.suspend();stage.stop();snowbreak.pause() }
         }
     }
 
@@ -209,13 +222,14 @@ struct CompanionHome: View {
                 Button("在设置中连接你的 API") { sheet = .api }.font(.footnote).foregroundStyle(.white.opacity(0.8))
             }
             if !senses.status.isEmpty {Text(senses.status).font(.caption).foregroundStyle(.white).lineLimit(2)}
+            if !camera.status.isEmpty {Text(camera.status).font(.caption2).foregroundStyle(.white).lineLimit(2).padding(.horizontal)}
             HStack(spacing: 8) {
-                circle("paperplane", label: "发送消息", enabled: !store.busy && !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) { send() }
+                circle("paperplane", label: "发送消息", enabled: !store.busy && !preparingSend && !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) { send() }
                 TextField("输入消息……", text: $draft, axis: .vertical).lineLimit(1...4)
                     .foregroundStyle(.white).padding(.horizontal, 16).padding(.vertical, 14)
                     .background(.ultraThinMaterial, in: Capsule()).overlay(Capsule().stroke(.white.opacity(0.2)))
                     .accessibilityIdentifier("homeMessageInput")
-                circle(senses.cameraEnabled ? "eye.fill" : "eye", label:"相机注视跟随") { senses.toggleCamera() }
+                circle(camera.enabled ? "video.fill" : "video.slash", label:camera.enabled || camera.starting ? "关闭后置视频" : "开启后置视频") { camera.toggle() }
                 circle(senses.conversation ? "phone.down.fill" : "mic", label:senses.conversation ? "结束语音通话" : "开始语音通话",enabled: !store.busy || senses.conversation) { if store.archive.settings.endpoint.isEmpty {sheet = .api}else{senses.toggleVoice()} }
             }.padding(.horizontal, 14)
         }.padding(.top, 28).padding(.bottom, 12)
@@ -230,15 +244,25 @@ struct CompanionHome: View {
         }.accessibilityLabel(label).disabled(!enabled).opacity(enabled ? 1 : 0.4)
     }
 
-    private func send() {
-        let before = store.archive.messages.count
-        let text = draft
-        senses.prepareReply()
-        store.send(draft, actions: availableActions)
-        if store.archive.messages.count > before {
-            draft = ""
-            if DialogueMotion.isStopRequest(text) { stopAction() }
-            pendingMotionRevision = currentRevision
+    private func send(_ explicitText:String? = nil) {
+        guard !store.busy,!preparingSend else { return }
+        let text = explicitText ?? draft
+        guard !text.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty else { return }
+        preparingSend = true
+        Task { @MainActor in
+            defer { preparingSend = false }
+            do {
+                let image = try await camera.frame()
+                guard sheet == nil,scenePhase == .active,!store.busy else { return }
+                let before = store.archive.messages.count
+                senses.prepareReply()
+                store.send(text, actions:availableActions, image:image)
+                if store.archive.messages.count > before {
+                    if explicitText == nil,draft == text { draft = "" }
+                    if DialogueMotion.isStopRequest(text) { stopAction() }
+                    pendingMotionRevision = currentRevision
+                } else { senses.replyFailed() }
+            } catch { store.error = error.localizedDescription;senses.replyFailed() }
         }
     }
 

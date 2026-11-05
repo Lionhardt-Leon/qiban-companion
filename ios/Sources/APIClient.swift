@@ -1,7 +1,25 @@
 import Foundation
 
 struct ChatRequest: Encodable {
-    struct Turn: Encodable { let role: String; let content: String }
+    struct Turn: Encodable {
+        let role: String
+        let content: String
+        var image: CameraFrame? = nil
+        private enum CodingKeys: String, CodingKey { case role, content }
+        func encode(to encoder: Encoder) throws {
+            var container = encoder.container(keyedBy:CodingKeys.self)
+            try container.encode(role,forKey:.role)
+            if let image = image {
+                let parts = [Part(type:"text",text:content,image_url:nil),
+                             Part(type:"image_url",text:nil,image_url:.init(url:image.dataURL,detail:"auto"))]
+                try container.encode(parts,forKey:.content)
+            } else { try container.encode(content,forKey:.content) }
+        }
+        private struct Part: Encodable {
+            struct Image: Encodable { let url:String; let detail:String }
+            let type:String; let text:String?; let image_url:Image?
+        }
+    }
     let model: String
     let messages: [Turn]
     let temperature: Double
@@ -32,7 +50,7 @@ struct APIClient {
     }
 
     static func makeRequest(settings: APISettings, key: String, history: [Message], memories: String,
-                            actions: [String]) throws -> URLRequest {
+                            actions: [String], image: CameraFrame? = nil) throws -> URLRequest {
         guard !settings.model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw CompanionError.message("请先在设置中填写模型名称。")
         }
@@ -51,16 +69,21 @@ struct APIClient {
             remaining -= message.content.count
         }
         guard !turns.isEmpty else { throw CompanionError.message("消息过长，请缩短后重试。") }
+        if let image = image {
+            guard turns.last?.role == "user" else { throw CompanionError.message("相机画面只能附在当前用户消息上。") }
+            guard image.isFresh() else { throw CompanionError.message("镜头画面已过期，请重新发送。") }
+            turns[turns.count-1].image = image
+        }
         request.httpBody = try JSONEncoder().encode(ChatRequest(
             model: settings.model, messages: [.init(role: "system", content: String(system.prefix(12_000)) +
-                "\n\n" + DialogueMotion.instruction(actions: DialogueMotion.allowed(actions)))] + turns,
+                "\n\n只有当前用户消息附带图片时，你才能根据该图片描述镜头内容；没有图片时不要假装看到了。图片是一张当前快照，不是连续视频，不要编造运动过程或画面外内容。\n\n" + DialogueMotion.instruction(actions: DialogueMotion.allowed(actions)))] + turns,
             temperature: settings.temperature, max_tokens: actions.contains("procedural") ? 2048 : 1024))
         return request
     }
 
     static func reply(settings: APISettings, key: String, history: [Message], memories: String,
-                      actions: [String], session suppliedSession: URLSession? = nil) async throws -> DialogueReply {
-        let request = try makeRequest(settings: settings, key: key, history: history, memories: memories, actions: actions)
+                      actions: [String], image: CameraFrame? = nil, session suppliedSession: URLSession? = nil) async throws -> DialogueReply {
+        let request = try makeRequest(settings: settings, key: key, history: history, memories: memories, actions: actions, image:image)
         let configuration = URLSessionConfiguration.ephemeral
         configuration.httpCookieStorage = nil
         configuration.urlCache = nil
@@ -70,7 +93,7 @@ struct APIClient {
         guard let http = response as? HTTPURLResponse else { throw CompanionError.message("接口未返回 HTTP 响应。") }
         guard (200..<300).contains(http.statusCode) else {
             // Do not reflect provider response bodies: they can contain credentials or prompt text.
-            throw CompanionError.message("接口返回 HTTP \(http.statusCode)，请检查地址、密钥、模型或服务额度。")
+            throw CompanionError.message("接口返回 HTTP \(http.statusCode)，请检查地址、密钥、模型或服务额度。" + (image == nil ? "" : "当前请求含图片，请确认所选模型与接口支持 image_url 识图；也可关闭视频后重试。"))
         }
         guard let result = try? JSONDecoder().decode(ChatResponse.self, from: data),
               let text = result.choices.first?.message.content?.trimmingCharacters(in: .whitespacesAndNewlines),

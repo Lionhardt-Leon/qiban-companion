@@ -40,6 +40,7 @@ enum APIKeyStore {
 
 @MainActor final class LocalStore: ObservableObject {
     typealias ReplyProvider = (APISettings, String, [Message], String, [String]) async throws -> DialogueReply
+    typealias VisionReplyProvider = (APISettings, String, [Message], String, [String], CameraFrame) async throws -> DialogueReply
     @Published private(set) var archive = LocalArchive()
     @Published private(set) var busy = false
     @Published var error: String?
@@ -51,14 +52,19 @@ enum APIKeyStore {
     private var requestID: UUID?
     private var availableActions: [String] = []
     private let replyProvider: ReplyProvider
+    private let visionReplyProvider: VisionReplyProvider
+    private var pendingImage: CameraFrame?
     private let readKey: () throws -> String
 
     init(directory: URL? = nil, readKey: @escaping () throws -> String = APIKeyStore.read,
          replyProvider: @escaping ReplyProvider = { settings, key, history, memories, actions in
              try await APIClient.reply(settings: settings, key: key, history: history, memories: memories, actions: actions)
+         }, visionReplyProvider: @escaping VisionReplyProvider = { settings,key,history,memories,actions,image in
+             try await APIClient.reply(settings:settings,key:key,history:history,memories:memories,actions:actions,image:image)
          }) {
         self.readKey = readKey
         self.replyProvider = replyProvider
+        self.visionReplyProvider = visionReplyProvider
         self.directory = directory ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent(AppIdentity.storageNamespace, isDirectory: true)
         file = self.directory.appendingPathComponent("archive-v1.json")
@@ -99,7 +105,7 @@ enum APIKeyStore {
         }
     }
 
-    func send(_ text: String, actions: [String] = []) {
+    func send(_ text: String, actions: [String] = [], image: CameraFrame? = nil) {
         let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty, !busy else { return }
         do {
@@ -107,17 +113,22 @@ enum APIKeyStore {
             _ = try APIClient.endpoint(archive.settings.endpoint)
             guard !archive.settings.model.isEmpty else { throw CompanionError.message("请先配置模型。") }
             let key = try readKey()
+            if let image = image, !image.isFresh() { throw CompanionError.message("相机画面已过期，请重新取景。") }
             var next = archive
             next.messages.append(Message(role: "user", content: text))
             try commit(next)
             availableActions = DialogueMotion.allowed(actions)
+            pendingImage = image
             beginReply(key: key)
         } catch { self.error = error.localizedDescription }
     }
 
     func retry() {
         guard !busy, archive.messages.last?.role == "user" else { return }
-        do { beginReply(key: try readKey()) }
+        do {
+            guard pendingImage == nil else { throw CompanionError.message("含镜头画面的请求请重新发送，以便附带最新画面。") }
+            beginReply(key: try readKey())
+        }
         catch { self.error = error.localizedDescription }
     }
 
@@ -128,15 +139,19 @@ enum APIKeyStore {
         requestID = id
         let snapshot = archive
         let actions = availableActions
+        let image = pendingImage
         requestTask = Task {
             defer { if requestID == id { busy = false; requestTask = nil; requestID = nil } }
             do {
-                let reply = try await replyProvider(snapshot.settings, key, snapshot.messages, snapshot.memories, actions)
+                let reply: DialogueReply
+                if let image = image { reply = try await visionReplyProvider(snapshot.settings,key,snapshot.messages,snapshot.memories,actions,image) }
+                else { reply = try await replyProvider(snapshot.settings, key, snapshot.messages, snapshot.memories, actions) }
                 try Task.checkCancellation()
                 guard requestID == id else { return }
                 var next = archive
                 next.messages.append(Message(role: "assistant", content: reply.text))
                 try commit(next)
+                pendingImage = nil
                 let action = DialogueMotion.isStopRequest(snapshot.messages.last?.content ?? "") ? "stop" : reply.action
                 if let action = action, action == "stop" || actions.contains(action) {
                     dialogueAction = DialogueActionEvent(action: action, motion: action == "procedural" ? reply.motion : nil)
@@ -148,8 +163,9 @@ enum APIKeyStore {
     }
 
     func cancel() {
-        requestTask?.cancel(); requestID = nil; requestTask = nil; busy = false; dialogueAction = nil
+        requestTask?.cancel(); requestID = nil; requestTask = nil; busy = false; dialogueAction = nil; pendingImage = nil
     }
+    func discardCameraFrame() { pendingImage = nil }
     func saveMemories(_ text: String) throws {
         var next = archive; next.memories = text; try commit(next)
     }

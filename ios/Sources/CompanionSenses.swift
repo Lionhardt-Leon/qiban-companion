@@ -2,29 +2,22 @@ import SwiftUI
 import AVFoundation
 import Speech
 import SoundAnalysis
-import ARKit
 
 struct SenseTextEvent { let id=UUID();let text:String }
 
-@MainActor final class CompanionSenses:NSObject,ObservableObject,AVSpeechSynthesizerDelegate,ARSessionDelegate,SNResultsObserving {
+@MainActor final class CompanionSenses:NSObject,ObservableObject,AVSpeechSynthesizerDelegate,SNResultsObserving {
     @Published var status=""
     @Published private(set) var listening=false
     @Published private(set) var environment=false
-    @Published private(set) var cameraEnabled=false
     @Published private(set) var conversation=false
     @Published private(set) var utterance:SenseTextEvent?
     @Published private(set) var sound:SenseTextEvent?
-    @Published private(set) var gaze=CGPoint.zero
-    @Published private(set) var gazeRevision=0
     private var engine:AVAudioEngine?
     private var speaker:AVSpeechSynthesizer?
-    private var ar:ARSession?
     private var speechTask:SFSpeechRecognitionTask?,request:SFSpeechAudioBufferRecognitionRequest?,analyzer:SNAudioStreamAnalyzer?
-    private var silence:DispatchWorkItem?,generation=0,tapInstalled=false,lastSound:TimeInterval=0,lastGaze:TimeInterval=0
+    private var silence:DispatchWorkItem?,generation=0,tapInstalled=false,lastSound:TimeInterval=0
     private var lastSoundIdentifier=""
-    private var cameraGeneration=0
     private var recognizer:SFSpeechRecognizer?
-    private var calibration=CGPoint.zero,calibrationCount=0
     override init(){super.init()}
     func toggleVoice(){if conversation {stop()}else{conversation=true;Task{await startAudio(ambient:false)}}}
     func toggleEnvironment(){if environment {stop()}else{stop();Task{await startAudio(ambient:true)}}}
@@ -63,7 +56,7 @@ struct SenseTextEvent { let id=UUID();let text:String }
     func prepareReply(){if conversation{stopAudio();status="等待回复…"}}
     func replyFailed(){if conversation{stop();status="AI回复失败，请检查接口后重试"}}
     func stop(){conversation=false;stopAudio();speaker?.stopSpeaking(at:.immediate);status=""}
-    func suspend(){cameraGeneration+=1;stop();ar?.pause();cameraEnabled=false;gaze = .zero;gazeRevision+=1}
+    func suspend(){stop()}
     func speak(_ text:String){guard conversation else{return};stopAudio();try? AVAudioSession.sharedInstance().setActive(true);let speech=AVSpeechUtterance(string:text);speech.voice=AVSpeechSynthesisVoice(language:"zh-CN");speech.rate=0.48;if speaker==nil{speaker=AVSpeechSynthesizer();speaker?.delegate=self};speaker?.speak(speech);status="正在说话…"}
     nonisolated func speechSynthesizer(_ synthesizer:AVSpeechSynthesizer,didFinish utterance:AVSpeechUtterance){Task{@MainActor in if self.conversation{await self.startAudio(ambient:false)}}}
     nonisolated func request(_ request:SNRequest,didProduce result:SNResult){
@@ -74,17 +67,4 @@ struct SenseTextEvent { let id=UUID();let text:String }
     }
     nonisolated func request(_ request:SNRequest,didFailWithError error:Error){Task{@MainActor in if self.environment{self.stop();self.status=error.localizedDescription}}}
     nonisolated func requestDidComplete(_ request:SNRequest){}
-    func toggleCamera(){cameraGeneration+=1;let ticket=cameraGeneration;if cameraEnabled{ar?.pause();cameraEnabled=false;gaze = .zero;gazeRevision+=1;return};Task{
-        let ok=await AVCaptureDevice.requestAccess(for:.video);guard ticket==cameraGeneration else{return};guard ok,ARFaceTrackingConfiguration.isSupported else{status="未获相机权限或设备不支持面部追踪";return}
-        calibration = .zero;calibrationCount=0;cameraEnabled=true;if ar==nil{ar=ARSession();ar?.delegate=self};ar?.run(ARFaceTrackingConfiguration(),options:[.resetTracking,.removeExistingAnchors]);status="请先看屏幕中央，正在校准视线"
-    }}
-    nonisolated func session(_ session:ARSession,didUpdate anchors:[ARAnchor]){
-        guard let face=anchors.compactMap({$0 as? ARFaceAnchor}).first,face.isTracked else{return}
-        let point=face.lookAtPoint
-        Task{@MainActor in guard self.cameraEnabled,Date.timeIntervalSinceReferenceDate-self.lastGaze>0.08 else{return};self.lastGaze=Date.timeIntervalSinceReferenceDate
-            let value=CGPoint(x:Double(point.x),y:Double(point.y));if self.calibrationCount<8{self.calibration.x+=value.x/8;self.calibration.y+=value.y/8;self.calibrationCount+=1;return}
-            let x=max(-1,min(1,(value.x-self.calibration.x)*2)),y=max(-1,min(1,(value.y-self.calibration.y)*2));self.gaze=CGPoint(x:x,y:y);self.gazeRevision+=1
-        }
-    }
-    nonisolated func session(_ session:ARSession,didFailWithError error:Error){Task{@MainActor in self.ar?.pause();self.cameraEnabled=false;self.status=error.localizedDescription}}
 }

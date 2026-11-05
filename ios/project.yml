@@ -21,8 +21,8 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: $(COMPAT_APP_BUNDLE)
-        MARKETING_VERSION: "0.13.0"
-        CURRENT_PROJECT_VERSION: "23"
+        MARKETING_VERSION: "0.14.0"
+        CURRENT_PROJECT_VERSION: "24"
         GENERATE_INFOPLIST_FILE: YES
     info:
       path: Generated/Info.plist
@@ -32,7 +32,7 @@ targets:
         CFBundleDisplayName: 栖伴
         NSMicrophoneUsageDescription: 开启语音通话或环境反馈时在本机识别；识别文字和声音类别会发送到你配置的AI接口，原始音频不上传。
         NSSpeechRecognitionUsageDescription: 在设备支持时将你的语音本机转成对话文字。
-        NSCameraUsageDescription: 仅在开启注视跟随时使用前置相机估计视线，不上传相机画面。
+        NSCameraUsageDescription: 开启视频后使用后置主摄预览；发送对话或点击看看镜头时，将一张当前画面发往你配置的AI接口识图，不保存视频。
         UIFileSharingEnabled: true
         LSSupportsOpeningDocumentsInPlace: true
         UILaunchScreen: {}
