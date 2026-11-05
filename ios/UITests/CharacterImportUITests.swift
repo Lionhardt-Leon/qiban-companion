@@ -10,7 +10,12 @@ final class CharacterImportUITests: XCTestCase {
         XCTAssertEqual(app.tabBars.count, 0)
         app.buttons["设置"].tap()
         XCTAssertTrue(app.switches["showBackground"].waitForExistence(timeout: 10))
-        app.buttons["身体、触碰与光照"].tap()
+        let bodySettings = app.buttons["身体、触碰与光照"]
+        for _ in 0..<3 {
+            if bodySettings.isHittable,bodySettings.frame.midY < app.frame.maxY-70 {break}
+            app.swipeUp()
+        }
+        bodySettings.tap()
         XCTAssertTrue(app.switches["bodyBreathing"].waitForExistence(timeout:10))
         capture("Body-and-lighting-settings")
         app.buttons["完成"].tap()

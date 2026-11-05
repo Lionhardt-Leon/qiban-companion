@@ -181,6 +181,7 @@ import simd
     }
     func playAction(_ id: String, automatic: Bool = false) {
         guard let action = actions.first(where: { $0.id == id }), loaded?.skeleton != nil else { return }
+        releasingHands = hands;hands = []
         if !automatic { interactionRevision += 1 }
         procedural.cancel(now: ProcessInfo.processInfo.systemUptime)
         director.play(id: id, duration: action.duration, now: ProcessInfo.processInfo.systemUptime)
@@ -195,6 +196,7 @@ import simd
         if let command = BodyCommand(rawValue:id) {_ = executeBody(command,automatic:true)}
         else if id == "stop" { stopAction();hands = [];eyesClosed = false;targetBodyYaw = 0 }
         else if id == "procedural", supportsProcedural, let motion = motion {
+            releasingHands = hands;hands = []
             do {
                 try procedural.play(motion,now:ProcessInfo.processInfo.systemUptime)
                 director.cancel(now:ProcessInfo.processInfo.systemUptime); activeAction = "自由骨骼动作"

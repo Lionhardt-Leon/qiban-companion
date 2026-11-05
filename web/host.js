@@ -106,12 +106,14 @@ async function command(value){
   if(value.type==='room')return display.setRoomVisible(!!value.visible);
   if(value.type==='voice'){voiceEnabled=!!value.enabled;if(!voiceEnabled){adapter.stop('voice-disabled');adapter.enterStandby();}return;}
   if(value.type==='sample'&&display.sampleOptions().some(s=>s.id===value.id)){
+    display.embodiment.releaseHands();
     learned=null;presentation.close();
     paused=false;adapter.stop();adapter.selectSample(value.id);adapter.setStandbyAfterSample(true);
     const result=value.withVoice&&voices.getAudio(value.id)?await adapter.playWithVoice():adapter.playSample();
     if(!result.accepted)emit({type:'notice',message:'动作或原声暂时无法播放，可关闭原声后重试。'});
   }
   if(value.type==='learned'){
+    display.embodiment.releaseHands();
     const clip=display.learnedOptions().find(c=>c.id===value.id);if(!clip)return;
     presentation.close();adapter.stop('learned-motion');adapter.enterStandby();
     learned={id:clip.id,duration:clip.duration,start:performance.now()};

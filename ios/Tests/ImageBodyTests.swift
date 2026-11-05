@@ -26,7 +26,7 @@ final class ImageBodyTests:XCTestCase {
         let json = try XCTUnwrap(JSONSerialization.jsonObject(with:request.httpBody!) as? [String:Any])
         let turns = try XCTUnwrap(json["messages"] as? [[String:Any]])
         let system = try XCTUnwrap(turns.first?["content"] as? String)
-        for text in ["用户发送的图片","你自己的模型当前画面","服饰：果体版","已闭合","背向镜头"] {XCTAssertTrue(system.contains(text),text)}
+        for text in ["用户发送的图片","你自己的模型截图","服饰：果体版","已闭合","背向镜头"] {XCTAssertTrue(system.contains(text),text)}
         XCTAssertEqual(turns[1]["content"] as? String,"上一轮")
         let parts = try XCTUnwrap(turns.last?["content"] as? [[String:Any]])
         XCTAssertEqual(parts.filter{$0["type"] as? String == "image_url"}.count,2)

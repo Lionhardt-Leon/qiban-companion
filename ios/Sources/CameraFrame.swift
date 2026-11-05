@@ -3,7 +3,7 @@ import Foundation
 /// Ephemeral request attachment; deliberately separate from the Codable chat archive.
 struct CameraFrame {
     enum Source:String {case camera,user,selfPortrait
-        var label:String {switch self {case .camera:return "后置主摄当前画面";case .user:return "用户发送的图片";case .selfPortrait:return "你自己的模型当前画面（不是用户照片）"}}
+        var label:String {switch self {case .camera:return "后置主摄当前画面";case .user:return "用户发送的图片";case .selfPortrait:return "你自己的模型截图（不是用户照片）"}}
     }
     let jpeg: Data
     let capturedAt: Date
@@ -16,6 +16,7 @@ struct CameraFrame {
         self.jpeg = jpeg; self.capturedAt = capturedAt;self.source = source
     }
     var dataURL: String { "data:image/jpeg;base64," + jpeg.base64EncodedString() }
+    var caption:String {source.label + (source == .selfPortrait ? "，约\(max(0,Int(Date().timeIntervalSince(capturedAt))))秒前采集":"")}
     func isFresh(at date: Date = Date()) -> Bool {
         if source != .camera {return true}
         let age = date.timeIntervalSince(capturedAt)

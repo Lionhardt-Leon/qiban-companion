@@ -45,9 +45,10 @@ export function createEmbodiedActions(root,setYaw,frameYaw=()=>0){
   for(const e of eyes){const base=e.mesh.morphTargetInfluences[e.index]||0,applied=THREE.MathUtils.lerp(base,closed?1:0,eyeWeight);savedEyes.push({...e,base,applied});e.mesh.morphTargetInfluences[e.index]=applied;}
   root.updateWorldMatrix(true,true);for(const skeleton of skeletons)skeleton.update();
  }
- function snapshot(){const eyeValue=eyes.length?eyes.reduce((n,e)=>n+(e.mesh.morphTargetInfluences[e.index]||0),0)/eyes.length:0,shown=yaw+frameYaw();return {available:[...available],eyes:eyes.length?(eyeValue>.95?'已闭合':eyeValue<.1?'睁开或自然眨眼':'半闭或眨眼'):'未绑定闭眼形态',
+ function snapshot(){root.updateWorldMatrix(true,true);for(const side of ['left','right']){const c=chains[side];if(!c)continue;const a=c.upper.getWorldPosition(new THREE.Vector3()),b=c.lower.getWorldPosition(new THREE.Vector3()),h=c.hand.getWorldPosition(new THREE.Vector3());actual[side]=h.y>a.y+(a.distanceTo(b)+b.distanceTo(h))*.25;}
+  const eyeValue=eyes.length?eyes.reduce((n,e)=>n+(e.mesh.morphTargetInfluences[e.index]||0),0)/eyes.length:0,shown=yaw+frameYaw();return {available:[...available],eyes:eyes.length?(eyeValue>.95?'已闭合':eyeValue<.1?'睁开或自然眨眼':'半闭或眨眼'):'未绑定闭眼形态',handRaised:{...actual},
    hands:actual.left&&actual.right?'双手抬起':actual.left?'左手抬起':actual.right?'右手抬起':held.size?'正在抬手或受关节限制':'未保持举手',
    facing:Math.abs(yaw-goalYaw)>2?'正在转身':Math.abs(((shown%360)+360)%360-180)<3?'背向镜头':Math.abs(shown%360)<3?'面向镜头':`相对正面转向${Math.round(shown)}度`,yaw:shown,lastResult};}
  function reset(){restore();held.clear();closed=false;weights.left=weights.right=eyeWeight=0;yaw=goalYaw=0;setYaw(0);lastResult='已停止并复位';}
- return {command,tick,restore,snapshot,reset};
+ return {command,tick,restore,snapshot,reset,releaseHands:()=>held.clear()};
 }

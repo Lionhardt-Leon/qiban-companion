@@ -83,7 +83,7 @@ struct CompanionHome: View {
                                     Button(command.label){Task{await performBody(command)}}
                                 }
                             }
-                            Button("查看当前身体状态"){Task{if isSnowbreak{await snowbreak.refreshBodyState()};showingBodyState = true}}
+                            Button("查看当前身体状态"){Task{if isSnowbreak{await snowbreak.refreshBodyState()};visibleBodyState = (isSnowbreak ? snowbreak.bodyState:stage.bodyState).summary;showingBodyState = true}}
                             Button(senses.environment ? "停止环境聆听" : "环境声音反馈（本机）") { senses.toggleEnvironment() }
                             if isSnowbreak {
                                 if snowbreak.variantIDs.count == 4 {
@@ -323,7 +323,8 @@ struct CompanionHome: View {
                 guard sheet == nil,scenePhase == .active,!store.busy else { return }
                 let before = store.archive.messages.count
                 senses.prepareReply()
-                store.send(text, actions:availableActions, image:images.first,images:Array(images.dropFirst()),context:companionContext(origin))
+                let source = executed.map{origin+"；本轮已直接执行："+$0.label} ?? origin
+                store.send(text, actions:availableActions, image:images.first,images:Array(images.dropFirst()),context:companionContext(source))
                 if store.archive.messages.count > before {
                     directlyControlledUser = executed == nil ? nil:store.archive.messages.last?.id
                     attachedImage = nil

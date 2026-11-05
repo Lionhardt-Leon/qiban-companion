@@ -13,7 +13,7 @@ struct ChatRequest: Encodable {
             if let image = image {
                 var parts = [Part(type:"text",text:content,image_url:nil),
                              Part(type:"image_url",text:nil,image_url:.init(url:image.dataURL,detail:"auto"))]
-                for frame in additionalImages {parts.append(Part(type:"text",text:frame.source.label,image_url:nil));parts.append(Part(type:"image_url",text:nil,image_url:.init(url:frame.dataURL,detail:"auto")))}
+                for frame in additionalImages {parts.append(Part(type:"text",text:frame.caption,image_url:nil));parts.append(Part(type:"image_url",text:nil,image_url:.init(url:frame.dataURL,detail:"auto")))}
                 try container.encode(parts,forKey:.content)
             } else { try container.encode(content,forKey:.content) }
         }
@@ -63,7 +63,7 @@ struct APIClient {
         if !key.isEmpty { request.setValue("Bearer " + key, forHTTPHeaderField: "Authorization") }
         let images = (image.map{[$0]} ?? [])+settings.runtimeImages
         guard images.count <= 3,images.allSatisfy({$0.isFresh()}) else {throw CompanionError.message("图片已过期或超过单次3张上限，请重新发送。")}
-        var promptSettings = settings;var context = settings.runtimeContext ?? CompanionContext();context.imageSources = images.map{$0.source.label};promptSettings.runtimeContext = context
+        var promptSettings = settings;var context = settings.runtimeContext ?? CompanionContext();context.imageSources = images.map{$0.caption};promptSettings.runtimeContext = context
         let system = try PersonaPrompt.compose(settings:promptSettings,memories:memories,actions:DialogueMotion.allowed(actions),hasImage:!images.isEmpty)
         // Bound both history count and payload size; never silently send the entire archive.
         var turns: [ChatRequest.Turn] = []
@@ -98,7 +98,7 @@ struct APIClient {
         guard let http = response as? HTTPURLResponse else { throw CompanionError.message("接口未返回 HTTP 响应。") }
         guard (200..<300).contains(http.statusCode) else {
             // Do not reflect provider response bodies: they can contain credentials or prompt text.
-            throw CompanionError.message("接口返回 HTTP \(http.statusCode)，请检查地址、密钥、模型或服务额度。" + (image == nil ? "" : "当前请求含图片，请确认所选模型与接口支持 image_url 识图；也可关闭视频后重试。"))
+            throw CompanionError.message("接口返回 HTTP \(http.statusCode)，请检查地址、密钥、模型或服务额度。" + (image == nil && settings.runtimeImages.isEmpty ? "" : "当前请求含图片，请确认所选模型与接口支持 image_url 识图；可移除图片或关闭自身截图后重试。"))
         }
         guard let result = try? JSONDecoder().decode(ChatResponse.self, from: data),
               let text = result.choices.first?.message.content?.trimmingCharacters(in: .whitespacesAndNewlines),
