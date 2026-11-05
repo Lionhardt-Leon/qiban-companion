@@ -5,7 +5,7 @@ import SoundAnalysis
 
 struct SenseTextEvent { let id=UUID();let text:String }
 
-@MainActor final class CompanionSenses:NSObject,ObservableObject,AVSpeechSynthesizerDelegate,SNResultsObserving {
+@MainActor final class CompanionSenses:NSObject,ObservableObject,SNResultsObserving {
     @Published var status=""
     @Published private(set) var listening=false
     @Published private(set) var environment=false
@@ -13,7 +13,6 @@ struct SenseTextEvent { let id=UUID();let text:String }
     @Published private(set) var utterance:SenseTextEvent?
     @Published private(set) var sound:SenseTextEvent?
     private var engine:AVAudioEngine?
-    private var speaker:AVSpeechSynthesizer?
     private var speechTask:SFSpeechRecognitionTask?,request:SFSpeechAudioBufferRecognitionRequest?,analyzer:SNAudioStreamAnalyzer?
     private var silence:DispatchWorkItem?,generation=0,tapInstalled=false,lastSound:TimeInterval=0
     private var lastSoundIdentifier=""
@@ -61,13 +60,12 @@ struct SenseTextEvent { let id=UUID();let text:String }
     }
     func resumeAfterPlayback(){
         let ambient=resumeAmbientAfterPlayback && !conversation;resumeAmbientAfterPlayback=false
-        if conversation || ambient {Task{await startAudio(ambient:ambient)}}
+        let ticket=generation
+        if conversation || ambient {Task{guard ticket==generation else{return};await startAudio(ambient:ambient)}}
     }
     func replyFailed(){if conversation{stop();status="AI回复失败，请检查接口后重试"}}
-    func stop(){resumeAmbientAfterPlayback=false;conversation=false;stopAudio();speaker?.stopSpeaking(at:.immediate);status=""}
+    func stop(){resumeAmbientAfterPlayback=false;conversation=false;stopAudio();status=""}
     func suspend(){stop()}
-    func speak(_ text:String){guard conversation else{return};stopAudio();try? AVAudioSession.sharedInstance().setActive(true);let speech=AVSpeechUtterance(string:text);speech.voice=AVSpeechSynthesisVoice(language:"zh-CN");speech.rate=0.48;if speaker==nil{speaker=AVSpeechSynthesizer();speaker?.delegate=self};speaker?.speak(speech);status="正在说话…"}
-    nonisolated func speechSynthesizer(_ synthesizer:AVSpeechSynthesizer,didFinish utterance:AVSpeechUtterance){Task{@MainActor in if self.conversation{await self.startAudio(ambient:false)}}}
     nonisolated func request(_ request:SNRequest,didProduce result:SNResult){
         guard let result=result as? SNClassificationResult,let best=result.classifications.first,best.confidence>=0.85 else{return}
         let names=["clapping":"拍手","laughter":"笑声","dog":"犬吠","dog_bark":"犬吠","doorbell":"门铃","knock":"敲击"]
