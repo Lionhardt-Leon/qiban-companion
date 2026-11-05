@@ -19,7 +19,6 @@ struct CompanionHome: View {
     @State private var attachedImage:CameraFrame?
     @State private var directlyControlledUser:UUID?
     @State private var showingBodyState = false
-    @State private var visibleBodyState = ""
     @AppStorage("selfAppearanceImagePolicy") private var selfAppearanceImagePolicy = "questions"
     @AppStorage("characterEngine") private var engine = "native"
     @State private var sheet: HomeSheet?
@@ -83,7 +82,7 @@ struct CompanionHome: View {
                                     Button(command.label){Task{await performBody(command)}}
                                 }
                             }
-                            Button("查看当前身体状态"){Task{if isSnowbreak{await snowbreak.refreshBodyState()};visibleBodyState = (isSnowbreak ? snowbreak.bodyState:stage.bodyState).summary;showingBodyState = true}}
+                            Button("查看当前身体状态"){showingBodyState = true}
                             Button(senses.environment ? "停止环境聆听" : "环境声音反馈（本机）") { senses.toggleEnvironment() }
                             if isSnowbreak {
                                 if snowbreak.variantIDs.count == 4 {
@@ -151,18 +150,10 @@ struct CompanionHome: View {
         }
         .preferredColorScheme(.dark)
         .sheet(isPresented:$showingBodyState) {
-            NavigationStack {
-                ScrollView {Text(visibleBodyState).frame(maxWidth:.infinity,alignment:.leading).padding(22).accessibilityIdentifier("liveBodyState")}
-                    .navigationTitle("播放器身体实况").navigationBarTitleDisplayMode(.inline)
-                    .toolbar {Button("关闭"){showingBodyState = false}}
-                    .task {
-                        while showingBodyState && !Task.isCancelled {
-                            if isSnowbreak {await snowbreak.refreshBodyState()}
-                            visibleBodyState = (isSnowbreak ? snowbreak.bodyState:stage.bodyState).summary
-                            try? await Task.sleep(nanoseconds:200_000_000)
-                        }
-                    }
-            }.presentationDetents([.medium])
+            BodyStatusInspector {
+                if isSnowbreak {await snowbreak.refreshBodyState()}
+                return (isSnowbreak ? snowbreak.bodyState:stage.bodyState).summary
+            }
         }
         .sheet(isPresented:$photoPicker) {ChatPhotoPicker {result in photoPicker = false;do{if let image = try result.get(){attachedImage = image}}catch{store.error = error.localizedDescription}}}
         .sheet(isPresented:$imageFilePicker) {
@@ -458,5 +449,24 @@ private struct SettingsCard: ViewModifier {
     func body(content: Content) -> some View {
         content.background(Color.white.opacity(0.035), in: RoundedRectangle(cornerRadius: 24))
             .overlay(RoundedRectangle(cornerRadius: 24).stroke(.white.opacity(0.09)))
+    }
+}
+
+private struct BodyStatusInspector:View {
+    @Environment(\.dismiss) private var dismiss
+    @State private var summary = "正在读取播放器身体实况…"
+    let read:() async -> String
+    var body:some View {
+        NavigationStack {
+            ScrollView {Text(summary).frame(maxWidth:.infinity,alignment:.leading).padding(22).accessibilityIdentifier("liveBodyState")}
+                .navigationTitle("播放器身体实况").navigationBarTitleDisplayMode(.inline)
+                .toolbar {Button("关闭"){dismiss()}}
+                .task {
+                    while !Task.isCancelled {
+                        summary = await read()
+                        try? await Task.sleep(nanoseconds:200_000_000)
+                    }
+                }
+        }.presentationDetents([.medium])
     }
 }
