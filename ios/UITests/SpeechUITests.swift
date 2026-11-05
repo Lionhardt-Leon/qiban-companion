@@ -1,6 +1,6 @@
 import XCTest
 
-final class SpeechUITests:XCTestCase {
+final class AASpeechUITests:XCTestCase {
     func testGlobalSpeechSettingsSaveAndReopenWithoutVoicePackage() {
         continueAfterFailure=false
         let app=XCUIApplication();app.launchArguments=["--ui-character-import-fixture","--ui-dialogue-fixture"];app.launch()
@@ -9,14 +9,9 @@ final class SpeechUITests:XCTestCase {
         for _ in 0..<5 {if entry.isHittable {break};app.swipeUp()}
         XCTAssertTrue(entry.exists);entry.tap()
         XCTAssertTrue(app.buttons["importVoicePackage"].waitForExistence(timeout:10))
-        let toggle=app.switches["speechAutoPlay"];XCTAssertTrue(toggle.exists)
-        for _ in 0..<2 {
-            if toggle.value as? String == "1" {break}
-            toggle.coordinate(withNormalizedOffset:CGVector(dx:0.85,dy:0.5)).tap()
-            let enabled=XCTNSPredicateExpectation(predicate:NSPredicate(format:"value == %@","1"),object:toggle)
-            if XCTWaiter.wait(for:[enabled],timeout:3) == .completed {break}
-        }
-        XCTAssertEqual(toggle.value as? String,"1","Switch frame: \(toggle.frame)")
+        let toggle=app.buttons["speechAutoPlay"];XCTAssertTrue(toggle.exists)
+        if toggle.value as? String != "1" {toggle.tap()}
+        XCTAssertEqual(toggle.value as? String,"1")
         app.buttons["speechVoicePicker"].tap();app.buttons["系统日语（非训练音色）"].tap()
         XCTAssertEqual(toggle.value as? String,"1")
         let save=app.buttons["saveSpeechSettings"]
@@ -25,7 +20,7 @@ final class SpeechUITests:XCTestCase {
         let shot=XCTAttachment(screenshot:app.screenshot());shot.name="Offline-speech-settings";shot.lifetime = .keepAlways;add(shot)
         app.buttons["完成"].tap();app.buttons["设置"].tap()
         for _ in 0..<5 {if entry.isHittable {break};app.swipeUp()};entry.tap()
-        XCTAssertTrue(app.switches["speechAutoPlay"].waitForExistence(timeout:10));XCTAssertEqual(app.switches["speechAutoPlay"].value as? String,"1")
+        XCTAssertTrue(app.buttons["speechAutoPlay"].waitForExistence(timeout:10));XCTAssertEqual(app.buttons["speechAutoPlay"].value as? String,"1")
         XCTAssertTrue(app.buttons["speechVoicePicker"].label.contains("系统日语"))
     }
 }

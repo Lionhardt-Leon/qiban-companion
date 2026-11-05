@@ -25,7 +25,13 @@ struct SpeechSettingsView:View {
                         ForEach(choices){voice in Text(voice.title).tag(voice.id)}
                         if !choices.contains(where:{$0.id==draft.voiceID}) {Text("尚未导入的音色："+draft.voiceID).tag(draft.voiceID)}
                     }.accessibilityIdentifier("speechVoicePicker")
-                    Toggle("自动朗读 AI 回复",isOn:$draft.autoPlay).accessibilityIdentifier("speechAutoPlay")
+                    Button {draft.autoPlay.toggle()} label:{
+                        HStack {
+                            Text("自动朗读 AI 回复");Spacer()
+                            Label(draft.autoPlay ? "已开启":"已关闭",systemImage:draft.autoPlay ? "checkmark.circle.fill":"circle")
+                                .foregroundStyle(draft.autoPlay ? .green:.secondary)
+                        }.frame(maxWidth:.infinity,alignment:.leading).contentShape(Rectangle())
+                    }.buttonStyle(.plain).accessibilityValue(draft.autoPlay ? "1":"0").accessibilityIdentifier("speechAutoPlay")
                     Text(draft.language=="ja" ? "角色说日语，聊天显示中文译文；日文原话可在聊天记录中查看。需要 AI 接口返回日文原话；不会把中文台词当作日语强读。":"角色说中文。选择训练音色后，文字对话和语音通话使用同一套配音。")
                         .font(.caption).foregroundStyle(.secondary)
                     Slider(value:$draft.speed,in:0.7...1.3){Text("语速")};Text("语速 \(draft.speed,specifier:"%.2f")×").font(.caption)
