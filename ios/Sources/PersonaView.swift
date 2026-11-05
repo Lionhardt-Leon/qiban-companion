@@ -6,6 +6,7 @@ struct PersonaView:View {
     let modelKey:String
     let modelName:String
     let actions:[String]
+    var onClose:(()->Void)? = nil
     @State private var library = PersonaLibrary()
     @State private var selected:UUID?
     @State private var tab = "AI 人设"
@@ -42,7 +43,10 @@ struct PersonaView:View {
                 }.padding(20)
             }.background(Color(red:0.055,green:0.05,blue:0.075))
                 .navigationTitle("人设与陪伴").navigationBarTitleDisplayMode(.inline)
-                .toolbar {ToolbarItem(placement:.navigationBarTrailing){transferMenu}}
+                .toolbar {
+                    ToolbarItem(placement:.navigationBarLeading){Button("完成"){onClose?()}}
+                    ToolbarItem(placement:.navigationBarTrailing){transferMenu}
+                }
                 .safeAreaInset(edge:.bottom) {
                     Button {
                         do {

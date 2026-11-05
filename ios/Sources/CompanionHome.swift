@@ -141,7 +141,7 @@ struct CompanionHome: View {
             case .memory: withClose { MemoryView() }
             case .embodiment: withClose { EmbodimentSettingsView() }
             case .snowbreak: withClose { SnowbreakImportView(stage:snowbreak) }
-            case .persona: withClose {PersonaView(modelKey:modelKey,modelName:modelLabel,actions:availableActions)}
+            case .persona: PersonaView(modelKey:modelKey,modelName:modelLabel,actions:availableActions,onClose:{sheet = nil})
             }
         }
         .onChange(of: sheet) { if $0 != nil { camera.stop();senses.suspend();stage.stop();snowbreak.pause() } }
