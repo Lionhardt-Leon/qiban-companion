@@ -311,6 +311,7 @@ struct CompanionHome: View {
         let text = explicitText ?? (draft.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty && selectedImage != nil ? (selectedImage?.source == .selfPortrait ? "这是你自己的模型画面，看看你现在的样子。":"请看看这张图片，告诉我你看到了什么。"):draft)
         guard !text.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty else { return }
         preparingSend = true
+        let conversationID = store.conversationID
         Task { @MainActor in
             defer { preparingSend = false }
             do {
@@ -321,7 +322,7 @@ struct CompanionHome: View {
                 if let selectedImage = selectedImage {images.append(selectedImage)}
                 if let frame = try await camera.frame(){images.append(frame)}
                 if (selfAppearanceImagePolicy == "always" || selfAppearanceImagePolicy == "questions" && BodyCommand.asksAppearance(text)),!images.contains(where:{$0.source == .selfPortrait}) {images.append(try await ownPortrait())}
-                guard sheet == nil,scenePhase == .active,!store.busy else { return }
+                guard sheet == nil,scenePhase == .active,!store.busy,store.conversationID == conversationID else { return }
                 let before = store.archive.messages.count
                 senses.prepareReply()
                 let source = executed.map{origin+"；本轮已直接执行："+$0.label} ?? origin
@@ -374,6 +375,9 @@ struct CompanionHome: View {
             VStack(alignment: .leading, spacing: 26) {
                 circle("chevron.left", label: "返回陪伴") { sheet = nil }
                 Text("设置").font(.system(size: 34, weight: .bold))
+                RestartConversationButton {
+                    senses.suspend();pendingMotionRevision = nil;directlyControlledUser = nil;draft = "";attachedImage = nil
+                }
                 VStack(alignment: .leading, spacing: 10) {
                     Text("我的伙伴").foregroundStyle(.secondary)
                     VStack(spacing: 16) {

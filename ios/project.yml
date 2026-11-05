@@ -21,8 +21,8 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: $(COMPAT_APP_BUNDLE)
-        MARKETING_VERSION: "0.16.0"
-        CURRENT_PROJECT_VERSION: "27"
+        MARKETING_VERSION: "0.16.1"
+        CURRENT_PROJECT_VERSION: "28"
         GENERATE_INFOPLIST_FILE: YES
     info:
       path: Generated/Info.plist

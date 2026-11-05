@@ -46,6 +46,7 @@ enum APIKeyStore {
     @Published var error: String?
     @Published private(set) var storageReady = false
     @Published private(set) var dialogueAction: DialogueActionEvent?
+    private(set) var conversationID = UUID()
     private let directory: URL
     private let file: URL
     private var requestTask: Task<Void, Never>?
@@ -218,6 +219,19 @@ enum APIKeyStore {
         requestTask?.cancel(); requestID = nil; requestTask = nil; busy = false; dialogueAction = nil; pendingImage = nil;pendingExtraImages = []
     }
     func discardCameraFrame() { if pendingImage?.source == .camera {pendingImage = nil};pendingExtraImages.removeAll{$0.source == .camera} }
+    func restartConversation() throws {
+        var next = archive
+        next.messages = [];next.memories = ""
+        if let key = next.personaSessionKey {next.personaConversations?.removeValue(forKey:key)}
+        // Preserve a local recovery snapshot; it never enters the new API context.
+        guard storageReady else {throw CompanionError.message("本地存储未就绪，未清除资料。")}
+        try export().write(to:directory.appendingPathComponent("before-new-conversation-\(UUID().uuidString).json"),options:[.atomic,.completeFileProtection])
+        cancel()
+        try commit(next)
+        conversationID = UUID()
+        availableActions = [];error = nil
+        context = CompanionContext(modelKey:context.modelKey)
+    }
     func saveMemories(_ text: String) throws {
         var next = archive; next.memories = text; try commit(next)
     }
