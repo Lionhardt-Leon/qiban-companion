@@ -89,7 +89,7 @@ struct CompanionHome: View {
                                 ForEach(BodyGesture.ids.filter{availableActions.contains($0)},id:\.self){id in
                                     Button(BodyGesture.catalog.first{$0.id==id}?.meaning ?? id){
                                         if isSnowbreak {snowbreak.play(id,withVoice:false)}
-                                        else {stage.stopAction();stage.performDialogueAction(id)}
+                                        else {stage.performManualGesture(id)}
                                     }
                                 }
                             }
@@ -368,8 +368,8 @@ struct CompanionHome: View {
     }
     private func clearTouches(){touchTicket=UUID();pendingTouches=[];lastTouchSummary="尚无本轮触碰记录"}
     private func queueTouch(_ message:String){
-        guard sheet == nil,scenePhase == .active else{return};lastTouchSummary=message
-        guard touchAI,!store.archive.settings.endpoint.isEmpty else{return}
+        guard sheet == nil,scenePhase == .active,touchAI else{return};lastTouchSummary=message
+        guard !store.archive.settings.endpoint.isEmpty else{return}
         pendingTouches.append(message);pendingTouches=Array(pendingTouches.suffix(8));scheduleTouches()
     }
     private func scheduleTouches(){

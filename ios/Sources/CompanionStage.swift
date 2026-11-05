@@ -205,6 +205,10 @@ import simd
         }
         else { playAction(id, automatic: true) }
     }
+    func performManualGesture(_ id:String){
+        guard supportsProcedural,BodyGesture.plan(id) != nil else{return}
+        interactionRevision += 1;performDialogueAction(id)
+    }
     func demoMotion() {
         guard supportsProcedural else { return }
         interactionRevision += 1
