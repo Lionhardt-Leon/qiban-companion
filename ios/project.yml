@@ -7,6 +7,7 @@ settings:
     SWIFT_VERSION: "5.0"
     STORAGE_NAMESPACE: QibanCompanion
     KEYCHAIN_SERVICE: com.local.qibancompanion.api
+    COMPAT_APP_BUNDLE: com.local.qibancompanion
     TARGETED_DEVICE_FAMILY: "1"
 targets:
   QibanCompanion:
@@ -19,7 +20,7 @@ targets:
         buildPhase: resources
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.local.qibancompanion
+        PRODUCT_BUNDLE_IDENTIFIER: $(COMPAT_APP_BUNDLE)
         MARKETING_VERSION: "0.13.0"
         CURRENT_PROJECT_VERSION: "23"
         GENERATE_INFOPLIST_FILE: YES
