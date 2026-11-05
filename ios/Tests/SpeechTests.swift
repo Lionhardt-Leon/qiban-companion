@@ -1,5 +1,6 @@
 import XCTest
 import CryptoKit
+import zlib
 @testable import QibanCompanion
 
 final class SpeechTests:XCTestCase {
@@ -45,5 +46,36 @@ final class SpeechTests:XCTestCase {
     func testCancellationAndWAVHeader() throws {
         let token=SpeechCancellation();XCTAssertNoThrow(try token.check());token.cancel();XCTAssertThrowsError(try token.check())
         let wav=SpeechWAV.encode([0,0.5,-0.5]);XCTAssertEqual(String(data:wav.prefix(4),encoding:.ascii),"RIFF");XCTAssertEqual(wav.count,50)
+    }
+    private func zip(_ files:[String:Data])->Data {
+        var data=Data(),central=Data()
+        func number<T:FixedWidthInteger>(_ value:T,_ output:inout Data){var n=value.littleEndian;withUnsafeBytes(of:&n){output.append(contentsOf:$0)}}
+        for (path,body) in files.sorted(by:{$0.key<$1.key}) {
+            let name=Data(path.utf8),offset=UInt32(data.count)
+            let crc=body.withUnsafeBytes{UInt32(crc32(0,$0.bindMemory(to:Bytef.self).baseAddress,uInt(body.count)))}
+            number(UInt32(0x04034b50),&data);number(UInt16(20),&data);number(UInt16(0),&data);number(UInt16(0),&data);number(UInt32(0),&data);number(crc,&data);number(UInt32(body.count),&data);number(UInt32(body.count),&data);number(UInt16(name.count),&data);number(UInt16(0),&data);data.append(name);data.append(body)
+            number(UInt32(0x02014b50),&central);number(UInt16(20),&central);number(UInt16(20),&central);number(UInt16(0),&central);number(UInt16(0),&central);number(UInt32(0),&central);number(crc,&central);number(UInt32(body.count),&central);number(UInt32(body.count),&central);number(UInt16(name.count),&central)
+            for _ in 0..<4 {number(UInt16(0),&central)};number(UInt32(0),&central);number(offset,&central);central.append(name)
+        }
+        let start=UInt32(data.count);data.append(central);number(UInt32(0x06054b50),&data);number(UInt16(0),&data);number(UInt16(0),&data);number(UInt16(files.count),&data);number(UInt16(files.count),&data);number(UInt32(central.count),&data);number(start,&data);number(UInt16(0),&data);return data
+    }
+    func testStreamImportRejectsBadCRCAndRetainsPreviousPackageOnHashFailure() throws {
+        let root=FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at:root,withIntermediateDirectories:true);defer{try? FileManager.default.removeItem(at:root)}
+        let url=root.appendingPathComponent("voice.qvoice"),library=VoicePackageLibrary(directory:root.appendingPathComponent("library"))
+        var payload:[String:Data]=[:]
+        for language in ["zh","ja"] {for name in ["config.json","conditioning.json","reference_bert.bin","prompt_semantic.bin","refer_spec.bin","gpt_encoder.onnx","gpt_step.onnx","sovits.onnx"] {payload["voices/\(language)/\(name)"]=Data("synthetic".utf8)}}
+        payload["shared/bert.onnx"]=Data("fake".utf8);payload["shared/tokenizer.json"]=Data("{}".utf8);payload["resources/empty.dict"]=Data()
+        let files=payload.mapValues{VoiceManifest.File(bytes:Int64($0.count),sha256:SHA256.hash(data:$0).map{String(format:"%02x",$0)}.joined())}
+        let voices=["zh","ja"].map{VoiceManifest.Voice(id:"test."+$0,title:$0,language:$0,directory:"voices/"+$0)}
+        let manifest=VoiceManifest(schema:"qiban-offline-voice/1",id:"fixture",title:"Fixture",frontendRevision:"384a2f995c48ef1903373ac8814569a8925779ba",voices:voices,files:files)
+        payload["manifest.json"]=try JSONEncoder().encode(manifest);try zip(payload).write(to:url)
+        XCTAssertEqual(try library.importPackage(url).id,"fixture")
+        payload["voices/zh/sovits.onnx"]=Data("corrupted".utf8);try zip(payload).write(to:url)
+        XCTAssertThrowsError(try library.importPackage(url));XCTAssertEqual(try library.manifest().id,"fixture")
+        XCTAssertEqual(try Data(contentsOf:library.current.appendingPathComponent("voices/zh/sovits.onnx")),Data("synthetic".utf8))
+        var corrupt=zip(["test":Data("data".utf8)]);corrupt[34] ^= 1;try corrupt.write(to:url)
+        let reader=try StoredVoiceArchive(url:url);XCTAssertThrowsError(try reader.read("test",limit:10))
+        try zip(["../outside":Data()]).write(to:url);XCTAssertThrowsError(try StoredVoiceArchive(url:url))
     }
 }

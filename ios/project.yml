@@ -9,7 +9,6 @@ packages:
 settings:
   base:
     SWIFT_VERSION: "5.0"
-    SWIFT_INCLUDE_PATHS: "$(inherited) $(PROJECT_DIR)/Generated/QibanG2P.xcframework/ios-arm64/Headers $(PROJECT_DIR)/Generated/QibanG2P.xcframework/ios-arm64-simulator/Headers"
     STORAGE_NAMESPACE: QibanCompanion
     KEYCHAIN_SERVICE: com.local.qibancompanion.api
     COMPAT_APP_BUNDLE: com.local.qibancompanion
