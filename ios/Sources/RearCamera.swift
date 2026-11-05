@@ -72,8 +72,7 @@ private final class RearCameraCapture: NSObject, AVCaptureVideoDataOutputSampleB
                 output.videoSettings = [kCVPixelBufferPixelFormatTypeKey as String:kCVPixelFormatType_32BGRA]
                 output.setSampleBufferDelegate(self, queue: queue); session.addOutput(output)
                 if let connection = output.connection(with: .video) {
-                    if connection.isVideoOrientationSupported { connection.videoOrientation = .portrait }
-                    if connection.isVideoMirroringSupported { connection.isVideoMirrored = false }
+                    RearCameraConnection.configure(connection)
                 }
                 if (try? device.lockForConfiguration()) != nil {
                     device.videoZoomFactor = 1
@@ -118,8 +117,7 @@ struct RearCameraPreview: UIViewRepresentable {
         guard let view = uiView as? CameraPreviewSurface else { return }
         if view.preview.session !== session { view.preview.session = session }
         if let connection = view.preview.connection {
-            if connection.isVideoOrientationSupported { connection.videoOrientation = .portrait }
-            if connection.isVideoMirroringSupported { connection.isVideoMirrored = false }
+            RearCameraConnection.configure(connection)
         }
     }
     static func dismantleUIView(_ uiView:UIView,coordinator:()) { (uiView as? CameraPreviewSurface)?.preview.session = nil }
