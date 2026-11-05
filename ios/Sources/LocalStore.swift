@@ -115,7 +115,9 @@ enum APIKeyStore {
         guard !busy,storageReady else {throw CompanionError.message("请等待当前回复完成后保存人设。")}
         guard ["native","enya"].contains(modelKey),library.cards.contains(where:{$0.id == selected}) else {throw CompanionError.message("角色卡或伙伴映射无效。")}
         var library = library;library.modelBindings[modelKey] = selected;try library.validate()
-        var next = archive;next.settings.personas = library
+        var next = archive;next.schemaVersion = 2;next.settings.personas = library
+        var checkContext = context;checkContext.modelKey = modelKey
+        _ = try PersonaPrompt.character(settings:next.settings,context:checkContext)
         if let card = library.card(for:context.modelKey) {switchConversation(&next,to:card.id.uuidString)}
         try commit(next)
     }

@@ -42,7 +42,7 @@ struct LocalArchive: Codable {
                   session.messages.allSatisfy({["user","assistant"].contains($0.role)}) &&
                   Set(session.messages.map(\.id)).count == session.messages.count && Set(session.diary.map(\.id)).count == session.diary.count
               }) else {throw CompanionError.message("角色独立对话资料无效或超过保存上限。")}
-        guard schemaVersion == 1 else { throw CompanionError.message("备份版本暂不支持，原数据未变更。") }
+        guard [1,2].contains(schemaVersion),schemaVersion == 2 || (settings.personas == nil && personaConversations == nil && personaSessionKey == nil) else { throw CompanionError.message("备份版本暂不支持，原数据未变更。") }
         guard messages.count <= 100_000, diary.count <= 100_000,
               messages.allSatisfy({ ["user", "assistant"].contains($0.role) }),
               Set(messages.map(\.id)).count == messages.count,

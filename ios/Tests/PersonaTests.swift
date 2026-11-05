@@ -74,6 +74,7 @@ final class PersonaTests:XCTestCase {
         var library = PersonaLibrary.migrating(store.archive.settings.persona)
         let first = library.cards[0].id
         try store.savePersonas(library,selected:first,modelKey:"native")
+        XCTAssertEqual(store.archive.schemaVersion,2)
         XCTAssertEqual(store.archive.messages.first?.content,"升级前的对话");XCTAssertEqual(store.archive.memories,"升级前记忆")
         try store.addDiary("第一张卡的日记")
         var second = PersonaCard();second.title = "第二张";second.name = "另一位";library.cards.append(second)
@@ -109,5 +110,15 @@ final class PersonaTests:XCTestCase {
         XCTAssertTrue(store.archive.messages.isEmpty);try store.insertGreeting(0)
         XCTAssertEqual(store.archive.messages.first?.content,"小明，我是小栞。");XCTAssertNil(store.dialogueAction)
         XCTAssertThrowsError(try store.insertGreeting(0))
+    }
+    @MainActor func testOversizeCombinedPromptCannotReplaceExistingSettings() throws {
+        let (store,directory) = try makeStore();defer{try? FileManager.default.removeItem(at:directory)}
+        var library = PersonaLibrary.migrating(String(repeating:"背",count:12_000))
+        library.cards[0].personality = String(repeating:"性",count:12_000)
+        library.cards[0].scenario = String(repeating:"场",count:12_000)
+        try library.validate()
+        XCTAssertThrowsError(try store.savePersonas(library,selected:library.cards[0].id,modelKey:"native"))
+        XCTAssertNil(store.archive.settings.personas);XCTAssertEqual(store.archive.schemaVersion,1)
+        XCTAssertEqual(store.archive.messages.first?.content,"升级前的对话")
     }
 }
