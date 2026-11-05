@@ -41,7 +41,7 @@ struct SenseTextEvent { let id=UUID();let text:String }
             if !ambient {
                 request=recognition;speechTask=recognizer?.recognitionTask(with:recognition){[weak self] result,error in
                     Task{@MainActor in guard let self=self,self.generation==ticket else{return}
-                        if let result=result {let text=result.bestTranscription.formattedString;self.status=text;self.silence?.cancel();let work=DispatchWorkItem{[weak self] in self?.finishUtterance(text,ticket:ticket)};self.silence=work;if result.isFinal{work.perform()}else{DispatchQueue.main.asyncAfter(deadline:.now()+1.2,execute:work)}}
+                        if let result=result {let text=result.bestTranscription.formattedString;self.status=text;self.silence?.cancel();let work=DispatchWorkItem{[weak self] in Task{@MainActor in self?.finishUtterance(text,ticket:ticket)}};self.silence=work;if result.isFinal{work.perform()}else{DispatchQueue.main.asyncAfter(deadline:.now()+1.2,execute:work)}}
                         else if let error=error {self.stopAudio();self.status=error.localizedDescription;self.conversation=false}
                     }
                 }
@@ -56,6 +56,8 @@ struct SenseTextEvent { let id=UUID();let text:String }
     }
     private func finishUtterance(_ text:String,ticket:Int){guard ticket==generation,!text.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty else{return};stopAudio();utterance=SenseTextEvent(text:text);status="等待回复…"}
     private func stopAudio(){generation+=1;silence?.cancel();silence=nil;engine.stop();if tapInstalled{engine.inputNode.removeTap(onBus:0);tapInstalled=false};request?.endAudio();speechTask?.cancel();speechTask=nil;request=nil;analyzer?.removeAllRequests();analyzer=nil;listening=false;environment=false;try? AVAudioSession.sharedInstance().setActive(false,options:.notifyOthersOnDeactivation)}
+    func prepareReply(){if conversation{stopAudio();status="等待回复…"}}
+    func replyFailed(){if conversation{stop();status="AI回复失败，请检查接口后重试"}}
     func stop(){conversation=false;stopAudio();speaker.stopSpeaking(at:.immediate);status=""}
     func suspend(){cameraGeneration+=1;stop();ar.pause();cameraEnabled=false;gaze = .zero}
     func speak(_ text:String){guard conversation else{return};stopAudio();try? AVAudioSession.sharedInstance().setActive(true);let speech=AVSpeechUtterance(string:text);speech.voice=AVSpeechSynthesisVoice(language:"zh-CN");speech.rate=0.48;speaker.speak(speech);status="正在说话…"}

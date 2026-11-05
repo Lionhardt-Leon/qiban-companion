@@ -125,7 +125,7 @@ struct CompanionHome: View {
         .onChange(of: sheet) { if $0 != nil { senses.suspend();stage.stop();snowbreak.pause() } }
         .onChange(of:senses.gaze) { value in if isSnowbreak { snowbreak.gaze(x:value.x,y:value.y) } else {stage.gaze(x:value.x,y:value.y)} }
         .onChange(of:senses.utterance?.id) { _ in
-            guard let event=senses.utterance,!store.busy else{return};draft=event.text;send()
+            guard let event=senses.utterance,!store.busy else{return};let saved=draft;draft=event.text;send();if draft.isEmpty{draft=saved}
         }
         .onChange(of:senses.sound?.id) { _ in
             guard let event=senses.sound,!store.busy,!store.archive.settings.endpoint.isEmpty else{return}
@@ -134,6 +134,7 @@ struct CompanionHome: View {
         .onChange(of:store.archive.messages.last?.id) { _ in
             if let last=store.archive.messages.last,last.role == "assistant" {senses.speak(last.content)}
         }
+        .onChange(of:store.busy) { value in if !value,store.error != nil {senses.replyFailed()} }
         .onChange(of: store.dialogueAction?.id) { _ in
             guard let event = store.dialogueAction else { return }
             if sheet == nil, scenePhase == .active,
@@ -146,7 +147,7 @@ struct CompanionHome: View {
         .onChange(of:snowbreak.touch?.id) { _ in
             guard isSnowbreak,sheet == nil,scenePhase == .active,touchAI,!store.busy,
                   !store.archive.settings.endpoint.isEmpty,let touch = snowbreak.touch else { return }
-            store.send("[触碰互动] 用户触碰了你的\(touch.label)，本地原作反应已经播放完成，请结合上下文自然回应。",actions:availableActions)
+            store.send("[触碰互动] 用户触碰了你的\(touch.label)，请根据已确认的触碰部位和上下文自然回应。",actions:availableActions)
             pendingMotionRevision = currentRevision
         }
         .onChange(of:engine) { _ in pendingMotionRevision = nil;nativeEditing = false;resumeStage() }
@@ -215,7 +216,7 @@ struct CompanionHome: View {
                     .background(.ultraThinMaterial, in: Capsule()).overlay(Capsule().stroke(.white.opacity(0.2)))
                     .accessibilityIdentifier("homeMessageInput")
                 circle(senses.cameraEnabled ? "eye.fill" : "eye", label:"相机注视跟随") { senses.toggleCamera() }
-                circle(senses.conversation ? "phone.down.fill" : "mic", label:senses.conversation ? "结束语音通话" : "开始语音通话") { senses.toggleVoice() }
+                circle(senses.conversation ? "phone.down.fill" : "mic", label:senses.conversation ? "结束语音通话" : "开始语音通话",enabled: !store.busy || senses.conversation) { if store.archive.settings.endpoint.isEmpty {sheet = .api}else{senses.toggleVoice()} }
             }.padding(.horizontal, 14)
         }.padding(.top, 28).padding(.bottom, 12)
             .background(LinearGradient(colors: [.clear, .black.opacity(0.6)], startPoint: .top, endPoint: .bottom))
@@ -232,6 +233,7 @@ struct CompanionHome: View {
     private func send() {
         let before = store.archive.messages.count
         let text = draft
+        senses.prepareReply()
         store.send(draft, actions: availableActions)
         if store.archive.messages.count > before {
             draft = ""
