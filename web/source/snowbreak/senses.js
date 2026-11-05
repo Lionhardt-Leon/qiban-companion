@@ -21,5 +21,5 @@ export function createSenses(root,camera,canvas){
   const skeletons=new Set();if(eyes.length)root.traverse(m=>{if(m.isSkinnedMesh&&!skeletons.has(m.skeleton)){m.skeleton.update();skeletons.add(m.skeleton);}});
  }
  function restore(){for(const [eye,q] of bases)if(eye.quaternion.angleTo(q.applied)<.000001)eye.quaternion.copy(q.base);bases.clear();}
- return {gaze,touch,tick,restore,reset(){restore();pressed=active=false;offset=velocity=0;displacement.value.set(0,0,0);target.set(0,0);current.set(0,0);},snapshot:()=>({eyes:eyes.length,gaze:current.toArray(),offset,pressed,active}),dispose(){for(const [name,fn] of [['pointerdown',down],['pointermove',pointer],['pointerup',release],['pointercancel',release]])canvas.removeEventListener(name,fn);}};
+ return {gaze,touch,tick,restore,reset(){restore();pressed=active=held=false;touchUntil=0;offset=velocity=0;displacement.value.set(0,0,0);target.set(0,0);current.set(0,0);},snapshot:()=>({eyes:eyes.length,gaze:current.toArray(),offset,pressed,active}),dispose(){for(const [name,fn] of [['pointerdown',down],['pointermove',pointer],['pointerup',release],['pointercancel',release]])canvas.removeEventListener(name,fn);}};
 }

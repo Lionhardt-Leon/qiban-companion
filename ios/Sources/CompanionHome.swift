@@ -123,7 +123,7 @@ struct CompanionHome: View {
             }
         }
         .onChange(of: sheet) { if $0 != nil { senses.suspend();stage.stop();snowbreak.pause() } }
-        .onChange(of:senses.gaze) { value in if isSnowbreak { snowbreak.gaze(x:value.x,y:value.y) } else {stage.gaze(x:value.x,y:value.y)} }
+        .onChange(of:senses.gazeRevision) { _ in let value=senses.gaze; if isSnowbreak { snowbreak.gaze(x:value.x,y:value.y) } else {stage.gaze(x:value.x,y:value.y)} }
         .onChange(of:senses.utterance?.id) { _ in
             guard let event=senses.utterance,!store.busy else{return};let saved=draft;draft=event.text;send();if draft.isEmpty{draft=saved}
         }
