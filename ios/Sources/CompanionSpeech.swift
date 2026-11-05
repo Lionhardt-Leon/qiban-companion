@@ -13,14 +13,14 @@ enum SpeechWAV {
 private final class SpeechEngineWorker:@unchecked Sendable {
     private let queue=DispatchQueue(label:"qiban.offline-speech",qos:.userInitiated)
     private var engine:OfflineVoiceEngine?
-    func render(root:URL,voice:VoiceManifest.Voice,parts:[String],speed:Float,cancellation:SpeechCancellation,gate:DispatchSemaphore,chunk:@escaping(Data)->Void,finish:@escaping(Error?)->Void) {
+    func render(root:URL,voice:VoiceManifest.Voice,parts:[String],speed:Float,cancellation:SpeechCancellation,gate:SpeechBackpressure,chunk:@escaping(Data)->Void,finish:@escaping(Error?)->Void) {
         queue.async {
             do {
                 try cancellation.check()
                 if self.engine?.voice.id != voice.id {self.engine=nil;self.engine=try OfflineVoiceEngine(root:root,voice:voice)}
                 guard let engine=self.engine else {throw CompanionError.message("离线语音引擎没有就绪。")}
                 for text in parts {
-                    while gate.wait(timeout:.now()+0.1) == .timedOut {try cancellation.check()}
+                    try gate.acquire()
                     try cancellation.check()
                     let audio=try autoreleasepool {SpeechWAV.encode(try engine.synthesize(text,speed:speed,cancellation:cancellation))}
                     try cancellation.check();chunk(audio)
@@ -36,6 +36,8 @@ private final class SpeechEngineWorker:@unchecked Sendable {
     @Published private(set) var voices:[VoiceManifest.Voice]=[]
     @Published private(set) var packageName=""
     @Published private(set) var busy=false
+    @Published private(set) var mouthLevel:Float=0
+    private var meter:Timer?
     @Published private(set) var status=""
     @Published private(set) var importing=false
     @Published private(set) var importProgress=0.0
@@ -47,7 +49,7 @@ private final class SpeechEngineWorker:@unchecked Sendable {
     private var system:AVSpeechSynthesizer?
     private var systemUtterance:AVSpeechUtterance?
     private var queued:[Data]=[]
-    private var gate:DispatchSemaphore?
+    private var gate:SpeechBackpressure?
     private var generation=UUID(),generationFinished=false
     private var volume:Float=1
     private var completion:((Bool)->Void)?
@@ -55,7 +57,8 @@ private final class SpeechEngineWorker:@unchecked Sendable {
     init(library:VoicePackageLibrary){self.library=library;super.init();reload()}
     func reload(){if let manifest=try? library.manifest(){voices=manifest.voices;packageName=manifest.title}else{voices=[];packageName=""}}
     func stop() {
-        cancellation?.cancel();cancellation=nil;generation=UUID();gate?.signal();gate=nil;queued=[]
+        meter?.invalidate();meter=nil;mouthLevel=0
+        cancellation?.cancel();cancellation=nil;generation=UUID();gate?.cancel();gate=nil;queued=[]
         player?.stop();player=nil;systemUtterance=nil;system?.stopSpeaking(at:.immediate);completion=nil;busy=false;status="";generationFinished=false
     }
     func unload() async {stop();await worker.unload()}
@@ -87,12 +90,12 @@ private final class SpeechEngineWorker:@unchecked Sendable {
             if preferences.voiceID.hasPrefix("system.") {
                 status="系统语音正在朗读…";let utterance=AVSpeechUtterance(string:text)
                 utterance.voice=AVSpeechSynthesisVoice(language:preferences.language=="ja" ? "ja-JP":"zh-CN");utterance.rate=0.48*preferences.speed;utterance.volume=preferences.volume
-                if system==nil {system=AVSpeechSynthesizer();system?.delegate=self};systemUtterance=utterance;system?.speak(utterance);return
+            if system==nil {system=AVSpeechSynthesizer();system?.delegate=self};systemUtterance=utterance;system?.speak(utterance);startMeter();return
             }
             guard let voice=voices.first(where:{$0.id==preferences.voiceID && $0.language==preferences.language}) else {throw CompanionError.message("所选训练音色尚未导入，请到设置 → 离线语音导入语音包。")}
-            let token=SpeechCancellation(),ticket=generation,gate=DispatchSemaphore(value:2);self.gate=gate;cancellation=token;status="正在本机合成 \(voice.title)…"
+            let token=SpeechCancellation(),ticket=generation,gate=SpeechBackpressure();self.gate=gate;cancellation=token;status="正在本机合成 \(voice.title)…"
             worker.render(root:library.current,voice:voice,parts:SpeechPreferences.sentences(text),speed:preferences.speed,cancellation:token,gate:gate,chunk:{[weak self] data in
-                DispatchQueue.main.async {guard let self=self,self.generation==ticket else{gate.signal();return};self.queued.append(data);self.playNext()}
+                DispatchQueue.main.async {guard let self=self,self.generation==ticket else{gate.release();return};self.queued.append(data);self.playNext()}
             },finish:{[weak self] failure in
                 DispatchQueue.main.async {
                     guard let self=self,self.generation==ticket else{return}
@@ -106,14 +109,26 @@ private final class SpeechEngineWorker:@unchecked Sendable {
         guard player==nil else{return}
         guard !queued.isEmpty else{if generationFinished{finish()};return}
         do {
-            let audio=queued.removeFirst();player=try AVAudioPlayer(data:audio);player?.delegate=self;player?.volume=volume;player?.prepareToPlay()
-            guard player?.play()==true else{throw CompanionError.message("无法播放生成的语音。")};status="离线语音正在播放…"
+            let audio=queued.removeFirst();player=try AVAudioPlayer(data:audio);player?.delegate=self;player?.volume=volume;player?.isMeteringEnabled=true;player?.prepareToPlay()
+            guard player?.play()==true else{throw CompanionError.message("无法播放生成的语音。")};startMeter();status="离线语音正在播放…"
         }catch {fail(error)}
     }
-    private func finish(){let callback=completion;completion=nil;systemUtterance=nil;busy=false;status="";cancellation=nil;callback?(true)}
+    private func startMeter(){
+        guard meter==nil else{return}
+        meter=Timer.scheduledTimer(withTimeInterval:0.05,repeats:true){[weak self] _ in
+            Task{@MainActor in guard let self=self else{return}
+                let value:Float
+                if let player=self.player,player.isPlaying {player.updateMeters();value=max(0,min(1,(pow(10,player.averagePower(forChannel:0)/20)-0.015)*4))}
+                else if self.systemUtterance != nil,self.system?.isSpeaking==true {value=0.2+0.3*Float(abs(sin(Date.timeIntervalSinceReferenceDate*9)))}
+                else {value=0}
+                if abs(value-self.mouthLevel)>0.025 || value==0 {self.mouthLevel=value}
+            }
+        }
+    }
+    private func finish(){meter?.invalidate();meter=nil;mouthLevel=0;let callback=completion;completion=nil;systemUtterance=nil;busy=false;status="";cancellation=nil;callback?(true)}
     private func fail(_ failure:Error,completion fallback:((Bool)->Void)?=nil) {let callback=completion ?? fallback;stop();error=failure.localizedDescription;status="语音失败："+failure.localizedDescription;callback?(false)}
     nonisolated func audioPlayerDidFinishPlaying(_ player:AVAudioPlayer,successfully flag:Bool) {
-        Task{@MainActor in guard self.player===player else{return};self.player=nil;self.gate?.signal();if flag{self.playNext()}else{self.fail(CompanionError.message("音频播放被中断。"))}}
+        Task{@MainActor in guard self.player===player else{return};self.player=nil;self.gate?.release();if flag{self.playNext()}else{self.fail(CompanionError.message("音频播放被中断。"))}}
     }
     nonisolated func audioPlayerDecodeErrorDidOccur(_ player:AVAudioPlayer,error:Error?) {
         Task{@MainActor in guard self.player===player else{return};self.fail(error ?? CompanionError.message("音频解码失败。"))}

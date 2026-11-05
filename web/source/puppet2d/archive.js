@@ -2,7 +2,8 @@ import { safeArchivePath, validatePuppetAsset, normalizeAsset } from './schema.j
 import { sha256Hex } from './sha256.js';
 const LIMIT = { entries: 256, file: 32*1024*1024, total: 128*1024*1024, archive: 64*1024*1024, pixels: 64000000 };
 const decoder = new TextDecoder('utf-8', { fatal:true });
-export function inspectArchive(bytes, allowedPath = /^(manifest\.json|LICENSE\.txt|layers\/[a-z0-9_.-]+\.png)$/i,archiveLimit=LIMIT.archive) {
+export function inspectArchive(bytes, allowedPath = /^(manifest\.json|LICENSE\.txt|layers\/[a-z0-9_.-]+\.png)$/i,archiveLimit=LIMIT.archive,decodedLimit=LIMIT.total) {
+  if(![LIMIT.total,192*1024*1024].includes(decodedLimit))throw new Error('资源包解压上限非法');
   if (![LIMIT.archive,128*1024*1024].includes(archiveLimit)||!(bytes instanceof Uint8Array) || bytes.length < 22 || bytes.length > archiveLimit) throw new Error('资源包大小非法');
   const d = new DataView(bytes.buffer,bytes.byteOffset,bytes.byteLength);
   let eocd=-1;
@@ -20,7 +21,7 @@ export function inspectArchive(bytes, allowedPath = /^(manifest\.json|LICENSE\.t
     if(!safeArchivePath(name) || names.has(name) || !allowedPath.test(name)) throw new Error('非法或重复资源路径');
     names.add(name); total+=original;
     const mode=d.getUint32(pos+38,true)>>>16;
-    if((flags&1) || ![0,8].includes(method) || (mode&0xf000)===0xa000 || original>LIMIT.file || total>LIMIT.total) throw new Error('加密、链接、压缩方式或解压大小不支持');
+    if((flags&1) || ![0,8].includes(method) || (mode&0xf000)===0xa000 || original>LIMIT.file || total>decodedLimit) throw new Error('加密、链接、压缩方式或解压大小不支持');
     if(name==='manifest.json' && original>1024*1024) throw new Error('manifest 过大');
     const local=d.getUint32(pos+42,true);
     if(local+30>start || d.getUint32(local,true)!==0x04034b50) throw new Error('ZIP 本地条目非法');

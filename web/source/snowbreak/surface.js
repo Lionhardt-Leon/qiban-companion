@@ -3,7 +3,9 @@ import {weightedAnatomy} from './anatomy.js';
 // Raycast the current skinned triangles, then test their actual texture alpha.
 // Bone proximity is deliberately not treated as a semantic body-part label.
 export function createSurfacePicker(root,camera,canvas,occluder=null){
-  const ray=new THREE.Raycaster(),alphaCache=new WeakMap();
+  const ray=new THREE.Raycaster(),alphaIds=new WeakMap(),alphaTiles=new Map();let alphaID=0;
+  const alphaCanvas=document.createElement('canvas');alphaCanvas.width=alphaCanvas.height=32;
+  const alphaContext=alphaCanvas.getContext('2d',{willReadFrequently:true});
   function refineTorso(anatomy,point){
     if(!['torso','leg'].includes(anatomy?.id))return anatomy;
     const find=n=>root.getObjectByName(n),pos=n=>find(n)?.getWorldPosition(new THREE.Vector3());
@@ -25,10 +27,16 @@ export function createSurfacePicker(root,camera,canvas,occluder=null){
   }
   function visible(mesh){for(let p=mesh;p;p=p.parent)if(!p.visible)return false;return true;}
   function alphaAt(map,uv){
-    if(!map||!uv)return 1;let entry=alphaCache.get(map);
-    if(!entry){try{const image=map.image,cv=document.createElement('canvas');cv.width=image.width;cv.height=image.height;const ctx=cv.getContext('2d',{willReadFrequently:true});ctx.drawImage(image,0,0);const rgba=ctx.getImageData(0,0,cv.width,cv.height).data,alpha=new Uint8Array(cv.width*cv.height);for(let i=0;i<alpha.length;i++)alpha[i]=rgba[i*4+3];entry={width:cv.width,height:cv.height,data:alpha};alphaCache.set(map,entry);cv.width=cv.height=1;}catch{return null;}}
-    const p=uv.clone();map.transformUv(p);const x=Math.min(entry.width-1,Math.max(0,Math.floor(p.x*entry.width))),y=Math.min(entry.height-1,Math.max(0,Math.floor(p.y*entry.height)));
-    return entry.data[y*entry.width+x]/255;
+    if(!map||!uv)return 1;
+    try {
+      const image=map.image,w=image.width,h=image.height;if(!w||!h||!alphaContext)return null;
+      const p=uv.clone();map.transformUv(p);const x=Math.min(w-1,Math.max(0,Math.floor(p.x*w))),y=Math.min(h-1,Math.max(0,Math.floor(p.y*h))),tx=Math.floor(x/32)*32,ty=Math.floor(y/32)*32;
+      if(!alphaIds.has(map))alphaIds.set(map,++alphaID);const key=alphaIds.get(map)+':'+tx+':'+ty;
+      let alpha=alphaTiles.get(key);
+      if(!alpha){alphaContext.clearRect(0,0,32,32);alphaContext.drawImage(image,tx,ty,Math.min(32,w-tx),Math.min(32,h-ty),0,0,Math.min(32,w-tx),Math.min(32,h-ty));const rgba=alphaContext.getImageData(0,0,32,32).data;alpha=new Uint8Array(1024);for(let i=0;i<1024;i++)alpha[i]=rgba[i*4+3];alphaTiles.set(key,alpha);if(alphaTiles.size>128)alphaTiles.delete(alphaTiles.keys().next().value);}
+      else {alphaTiles.delete(key);alphaTiles.set(key,alpha);}
+      return alpha[(y-ty)*32+x-tx]/255;
+    }catch{return null;}
   }
   return (x,y)=>{
     const rect=canvas.getBoundingClientRect();if(!Number.isFinite(x)||!Number.isFinite(y)||!rect.width||!rect.height||x<rect.left||x>rect.right||y<rect.top||y>rect.bottom)return null;

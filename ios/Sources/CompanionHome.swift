@@ -42,7 +42,7 @@ struct CompanionHome: View {
     private var modelLabel:String {isSnowbreak ? "恩雅护士":stage.name}
     private func companionContext(_ origin:String) -> CompanionContext {
         CompanionContext(modelKey:modelKey,modelName:modelLabel,
-                         mode:isSnowbreak ? (snowbreak.companionMode == "standing" ? "看板娘站立":"皮肤互动坐姿"):"本地角色展示",
+                         mode:isSnowbreak ? (snowbreak.companionMode == "standing" ? "看板娘站立":"皮肤互动场景（以身体实况为准）"):"本地角色展示",
                          activeAction:activeAction ?? "待机",origin:origin,bodyStatus:(isSnowbreak ? snowbreak.bodyState:stage.bodyState).summary+"；最近屏幕互动："+lastTouchSummary)
     }
     private func stopAction() { if isSnowbreak { snowbreak.stop() } else { stage.stopAction() } }
@@ -110,6 +110,7 @@ struct CompanionHome: View {
                                     Button(["snowbreak_home_login":"看板娘 · 登录招呼","snowbreak_home_invite":"看板娘 · 邀请","snowbreak_home_shy":"看板娘 · 害羞","snowbreak_home_check":"看板娘 · 检查","snowbreak_home_kiss":"看板娘 · 亲吻","snowbreak_show_02":"互动展示 02","snowbreak_show_03":"互动展示 03","snowbreak_show_04":"互动展示 04","snowbreak_show_05":"互动展示 05","snowbreak_sequence":"完整展示片段","snowbreak_idle_01":"互动待机变化 01","snowbreak_idle_02":"互动待机变化 02","snowbreak_head":"头部原作反应","snowbreak_left":"左手原作反应","snowbreak_right":"右手原作反应","enya_yuki_hello":"学习 Yuki · 挥手","enya_yuki_Yes":"学习 Yuki · 点头","enya_yuki_No":"学习 Yuki · 摇头","enya_yuki_Peace_hand":"学习 Yuki · 比 V","enya_yuki_dance_90bpm":"站立舞蹈 · 90 BPM","enya_yuki_dance_120bpm":"站立舞蹈 · 120 BPM","enya_yuki_f_vibe_dance_60_bpm_002":"站立舞蹈 · 60 BPM"][id] ?? id) { snowbreak.play(id,withVoice:snowbreakVoice) }
                                 }
                                 Button("精细触碰表面标注") { snowbreak.editTouch() }
+                                Button("显示／隐藏原作触点") {snowbreak.officialTouchPoints()}
                                 Button("展示编辑：移动 / 旋转 / 缩放") { snowbreak.editFrame() }
                                 Button("采光与材质") { snowbreak.editLighting() }
                             } else {
@@ -218,6 +219,7 @@ struct CompanionHome: View {
         .onChange(of:store.busy) { value in if value {speech.stop();senses.prepareReply()}else {if store.error != nil {senses.replyFailed()};scheduleTouches()} }
         .onChange(of:store.conversationID) {_ in speech.stop();clearTouches()}
         .onChange(of:store.archive.settings.speech) {_ in speech.stop()}
+        .onChange(of:speech.mouthLevel) {value in if isSnowbreak {snowbreak.setSpeechLevel(value)}else{stage.setSpeechLevel(value)}}
         .onChange(of:touchAI) {if !$0 {clearTouches()};snowbreak.setTouchPolicy($0 && !store.archive.settings.endpoint.isEmpty)}
         .onChange(of:store.archive.settings.endpoint) {_ in snowbreak.setTouchPolicy(touchAI && !store.archive.settings.endpoint.isEmpty)}
         .onChange(of: store.dialogueAction?.id) { _ in

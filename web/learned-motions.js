@@ -58,7 +58,7 @@ export function createLearnedMotions(root,camera,config,stance){
   function bounded(bone,reference,desired,max,strength=weight){const angle=reference.angleTo(desired),limit=THREE.MathUtils.degToRad(max);if(angle>limit)diagnostics.limited++;bone.quaternion.copy(reference).slerp(desired,strength*Math.min(1,limit/Math.max(angle,1e-8))).normalize();}
   function aim(bone,child,direction,max,strength=weight){
     bone.parent.updateWorldMatrix(true,false);
-    const reference=bone.quaternion.clone(),transported=solved.get(bone)?.clone()||reference.clone();
+    const reference=bone.quaternion.clone(),transported=reference.clone();
     const from=(child?child.position.clone():new THREE.Vector3(1,0,0)).multiply(bone.scale).applyQuaternion(transported).normalize();
     const to=direction.clone().transformDirection(bone.parent.matrixWorld.clone().invert());
     const desired=new THREE.Quaternion().setFromUnitVectors(from,to).multiply(transported).normalize();

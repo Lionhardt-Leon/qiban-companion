@@ -5,7 +5,7 @@ import {matchSurfaceReaction} from './touch-reactions.js';
 // Neither path claims an original interaction event.
 export function createSnowbreakSampleAdapter(display,{now=()=>performance.now(),audio=null,audioForSample=null,beforeVoice=()=>{},onVoiceBusy=()=>{},onReactionEvent=()=>{}}={}){
   if(!Number.isFinite(display.duration)||display.duration<=0)throw new Error('Sample clip unavailable');
-  let activeArm=null;
+  let activeArm=null,scene=null,returnScene=null;
   let sequence=0,status='stopped',generation=0,voiceMode=false,standbyAfterSample=false;
   let voiceTail=null,activeReaction=null,lastReaction=null;
   const touchBindings=display.touchBindings?.()||[];
@@ -44,6 +44,7 @@ export function createSnowbreakSampleAdapter(display,{now=()=>performance.now(),
     if(plan.action.type==='snowbreak_standby'&&reason==='done'){enterStandby();return;}
     if((plan.action.type==='snowbreak_arm_preview'||plan.action.type==='raise_hand')){activeArm?.restore();activeArm=null;status='stopped';display.seek(0);if(reason==='done'&&display.startAsStandby)enterStandby();return;}
     if(voiceMode){audio.pause();if(reason!=='done')audio.currentTime=0;voiceMode=false;voiceTail=null;onVoiceBusy(false);}
+    if(reason==='done'&&returnScene){const previous=returnScene;returnScene=null;enterScene(previous.id,previous.time);return;}
     status=reason==='done'?'sample-ended':'stopped';display.seek(reason==='done'?display.duration:0);
     if(reason==='done'&&(plan.action.type==='snowbreak_standby'||standbyAfterSample))enterStandby();
   }}});
@@ -53,9 +54,11 @@ export function createSnowbreakSampleAdapter(display,{now=()=>performance.now(),
     const action={type:'snowbreak_sample',source:'manual-preview',priority:80};
     return bus.dispatch(action,capability,{schema:'action-plan/1',planId:'snowbreak-sample-'+(++sequence),action,duration:(voiceMode?duration():display.duration)*1000,fadeIn:0,fadeOut:0,tracks:[{ch:'motion',group:'sample-body-face',index:0}]});
   }
-  function tick(dt){const mediaTime=voiceMode?clock()/1000:null;const frame=bus.tick(dt);if(status==='arm-failed'){stop();status='arm-failed';return frame;}if(frame.actions.length){const action=frame.actions[0];if((action.type==='snowbreak_arm_preview'||action.type==='raise_hand')){if(status==='local-arm-preview'){try{activeArm.apply(action.progress);}catch{stop();status='arm-failed';}}return frame;}if(action.type==='snowbreak_standby'&&status==='standby-preview')display.seekStandby(action.progress*display.standbyDuration);else if(status!=='standby-preview')display.seek(mediaTime===null?action.progress*display.duration:Math.min(display.duration,mediaTime));}return frame;}
+  function enterScene(id,time=0){stop();display.selectSample(id);scene={id,time};status='scene-preview';display.seek(Math.min(time,display.duration));return {accepted:true};}
+  async function playSceneReaction(id,{withVoice=true}={}){const previous=scene;if(!previous)return {accepted:false};stop();display.selectSample(id);setAudio(audioForSample?.(id));returnScene=previous;standbyAfterSample=false;return withVoice&&audio?playWithVoice():playSample();}
+  function tick(dt){if(scene&&status==='scene-preview'){scene.time+=Math.max(0,Math.min(100,dt))/1000;display.seek(scene.id==='show_03'?Math.min(scene.time,display.duration):scene.time%display.duration);return {actions:[]};}const mediaTime=voiceMode?clock()/1000:null;const frame=bus.tick(dt);if(status==='arm-failed'){stop();status='arm-failed';return frame;}if(frame.actions.length){const action=frame.actions[0];if((action.type==='snowbreak_arm_preview'||action.type==='raise_hand')){if(status==='local-arm-preview'){try{activeArm.apply(action.progress);}catch{stop();status='arm-failed';}}return frame;}if(action.type==='snowbreak_standby'&&status==='standby-preview')display.seekStandby(action.progress*display.standbyDuration);else if(status!=='standby-preview')display.seek(mediaTime===null?action.progress*display.duration:Math.min(display.duration,mediaTime));}return frame;}
   function enterStandby(){if(!(display.standbyDuration>0))return {accepted:false,reason:'standby-unavailable'};bus.clear('standby-switch');const action={type:'snowbreak_standby',source:'manual-preview',priority:10};display.seekStandby(0);return bus.dispatch(action,capability,{schema:'action-plan/1',planId:'snowbreak-standby-'+(++sequence),action,duration:display.standbyDuration*1000,tracks:[{ch:'motion',group:display.startAsStandby?'standby-local':'standby-D',index:0}]});}
-  function stop(reason='sample-stop'){activeArm?.restore();activeArm=null;generation++;bus.clear(reason);if(audio){audio.pause();audio.currentTime=0;}voiceMode=false;voiceTail=null;onVoiceBusy(false);if(display.startAsStandby)display.seekStandby(0);else display.seek(0);status='stopped';}
+  function stop(reason='sample-stop'){scene=null;returnScene=null;activeArm?.restore();activeArm=null;generation++;bus.clear(reason);if(audio){audio.pause();audio.currentTime=0;}voiceMode=false;voiceTail=null;onVoiceBusy(false);if(display.startAsStandby)display.seekStandby(0);else display.seek(0);status='stopped';}
   function playArmPreview(side='right'){
     if(!['left','right'].includes(side))return {accepted:false,reason:'invalid-arm-side'};
     const arm=side==='left'?display.leftArmPreview:display.armPreview;
@@ -118,5 +121,5 @@ export function createSnowbreakSampleAdapter(display,{now=()=>performance.now(),
     audio?.addEventListener('ended',onAudioEnded);audio?.addEventListener('error',onAudioError);
   }
   setAudio(audio);
-  return {bus,capability,dispatchSurfaceTouch,selectSample,setLocalActionsEnabled,dispatchSemantic,playArmPreview,playSample,playWithVoice,tick,stop,enterStandby,setStandbyAfterSample:value=>standbyAfterSample=!!value,snapshot:()=>({localReaction:lastReaction?{...lastReaction,touch:undefined}:null,sampleDuration:display.duration,status,active:bus.activeCount,voiceMode,standbyAfterSample,audioTime:audio?.currentTime||0,audioDuration:audio?.duration||0,audioTail:!!voiceTail,originalInteractionVerified:false})};
+  return {bus,capability,enterScene,playSceneReaction,dispatchSurfaceTouch,selectSample,setLocalActionsEnabled,dispatchSemantic,playArmPreview,playSample,playWithVoice,tick,stop,enterStandby,setStandbyAfterSample:value=>standbyAfterSample=!!value,snapshot:()=>({sceneId:scene?.id||returnScene?.id||null,sceneTime:scene?.time||0,localReaction:lastReaction?{...lastReaction,touch:undefined}:null,sampleDuration:display.duration,status,active:bus.activeCount,voiceMode,standbyAfterSample,audioTime:audio?.currentTime||0,audioDuration:audio?.duration||0,audioTail:!!voiceTail,originalInteractionVerified:false})};
 }

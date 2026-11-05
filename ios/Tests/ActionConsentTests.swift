@@ -17,7 +17,7 @@ final class ActionConsentTests:XCTestCase {
         XCTAssertNil(refused.action);XCTAssertNil(refused.motion)
     }
     func testAllGesturePresetsAreBoundedAndReturnToRest() throws {
-        XCTAssertEqual(Set(BodyGesture.ids).count,10)
+        XCTAssertEqual(Set(BodyGesture.ids).count,11)
         for id in BodyGesture.ids {
             let plan=try XCTUnwrap(BodyGesture.plan(id));try plan.validate()
             let last=try XCTUnwrap(plan.poses.last)

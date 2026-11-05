@@ -10,6 +10,7 @@ struct MotionPlan: Codable, Equatable {
         var rightFoot: [Float]? = nil
         var head: [Float]? = nil
         var torso: [Float]? = nil
+        var smile:Float? = nil
     }
     let duration: Double
     let poses: [Pose]
@@ -19,6 +20,7 @@ struct MotionPlan: Codable, Equatable {
               poses.first?.time == 0, poses.last?.time == duration else { throw CompanionError.message("自由动作时长无效。") }
         var previous = -1.0
         for p in poses {
+            if let smile=p.smile {guard smile.isFinite,(0...1).contains(smile) else{throw CompanionError.message("表情目标越界。")}}
             guard p.time.isFinite, p.time > previous, (0...duration).contains(p.time) else { throw CompanionError.message("自由动作时间无效。") }
             previous = p.time
             for (v, bounds) in [(p.leftHand, [Float](arrayLiteral:1.5,2,1.5)), (p.rightHand, [Float](arrayLiteral:1.5,2,1.5)),
@@ -48,7 +50,7 @@ struct MotionPlan: Codable, Equatable {
         }
         return Pose(time: t, leftHand: mix(a.leftHand,b.leftHand), rightHand: mix(a.rightHand,b.rightHand),
                     leftFoot: mix(a.leftFoot,b.leftFoot), rightFoot: mix(a.rightFoot,b.rightFoot),
-                    head: mix(a.head,b.head), torso: mix(a.torso,b.torso))
+                    head: mix(a.head,b.head), torso: mix(a.torso,b.torso),smile:(a.smile != nil || b.smile != nil) ? (a.smile ?? 0)+((b.smile ?? 0)-(a.smile ?? 0))*w:nil)
     }
 }
 

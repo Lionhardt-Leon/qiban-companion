@@ -89,7 +89,7 @@ struct SnowbreakTouchEvent {
     }
     private func updateBody(_ value:[String:Any]) {
         bodyState = BodyState(outfit:companionOutfit == "nude" ? "当前已加载果体版模型，没有穿衣":companionOutfit == "normal" ? "当前已加载护士正常服饰模型":"服饰未确认",
-            eyes:value["eyes"] as? String ?? "未确认",hands:value["hands"] as? String ?? "未确认",facing:value["facing"] as? String ?? "未确认",lastResult:value["lastResult"] as? String ?? "无回执")
+            eyes:value["eyes"] as? String ?? "未确认",hands:value["hands"] as? String ?? "未确认",facing:value["facing"] as? String ?? "未确认",lastResult:(value["lastResult"] as? String ?? "无回执")+((value["interactionScene"] as? String).map{"；保持互动场景："+$0} ?? ""))
     }
     func executeBody(_ command:BodyCommand,automatic:Bool = false) async -> Bool {
         guard ready,!paused,bodyActions.contains(command.rawValue) else {return false}
@@ -214,6 +214,7 @@ struct SnowbreakTouchEvent {
     func pause() { paused = true;interactionRevision += 1;send(["type":"pause"]);activeAction = nil }
     func resume() { paused = false;send(["type":"resume"]) }
     func editTouch() { interactionRevision += 1;send(["type":"edit"]) }
+    func officialTouchPoints(){send(["type":"officialTouchPoints"])}
     func sceneVisible(_ value:Bool) { send(["type":"scene","visible":value]) }
     func gaze(x:CGFloat,y:CGFloat) { if ready { send(["type":"gaze","x":Double(x),"y":Double(y)]) } }
     func editLighting() { send(["type":"lightingEdit"]) }
@@ -225,6 +226,7 @@ struct SnowbreakTouchEvent {
         if webView === view { webView = nil;pageReady = false;ready = false }
     }
     func setTouchPolicy(_ value:Bool){send(["type":"touchPolicy","aiControlled":value])}
+    func setSpeechLevel(_ value:Float){if ready{send(["type":"speechLevel","value":value.isFinite ? min(1,max(0,value)):0])}}
     func setVoice(_ value:Bool) { send(["type":"voice","enabled":value]) }
     func webView(_ webView:WKWebView,decidePolicyFor navigationAction:WKNavigationAction,decisionHandler:@escaping(WKNavigationActionPolicy)->Void) {
         let url = navigationAction.request.url

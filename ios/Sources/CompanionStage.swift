@@ -10,6 +10,8 @@ import simd
     @Published private(set) var backgrounds: [String: UIImage] = [:]
     @Published private(set) var actions: [CharacterAction] = []
     @Published private(set) var activeAction: String?
+    private var speechMouth:Float=0
+    func setSpeechLevel(_ value:Float){speechMouth=value.isFinite ? min(1,max(0,value)):0}
     @Published private(set) var touchStatus: String?
     @Published private(set) var supportsProcedural = false
     private var supportsClosedEyes = false
@@ -165,10 +167,10 @@ import simd
                     if action == nil, freeMotion == nil, activeAction != nil { activeAction = nil }
                     if elapsed - lastTouchTime > 3, touchStatus != nil { touchStatus = nil }
                     if let skeleton = loaded.skeleton {
-                        try skeleton.apply(sample: skeleton.motion.sample(at: elapsed), blink: blink, mouth: 0, smile: 0, gazeTarget:now<gazeUntil ? gazeTarget:nil,action: action,
+                        try skeleton.apply(sample: skeleton.motion.sample(at: elapsed), blink: blink, mouth: speechMouth, smile: freeMotion?.pose.smile ?? 0, gazeTarget:now<gazeUntil ? gazeTarget:nil,action: action,
                             embodiment: EmbodimentFrame(elapsed: elapsed, delta: delta, settings: dynamicsSettings, procedural: freeMotion))
                     } else if let package = loaded.package {
-                        try package.applyExpression(to: loaded.scene, blink: blink, mouth: 0, smile: 0)
+                        try package.applyExpression(to: loaded.scene, blink: blink, mouth: speechMouth, smile: freeMotion?.pose.smile ?? 0)
                     }
                     let interval = loaded.skeleton?.usesGPUSkinning == true ? 1.0 / 60 : 1.0 / 30
                     deadline = max(deadline + interval, ProcessInfo.processInfo.systemUptime)

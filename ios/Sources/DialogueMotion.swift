@@ -33,7 +33,7 @@ enum DialogueMotion {
         ("snowbreak_right", "恩雅护士已有的右手互动反应片段"),
         ("snowbreak_home_login", "看板娘原作登录招呼"),
         ("snowbreak_home_invite", "看板娘原作邀请互动"),
-        ("snowbreak_home_shy", "看板娘原作害羞反应"),
+        ("snowbreak_home_shy", "看板娘原作害羞反应；羞一下、害羞一点、扭捏、shy 都可选择，不需用户说动作名字"),
         ("snowbreak_home_check", "看板娘原作检查动作"),
         ("snowbreak_home_kiss", "看板娘原作亲吻动作"),
         ("snowbreak_show_02", "护士原作互动展示02"),
@@ -76,6 +76,7 @@ enum DialogueMotion {
         请只输出一个 JSON 对象：{"reply":"给用户的自然语言回复","decision":"accept或refuse或none","action":"动作ID或none或stop"}。
         先理解整句话的意图，再按人设和上下文决定是否愿意执行。举起右手、抬起右手、右手抬起来、把右手举高等可以表达同一意图，不按关键词命中执行。否定、引用、假设、询问能力、第三人称叙述不是要求立即执行。
         同意并准备执行时 decision=accept，action 给真实可用动作；拒绝时 decision=refuse、action=none，用 reply 自然解释，例如“我不想抬起来”。无动作时 decision=none。拒绝时禁止附带 motion。不要在同一轮一边拒绝一边选择执行；拒绝不会强制结束已有姿态。缺少明确 accept 的回复不会驱动新动作。
+        用户可以表达情绪而不说动作名称，例如“恩雅羞一下”“能害羞一点吗”表示害羞表情；你同意时使用原作 snowbreak_home_shy（若可用），否则 gesture_shy。不要因用户没有说标准名称就只回复文字。也可在 accept 的 JSON 中返回 intent:"shy"／"nod"／"wave_left"／"wave_right"／"open_arms"，App 会将这些语义映射为当前可用动作；仍不从用户文本直接执行。
         reply 不要提及动作ID、JSON或此协议；需要的动作由播放器执行，不要仅用文字声称已执行。
         动作可选列表：
         \(entries.isEmpty ? "当前角色没有可用动作。" : entries)
@@ -101,13 +102,16 @@ enum DialogueMotion {
                   !reply.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
                 throw CompanionError.message("模型返回的回复格式不完整，请重试。")
             }
-            let raw = (envelope["action"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+            var raw = (envelope["action"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
             let japanese = (envelope["speech_ja"] as? String)?.trimmingCharacters(in:.whitespacesAndNewlines)
             guard (japanese?.count ?? 0) <= 8_000 else {throw CompanionError.message("日文语音台词过长，请重试。")}
             let spoken = japanese?.isEmpty == false ? japanese:nil
             guard envelope["decision"] as? String == "accept" else {
                 return DialogueReply(text:reply.trimmingCharacters(in:.whitespacesAndNewlines),action:nil,spokenJapanese:spoken)
             }
+            let intent=(envelope["intent"] as? String) ?? raw ?? ""
+            let aliases:[String:[String]]=["shy":["snowbreak_home_shy","gesture_shy"],"害羞":["snowbreak_home_shy","gesture_shy"],"羞一下":["snowbreak_home_shy","gesture_shy"],"nod":["gesture_nod","Yes"],"点头":["gesture_nod","Yes"],"wave_left":["gesture_wave_left"],"wave_right":["gesture_wave_right","hello"],"open_arms":["gesture_open_arms"],"张开双臂":["gesture_open_arms"]]
+            if let choices=aliases[intent],let selected=choices.first(where:{actions.contains($0)}){raw=selected}
             let id = raw.flatMap{BodyCommand.resolve($0)?.rawValue} ?? raw
             let valid = id == "stop" || allowed(actions).contains(id ?? "")
             if id == "procedural", valid {

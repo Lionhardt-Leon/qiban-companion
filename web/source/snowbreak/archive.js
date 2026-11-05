@@ -2,7 +2,7 @@ import {inspectArchive} from '../puppet2d/archive.js';
 import {validateSkinManifest,createSkinRuntime} from './skin-runtime.js';
 import {createVerifiedAssetAdapter} from './asset-adapter.js';
 export async function openSkinArchive(bytes){
-  const info=inspectArchive(bytes,/^(manifest\.json|assets\/[a-f0-9]{64})$/,128*1024*1024);
+  const info=inspectArchive(bytes,/^(manifest\.json|assets\/[a-f0-9]{64})$/,128*1024*1024,192*1024*1024);
   const {unzipSync}=await import('/vendor/addons/libs/fflate.module.js');
   const files=unzipSync(bytes);
   if(Object.values(files).reduce((n,b)=>n+b.length,0)!==info.total)throw new Error('资源包长度不一致');

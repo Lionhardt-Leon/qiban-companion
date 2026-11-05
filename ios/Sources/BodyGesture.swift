@@ -2,7 +2,7 @@ import Foundation
 
 enum BodyGesture {
     static let catalog:[(id:String,meaning:String)] = [
-        ("gesture_nod","轻轻点头"),("gesture_shake","轻轻摇头"),
+        ("gesture_shy","害羞、羞一下、扭捏：低头侧看，带轻微笑意"),("gesture_nod","轻轻点头"),("gesture_shake","轻轻摇头"),
         ("gesture_tilt_left","向自身左侧歪头"),("gesture_tilt_right","向自身右侧歪头"),
         ("gesture_look_left","向自身左侧转头看看"),("gesture_look_right","向自身右侧转头看看"),
         ("gesture_bow","轻微俯身致意"),("gesture_open_arms","轻轻张开双臂"),
@@ -11,6 +11,7 @@ enum BodyGesture {
     static func plan(_ id:String)->MotionPlan? {
         func head(_ vectors:[[Float]])->MotionPlan {MotionPlan(duration:3,poses:vectors.enumerated().map{.init(time:Double($0.offset)*3/Double(vectors.count-1),head:$0.element)})}
         switch id {
+        case "gesture_shy":return MotionPlan(duration:4,poses:[.init(time:0,head:[0,0,0],smile:0),.init(time:1.2,head:[15,8,-6],smile:0.3),.init(time:2.8,head:[15,8,-6],smile:0.3),.init(time:4,head:[0,0,0],smile:0)])
         case "gesture_nod":return head([[0,0,0],[0,12,0],[0,-4,0],[0,8,0],[0,0,0]])
         case "gesture_shake":return head([[0,0,0],[-18,0,0],[18,0,0],[-10,0,0],[0,0,0]])
         case "gesture_tilt_left":return head([[0,0,0],[0,0,-12],[0,0,-12],[0,0,0]])
