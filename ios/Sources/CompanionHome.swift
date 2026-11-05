@@ -20,7 +20,7 @@ struct CompanionHome: View {
     @State private var directlyControlledUser:UUID?
     @State private var showingBodyState = false
     @State private var visibleBodyState = ""
-    @AppStorage("selfAppearanceImages") private var selfAppearanceImages = true
+    @AppStorage("selfAppearanceImagePolicy") private var selfAppearanceImagePolicy = "questions"
     @AppStorage("characterEngine") private var engine = "native"
     @State private var sheet: HomeSheet?
     @State private var draft = ""
@@ -78,7 +78,7 @@ struct CompanionHome: View {
                     VStack(spacing: 12) {
                         circle("gearshape", label: "设置") { sheet = .settings }
                         Menu {
-                            Section("直接身体控制") {
+                            Menu("身体控制") {
                                 ForEach(BodyCommand.allCases.filter{availableActions.contains($0.rawValue)},id:\.rawValue){command in
                                     Button(command.label){Task{await performBody(command)}}
                                 }
@@ -126,7 +126,11 @@ struct CompanionHome: View {
                             Button("从相册发送图片"){senses.suspend();photoPicker = true}
                             Button("从文件发送图片"){senses.suspend();imageFilePicker = true}
                             Button("附上自身模型画面"){Task{do{attachedImage = try await ownPortrait()}catch{store.error = error.localizedDescription}}}
-                            Toggle("询问外观时附模型截图",isOn:$selfAppearanceImages)
+                            Picker("自身形象输入",selection:$selfAppearanceImagePolicy) {
+                                Text("仅身体状态文字").tag("off")
+                                Text("问及外观时附模型画面").tag("questions")
+                                Text("每轮附模型画面（需识图 API）").tag("always")
+                            }
                         } label:{Image(systemName:"photo.badge.plus").font(.system(size:22)).foregroundStyle(.white).frame(width:46,height:46).background(.ultraThinMaterial,in:Circle())}
                             .accessibilityLabel("图片与自身形象").disabled(preparingSend)
                         if camera.enabled, let session = camera.session {
@@ -146,13 +150,19 @@ struct CompanionHome: View {
             }
         }
         .preferredColorScheme(.dark)
-        .alert("播放器身体实况",isPresented:$showingBodyState){Button("关闭",role:.cancel){}} message:{Text(visibleBodyState)}
-        .task(id:showingBodyState) {
-            while showingBodyState && !Task.isCancelled {
-                if isSnowbreak {await snowbreak.refreshBodyState()}
-                visibleBodyState = (isSnowbreak ? snowbreak.bodyState:stage.bodyState).summary
-                try? await Task.sleep(nanoseconds:200_000_000)
-            }
+        .sheet(isPresented:$showingBodyState) {
+            NavigationStack {
+                ScrollView {Text(visibleBodyState).frame(maxWidth:.infinity,alignment:.leading).padding(22).accessibilityIdentifier("liveBodyState")}
+                    .navigationTitle("播放器身体实况").navigationBarTitleDisplayMode(.inline)
+                    .toolbar {Button("关闭"){showingBodyState = false}}
+                    .task {
+                        while showingBodyState && !Task.isCancelled {
+                            if isSnowbreak {await snowbreak.refreshBodyState()}
+                            visibleBodyState = (isSnowbreak ? snowbreak.bodyState:stage.bodyState).summary
+                            try? await Task.sleep(nanoseconds:200_000_000)
+                        }
+                    }
+            }.presentationDetents([.medium])
         }
         .sheet(isPresented:$photoPicker) {ChatPhotoPicker {result in photoPicker = false;do{if let image = try result.get(){attachedImage = image}}catch{store.error = error.localizedDescription}}}
         .sheet(isPresented:$imageFilePicker) {
@@ -319,7 +329,7 @@ struct CompanionHome: View {
                 var images:[CameraFrame] = []
                 if let selectedImage = selectedImage {images.append(selectedImage)}
                 if let frame = try await camera.frame(){images.append(frame)}
-                if selfAppearanceImages,BodyCommand.asksAppearance(text),!images.contains(where:{$0.source == .selfPortrait}) {images.append(try await ownPortrait())}
+                if (selfAppearanceImagePolicy == "always" || selfAppearanceImagePolicy == "questions" && BodyCommand.asksAppearance(text)),!images.contains(where:{$0.source == .selfPortrait}) {images.append(try await ownPortrait())}
                 guard sheet == nil,scenePhase == .active,!store.busy else { return }
                 let before = store.archive.messages.count
                 senses.prepareReply()
