@@ -116,6 +116,8 @@ enum APIKeyStore {
         guard ["native","enya"].contains(modelKey),library.cards.contains(where:{$0.id == selected}) else {throw CompanionError.message("角色卡或伙伴映射无效。")}
         var library = library;library.modelBindings[modelKey] = selected;try library.validate()
         var next = archive;next.schemaVersion = 2;next.settings.personas = library
+        // New cards must start empty even when chosen on the very first migration save.
+        if next.personaSessionKey == nil {next.personaSessionKey = library.defaultCardID?.uuidString}
         var checkContext = context;checkContext.modelKey = modelKey
         _ = try PersonaPrompt.character(settings:next.settings,context:checkContext)
         if let card = library.card(for:context.modelKey) {switchConversation(&next,to:card.id.uuidString)}

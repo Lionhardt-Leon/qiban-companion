@@ -121,4 +121,14 @@ final class PersonaTests:XCTestCase {
         XCTAssertNil(store.archive.settings.personas);XCTAssertEqual(store.archive.schemaVersion,1)
         XCTAssertEqual(store.archive.messages.first?.content,"升级前的对话")
     }
+    @MainActor func testFirstSaveOfNewCardDoesNotInheritLegacyConversation() throws {
+        let (store,directory) = try makeStore();defer{try? FileManager.default.removeItem(at:directory)}
+        var library = PersonaLibrary.migrating(store.archive.settings.persona)
+        let legacy = library.cards[0].id;let new = PersonaCard();library.cards.append(new)
+        try store.savePersonas(library,selected:new.id,modelKey:"native")
+        XCTAssertTrue(store.archive.messages.isEmpty);XCTAssertTrue(store.archive.memories.isEmpty)
+        XCTAssertEqual(store.archive.personaConversations?[legacy.uuidString]?.messages.first?.content,"升级前的对话")
+        try store.savePersonas(library,selected:legacy,modelKey:"native")
+        XCTAssertEqual(store.archive.messages.first?.content,"升级前的对话")
+    }
 }
