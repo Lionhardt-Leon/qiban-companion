@@ -2,7 +2,7 @@ import SwiftUI
 import SceneKit
 
 private enum HomeSheet: String, Identifiable {
-    case settings, character, api, history, diary, memory, embodiment, snowbreak
+    case settings, character, api, history, diary, memory, embodiment, snowbreak, persona
     var id: String { rawValue }
 }
 
@@ -29,8 +29,16 @@ struct CompanionHome: View {
     private var availableActions:[String] { isSnowbreak ? snowbreak.dialogueActions : stage.dialogueActions }
     private var currentRevision:Int { isSnowbreak ? snowbreak.interactionRevision : stage.interactionRevision }
     private var activeAction:String? { isSnowbreak ? snowbreak.activeAction : stage.activeAction }
+    private var modelKey:String {isSnowbreak ? "enya":"native"}
+    private var modelLabel:String {isSnowbreak ? "恩雅护士":stage.name}
+    private func companionContext(_ origin:String) -> CompanionContext {
+        CompanionContext(modelKey:modelKey,modelName:modelLabel,
+                         mode:isSnowbreak ? (snowbreak.companionMode == "standing" ? "看板娘站立":"皮肤互动坐姿"):"本地角色展示",
+                         activeAction:activeAction ?? "待机",origin:origin)
+    }
     private func stopAction() { if isSnowbreak { snowbreak.stop() } else { stage.stopAction() } }
     private func resumeStage() {
+        store.activateCompanion(modelKey)
         if isSnowbreak { stage.stop();snowbreak.resume() }
         else { snowbreak.pause();Task { await stage.refresh();stage.start() } }
     }
@@ -133,16 +141,17 @@ struct CompanionHome: View {
             case .memory: withClose { MemoryView() }
             case .embodiment: withClose { EmbodimentSettingsView() }
             case .snowbreak: withClose { SnowbreakImportView(stage:snowbreak) }
+            case .persona: withClose {PersonaView(modelKey:modelKey,modelName:modelLabel,actions:availableActions)}
             }
         }
         .onChange(of: sheet) { if $0 != nil { camera.stop();senses.suspend();stage.stop();snowbreak.pause() } }
         .onChange(of:camera.enabled) { value in if !value { store.discardCameraFrame() } }
         .onChange(of:senses.utterance?.id) { _ in
-            guard let event=senses.utterance,!store.busy else{return};send(event.text)
+            guard let event=senses.utterance,!store.busy else{return};send(event.text,origin:"语音转录")
         }
         .onChange(of:senses.sound?.id) { _ in
             guard let event=senses.sound,!store.busy,!store.archive.settings.endpoint.isEmpty else{return}
-            store.send("[环境聆听] "+event.text,actions:availableActions);pendingMotionRevision=currentRevision
+            store.send("[环境聆听] "+event.text,actions:availableActions,context:companionContext("环境声音分类"));pendingMotionRevision=currentRevision
         }
         .onChange(of:store.archive.messages.last?.id) { _ in
             if let last=store.archive.messages.last,last.role == "assistant" {senses.speak(last.content)}
@@ -160,7 +169,7 @@ struct CompanionHome: View {
         .onChange(of:snowbreak.touch?.id) { _ in
             guard isSnowbreak,sheet == nil,scenePhase == .active,touchAI,!store.busy,
                   !store.archive.settings.endpoint.isEmpty,let touch = snowbreak.touch else { return }
-            store.send("[触碰互动] 用户触碰了你的\(touch.label)，请根据已确认的触碰部位和上下文自然回应。",actions:availableActions)
+            store.send("[触碰互动] 用户触碰了你的\(touch.label)，请根据已确认的触碰部位和上下文自然回应。",actions:availableActions,context:companionContext("已确认的屏幕触碰"))
             pendingMotionRevision = currentRevision
         }
         .onChange(of:engine) { _ in pendingMotionRevision = nil;nativeEditing = false;resumeStage() }
@@ -193,6 +202,13 @@ struct CompanionHome: View {
 
     private var composer: some View {
         VStack(spacing: 10) {
+            if store.archive.messages.isEmpty,let card = store.currentCard,!card.firstMessages.isEmpty {
+                Menu("使用角色开场白") {
+                    ForEach(card.firstMessages.indices,id:\.self){index in
+                        Button(String(card.firstMessages[index].prefix(60))){do{try store.insertGreeting(index)}catch{store.error = error.localizedDescription}}
+                    }
+                }.font(.caption).accessibilityIdentifier("personaGreeting")
+            }
             if !isSnowbreak,nativeEditing {
                 NativePresentationPanel(value:$nativePresentation,rotating:$nativeRotating) { nativeEditing = false;nativePresentation.save() }
             }
@@ -244,7 +260,7 @@ struct CompanionHome: View {
         }.accessibilityLabel(label).disabled(!enabled).opacity(enabled ? 1 : 0.4)
     }
 
-    private func send(_ explicitText:String? = nil) {
+    private func send(_ explicitText:String? = nil,origin:String = "文字对话") {
         guard !store.busy,!preparingSend else { return }
         let text = explicitText ?? draft
         guard !text.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty else { return }
@@ -256,7 +272,7 @@ struct CompanionHome: View {
                 guard sheet == nil,scenePhase == .active,!store.busy else { return }
                 let before = store.archive.messages.count
                 senses.prepareReply()
-                store.send(text, actions:availableActions, image:image)
+                store.send(text, actions:availableActions, image:image,context:companionContext(origin))
                 if store.archive.messages.count > before {
                     if explicitText == nil,draft == text { draft = "" }
                     if DialogueMotion.isStopRequest(text) { stopAction() }
@@ -271,7 +287,7 @@ struct CompanionHome: View {
         guard sheet == nil, scenePhase == .active, let touch = stage.touch(in:view,point:point,kind:kind) else { return }
         if touchAI, !store.busy, !store.archive.settings.endpoint.isEmpty {
             let before = store.archive.messages.count
-            store.send(touch.message,actions:stage.dialogueActions)
+            store.send(touch.message,actions:stage.dialogueActions,context:companionContext("已确认的屏幕触碰"))
             if store.archive.messages.count > before { pendingMotionRevision = stage.interactionRevision }
         }
     }
@@ -302,7 +318,7 @@ struct CompanionHome: View {
                     Text("我的伙伴").foregroundStyle(.secondary)
                     VStack(spacing: 16) {
                         Image(systemName: "person.crop.circle.fill").font(.system(size: 64)).foregroundStyle(.white.opacity(0.9))
-                        Text(isSnowbreak ? "恩雅护士" : stage.name).font(.title.bold())
+                        Text(store.currentCard?.name ?? modelLabel).font(.title.bold())
                         Picker("当前伙伴",selection:$engine) {
                             Text("本地伙伴").tag("native")
                             if snowbreak.library.hasCurrent || isSnowbreak { Text("恩雅护士").tag("snowbreak") }
@@ -344,6 +360,8 @@ struct CompanionHome: View {
                     else { Text("恩雅沿用旧项目的材质、原作动作与病房打光。").font(.caption).foregroundStyle(.secondary).padding(16) }
                     Divider().padding(.leading, 50)
                     settingsRow("模型与自定义 API", icon: "slider.horizontal.3") { sheet = .api }
+                    Divider().padding(.leading,50)
+                    settingsRow("人设与陪伴",icon:"person.text.rectangle") {sheet = .persona}
                     Divider().padding(.leading, 50)
                     settingsRow("聊天记录", icon: "bubble.left.and.bubble.right") { sheet = .history }
                     Divider().padding(.leading, 50)
@@ -351,7 +369,7 @@ struct CompanionHome: View {
                     Divider().padding(.leading, 50)
                     settingsRow("日记", icon: "book") { sheet = .diary }
                 }.modifier(SettingsCard())
-                Text("本地保存 · 自定义服务\n语音、视频和画中画尚未接入。角色材质仍在完善。")
+                Text("本地保存 · 自定义服务\n人设、聊天与记忆随角色卡保存。语音和后置识图按需开启。")
                     .font(.footnote).foregroundStyle(.secondary)
             }.padding(20)
         }.background(Color(red: 0.06, green: 0.05, blue: 0.07)).foregroundStyle(.white)

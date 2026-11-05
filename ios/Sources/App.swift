@@ -223,7 +223,7 @@ struct SettingsView: View {
                 } header: { Text("自定义 API") } footer: {
                     Text("支持 OpenAI 兼容的 Chat Completions。填写完整接口路径或以 /v1 结尾的地址；当前仅支持 HTTPS。密钥保存在本机钥匙串，不包含在备份中。")
                 }
-                Section("人设") { TextEditor(text: $settings.persona).frame(minHeight: 130) }
+                Section {Text("系统提示词、用户身份、AI 角色卡与身体能力，请在主页设置 → 人设与陪伴中管理。 ").font(.footnote).foregroundStyle(.secondary)}
                 Section {
                     Button(saved ? "已保存" : "保存设置") {
                         do { try store.saveSettings(settings, key: key); saved = true }

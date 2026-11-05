@@ -54,6 +54,9 @@ enum DialogueMotion {
     static func allowed(_ ids: [String]) -> [String] {
         catalog.map(\.id).filter { ids.contains($0) }
     }
+    static func semanticMappings(actions:[String]) -> [(label:String,id:String)] {
+        catalog.filter{actions.contains($0.id)}.map{(label:$0.meaning,id:$0.id)}
+    }
 
     static func instruction(actions: [String]) -> String {
         let entries = catalog.filter { actions.contains($0.id) }

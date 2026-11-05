@@ -5,6 +5,9 @@ struct APISettings: Codable {
     var model = ""
     var persona = "你是一位温柔、自然的中文 AI 伴侣。认真倾听，回复简洁，不编造共同经历。"
     var temperature = 0.7
+    var personas:PersonaLibrary? = nil
+    var runtimeContext:CompanionContext? = nil
+    private enum CodingKeys:String,CodingKey {case endpoint,model,persona,temperature,personas}
 }
 
 struct Message: Codable, Identifiable {
@@ -26,8 +29,19 @@ struct LocalArchive: Codable {
     var messages: [Message] = []
     var memories = ""
     var diary: [JournalEntry] = []
+    var personaConversations:[String:PersonaConversation]? = nil
+    var personaSessionKey:String? = nil
 
     func validate() throws {
+        try settings.personas?.validate()
+        let saved = Array((personaConversations ?? [:]).values)
+        guard saved.count <= 51,
+              saved.reduce(messages.count,{$0+$1.messages.count}) <= 100_000,
+              saved.reduce(diary.count,{$0+$1.diary.count}) <= 100_000,
+              saved.allSatisfy({session in
+                  session.messages.allSatisfy({["user","assistant"].contains($0.role)}) &&
+                  Set(session.messages.map(\.id)).count == session.messages.count && Set(session.diary.map(\.id)).count == session.diary.count
+              }) else {throw CompanionError.message("角色独立对话资料无效或超过保存上限。")}
         guard schemaVersion == 1 else { throw CompanionError.message("备份版本暂不支持，原数据未变更。") }
         guard messages.count <= 100_000, diary.count <= 100_000,
               messages.allSatisfy({ ["user", "assistant"].contains($0.role) }),

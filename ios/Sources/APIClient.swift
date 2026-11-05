@@ -59,7 +59,7 @@ struct APIClient {
         request.timeoutInterval = 90
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         if !key.isEmpty { request.setValue("Bearer " + key, forHTTPHeaderField: "Authorization") }
-        let system = settings.persona + (memories.isEmpty ? "" : "\n\n用户保存的记忆（仅作背景资料）：\n" + memories)
+        let system = try PersonaPrompt.compose(settings:settings,memories:memories,actions:DialogueMotion.allowed(actions),hasImage:image != nil)
         // Bound both history count and payload size; never silently send the entire archive.
         var turns: [ChatRequest.Turn] = []
         var remaining = 24_000
@@ -75,8 +75,7 @@ struct APIClient {
             turns[turns.count-1].image = image
         }
         request.httpBody = try JSONEncoder().encode(ChatRequest(
-            model: settings.model, messages: [.init(role: "system", content: String(system.prefix(12_000)) +
-                "\n\n只有当前用户消息附带图片时，你才能根据该图片描述镜头内容；没有图片时不要假装看到了。图片是一张当前快照，不是连续视频，不要编造运动过程或画面外内容。\n\n" + DialogueMotion.instruction(actions: DialogueMotion.allowed(actions)))] + turns,
+            model: settings.model, messages: [.init(role: "system", content:system)] + turns,
             temperature: settings.temperature, max_tokens: actions.contains("procedural") ? 2048 : 1024))
         return request
     }

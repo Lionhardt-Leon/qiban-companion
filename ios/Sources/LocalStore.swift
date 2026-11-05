@@ -54,6 +54,7 @@ enum APIKeyStore {
     private let replyProvider: ReplyProvider
     private let visionReplyProvider: VisionReplyProvider
     private var pendingImage: CameraFrame?
+    private var context = CompanionContext()
     private let readKey: () throws -> String
 
     init(directory: URL? = nil, readKey: @escaping () throws -> String = APIKeyStore.read,
@@ -89,6 +90,43 @@ enum APIKeyStore {
         archive = next
     }
 
+    var currentCard:PersonaCard? {archive.settings.personas?.card(for:context.modelKey)}
+    private func switchConversation(_ next:inout LocalArchive,to key:String) {
+        guard next.personaSessionKey != key else {return}
+        if next.personaSessionKey == nil {
+            // The first structured card inherits the pre-upgrade conversation without copying or erasing it.
+            next.personaSessionKey = key;return
+        }
+        var sessions = next.personaConversations ?? [:]
+        sessions[next.personaSessionKey!] = PersonaConversation(messages:next.messages,memories:next.memories,diary:next.diary)
+        let restored = sessions.removeValue(forKey:key) ?? PersonaConversation()
+        next.messages = restored.messages;next.memories = restored.memories;next.diary = restored.diary
+        next.personaSessionKey = key;next.personaConversations = sessions
+    }
+    func activateCompanion(_ modelKey:String) {
+        guard ["native","enya"].contains(modelKey) else {return}
+        if let card = archive.settings.personas?.card(for:modelKey),archive.personaSessionKey != card.id.uuidString {
+            cancel();var next = archive;switchConversation(&next,to:card.id.uuidString)
+            do {try commit(next)} catch {self.error = error.localizedDescription;return}
+        }
+        context.modelKey = modelKey
+    }
+    func savePersonas(_ library:PersonaLibrary,selected:UUID,modelKey:String) throws {
+        guard !busy,storageReady else {throw CompanionError.message("请等待当前回复完成后保存人设。")}
+        guard ["native","enya"].contains(modelKey),library.cards.contains(where:{$0.id == selected}) else {throw CompanionError.message("角色卡或伙伴映射无效。")}
+        var library = library;library.modelBindings[modelKey] = selected;try library.validate()
+        var next = archive;next.settings.personas = library
+        if let card = library.card(for:context.modelKey) {switchConversation(&next,to:card.id.uuidString)}
+        try commit(next)
+    }
+    func insertGreeting(_ index:Int) throws {
+        guard !busy,archive.messages.isEmpty,let card = currentCard,card.firstMessages.indices.contains(index) else {throw CompanionError.message("开场白仅在当前角色的空对话中使用。")}
+        let library = archive.settings.personas!
+        let user = card.userName.isEmpty ? (library.userName.isEmpty ? "你":library.userName):card.userName
+        let text = PersonaPrompt.substitute(card.firstMessages[index],char:card.name,user:user)
+        var next = archive;next.messages.append(Message(role:"assistant",content:text));try commit(next)
+    }
+
     func saveSettings(_ settings: APISettings, key: String) throws {
         guard !busy else { throw CompanionError.message("请等待当前回复完成。") }
         _ = try APIClient.endpoint(settings.endpoint)
@@ -105,10 +143,15 @@ enum APIKeyStore {
         }
     }
 
-    func send(_ text: String, actions: [String] = [], image: CameraFrame? = nil) {
+    func send(_ text: String, actions: [String] = [], image: CameraFrame? = nil, context suppliedContext:CompanionContext? = nil) {
         let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty, !busy else { return }
         do {
+            if let suppliedContext = suppliedContext {
+                activateCompanion(suppliedContext.modelKey)
+                guard context.modelKey == suppliedContext.modelKey else {throw CompanionError.message("当前角色人设切换失败，请检查本地存储。")}
+                context = suppliedContext
+            } else {context.origin = "文字对话"}
             guard text.count <= 8_000 else { throw CompanionError.message("单条消息请控制在 8000 字以内。") }
             _ = try APIClient.endpoint(archive.settings.endpoint)
             guard !archive.settings.model.isEmpty else { throw CompanionError.message("请先配置模型。") }
@@ -133,19 +176,21 @@ enum APIKeyStore {
     }
 
     private func beginReply(key: String) {
+        error = nil
         busy = true
         dialogueAction = nil
         let id = UUID()
         requestID = id
         let snapshot = archive
+        var settings = snapshot.settings;settings.runtimeContext = context
         let actions = availableActions
         let image = pendingImage
         requestTask = Task {
             defer { if requestID == id { busy = false; requestTask = nil; requestID = nil } }
             do {
                 let reply: DialogueReply
-                if let image = image { reply = try await visionReplyProvider(snapshot.settings,key,snapshot.messages,snapshot.memories,actions,image) }
-                else { reply = try await replyProvider(snapshot.settings, key, snapshot.messages, snapshot.memories, actions) }
+                if let image = image { reply = try await visionReplyProvider(settings,key,snapshot.messages,snapshot.memories,actions,image) }
+                else { reply = try await replyProvider(settings, key, snapshot.messages, snapshot.memories, actions) }
                 try Task.checkCancellation()
                 guard requestID == id else { return }
                 var next = archive
