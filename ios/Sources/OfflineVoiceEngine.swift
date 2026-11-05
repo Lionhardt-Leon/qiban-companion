@@ -157,7 +157,7 @@ final class OfflineVoiceEngine {
         }
         guard ended,tokens.count>=5 else {throw CompanionError.message("这一句的语音生成未正常结束，请缩短后重试。")}
         try cancellation.check()
-        let pcm=try run(vocoder,["pred_semantic":Self.tensor(tokens,[1,1,tokens.count]),"text_seq":Self.tensor(target.ids,[1,n]),"refer_spec":spectrogram,"noise_scale":Self.tensor([Float(0.35)],[1]),"speed":Self.tensor([speed],[1])],["audio"])
+        let pcm=try run(vocoder,["pred_semantic":Self.tensor(tokens,[1,1,tokens.count]),"text_seq":Self.tensor(target.ids,[1,n]),"refer_spec":spectrogram,"speed":Self.tensor([speed],[1])],["audio"])
         guard let value=pcm["audio"] else {throw CompanionError.message("声码器没有输出声音。")}
         let samples=try Self.floats(value.tensorData() as Data)
         guard !samples.isEmpty,samples.count<=32000*20,samples.allSatisfy(\.isFinite),samples.contains(where:{abs($0)>0.0001}) else {throw CompanionError.message("生成的音频无效。")}
