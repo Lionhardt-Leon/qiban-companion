@@ -12,7 +12,58 @@ import simd
     @Published private(set) var activeAction: String?
     @Published private(set) var touchStatus: String?
     @Published private(set) var supportsProcedural = false
-    var dialogueActions: [String] { actions.map(\.id) + (supportsProcedural ? ["procedural"] : []) }
+    private var supportsClosedEyes = false
+    private var eyesClosed = false
+    private var currentBlink:Float = 0
+    private var hands:Set<String> = [],releasingHands:Set<String> = []
+    private var handWeight:Float = 0
+    private var bodyToken = 10000
+    private var bodyYaw:Double = 0,targetBodyYaw:Double = 0
+    private var lastBodyResult = "尚无动作回执"
+    private weak var snapshotView:SCNView?
+    var bodyActions:[String] {
+        guard scene != nil else{return []}
+        return ["turn_left","turn_right","turn_back","face_front"] + (supportsProcedural ? ["raise_left_hand","raise_right_hand","raise_both_hands","lower_hands"]:[]) + (supportsClosedEyes ? ["close_eyes","open_eyes"]:[])
+    }
+    var dialogueActions: [String] { actions.map(\.id) + bodyActions + (supportsProcedural ? ["procedural"] : []) }
+    var bodyState:BodyState {
+        let yaw = (presentation.yaw+bodyYaw).truncatingRemainder(dividingBy:360)
+        var measured:[String] = []
+        if let skeleton = loaded?.skeleton {
+            for (key,label) in [("leftHand","左手"),("rightHand","右手")] {
+                guard let limb = skeleton.rig.limbs[key],skeleton.posedWorld.indices.contains(limb.end) else {continue}
+                let a = skeleton.posedWorld[limb.upper].columns.3,b = skeleton.posedWorld[limb.middle].columns.3,c = skeleton.posedWorld[limb.end].columns.3
+                let length = simd_distance(a,b)+simd_distance(b,c)
+                if c.y>a.y+length*0.25 {measured.append(label)}
+            }
+        }
+        return BodyState(outfit:"当前导入模型的服饰，没有经过图像确认",eyes:supportsClosedEyes ? (currentBlink>0.95 ? "已闭合":currentBlink<0.1 ? "睁开":"半闭或眨眼"):"没有确认闭眼形态",
+            hands:measured.isEmpty ? (hands.isEmpty ? "未测到举手":"正在抬手或受关节限制"):measured.joined(separator:"、")+"实际抬起",
+            facing:abs(bodyYaw-targetBodyYaw)>2 ? "正在转身":abs(abs(yaw)-180)<3 ? "背向镜头":abs(yaw)<3 ? "面向镜头":"转向\(Int(yaw))度",lastResult:lastBodyResult)
+    }
+    func attachSnapshotView(_ view:SCNView){snapshotView = view}
+    func portrait() throws -> CameraFrame {
+        guard let view = snapshotView,let data = view.snapshot().jpegData(compressionQuality:0.7) else {throw CompanionError.message("模型画面尚未就绪。")}
+        return try ChatImage.prepare(data,source:.selfPortrait)
+    }
+    @discardableResult func executeBody(_ command:BodyCommand,automatic:Bool = false)->Bool {
+        guard bodyActions.contains(command.rawValue) else {return false}
+        if !automatic {interactionRevision += 1}
+        switch command {
+        case .raiseLeft:hands.insert("左手")
+        case .raiseRight:hands.insert("右手")
+        case .raiseBoth:hands = ["左手","右手"]
+        case .lower:releasingHands = hands;hands = []
+        case .closeEyes:eyesClosed = true
+        case .openEyes:eyesClosed = false
+        case .turnLeft:targetBodyYaw += 90
+        case .turnRight:targetBodyYaw -= 90
+        case .turnBack:targetBodyYaw = 180-presentation.yaw
+        case .front:targetBodyYaw = -presentation.yaw
+        }
+        if [.raiseLeft,.raiseRight,.raiseBoth,.lower].contains(command) {bodyToken += 1;procedural.cancel(now:ProcessInfo.processInfo.systemUptime);director.cancel(now:ProcessInfo.processInfo.systemUptime)}
+        lastBodyResult = "播放器已应用："+command.label;return true
+    }
     private(set) var interactionRevision = 0
     private var director = ActionDirector()
     private var procedural = ProceduralDirector()
@@ -38,8 +89,9 @@ import simd
     private var presentation = ScenePresentation.load()
     func setPresentation(_ value:ScenePresentation) {
         presentation = value.validated()
-        scene?.rootNode.childNodes.first(where:{$0.camera == nil})?.simdTransform = presentation.transform(base:displayBase,center:displayCenter,height:displayHeight)
+        applyBodyPresentation()
     }
+    private func applyBodyPresentation(){var value = presentation;value.yaw = ((value.yaw+bodyYaw+180).truncatingRemainder(dividingBy:360)+360).truncatingRemainder(dividingBy:360)-180;scene?.rootNode.childNodes.first(where:{$0.camera == nil})?.simdTransform = value.transform(base:displayBase,center:displayCenter,height:displayHeight)}
 
     func refresh() async {
         let library = CharacterLibrary()
@@ -76,6 +128,8 @@ import simd
             loaded = result; scene = result.scene; backgrounds = images; stamp = modified
             actions = result.package?.actions ?? []
             supportsProcedural = result.skeleton?.rig.limbs.count == 4
+            let morphs = Set(result.package?.parts.flatMap{($0.skin?.morphs ?? $0.morphs ?? []).map(\.name)} ?? [])
+            supportsClosedEyes = morphs.contains("Face.eyeBlinkLeft") && morphs.contains("Face.eyeBlinkRight")
             StageLighting.install(result.scene,settings: EmbodimentPreferences.lighting())
             name = result.name.contains("Yuki") ? "Yuki" : result.name
             setPresentation(presentation)
@@ -99,9 +153,15 @@ import simd
                     let now = ProcessInfo.processInfo.systemUptime
                     let delta = now - previous; previous = now
                     let blinkPhase = elapsed.truncatingRemainder(dividingBy: 4.2)
-                    let blink = Float(max(0, 1 - abs(blinkPhase - 4) / 0.09))
+                    let blink:Float = eyesClosed ? 1:Float(max(0, 1 - abs(blinkPhase - 4) / 0.09));currentBlink = blink
                     let action = director.sample(now: ProcessInfo.processInfo.systemUptime)
-                    let freeMotion = procedural.sample(now: now)
+                    var freeMotion = procedural.sample(now: now)
+                    handWeight += ((hands.isEmpty ? 0:1)-handWeight)*Float(1-exp(-9*min(0.06,delta)))
+                    if handWeight>0.001 {
+                        let mask = hands.isEmpty ? releasingHands:hands
+                        freeMotion = ProceduralSample(token:bodyToken,pose:.init(time:0,leftHand:mask.contains("左手") ? [-0.2,1.45,0.2]:nil,rightHand:mask.contains("右手") ? [0.2,1.45,0.2]:nil),enter:handWeight,exit:0)
+                    }
+                    bodyYaw += (targetBodyYaw-bodyYaw)*(1-exp(-9*min(0.06,delta)));applyBodyPresentation()
                     if action == nil, freeMotion == nil, activeAction != nil { activeAction = nil }
                     if elapsed - lastTouchTime > 3, touchStatus != nil { touchStatus = nil }
                     if let skeleton = loaded.skeleton {
@@ -128,10 +188,12 @@ import simd
     }
     func stopAction() {
         interactionRevision += 1
+        releasingHands = hands;hands = [];eyesClosed = false;targetBodyYaw = 0
         director.cancel(now: ProcessInfo.processInfo.systemUptime); procedural.cancel(now: ProcessInfo.processInfo.systemUptime)
     }
     func performDialogueAction(_ id: String, motion: MotionPlan? = nil) {
-        if id == "stop" { stopAction() }
+        if let command = BodyCommand(rawValue:id) {_ = executeBody(command,automatic:true)}
+        else if id == "stop" { stopAction();hands = [];eyesClosed = false;targetBodyYaw = 0 }
         else if id == "procedural", supportsProcedural, let motion = motion {
             do {
                 try procedural.play(motion,now:ProcessInfo.processInfo.systemUptime)
@@ -164,6 +226,7 @@ import simd
     func stop() {
         interactionRevision += 1; playback?.cancel(); playback = nil; director = ActionDirector()
         procedural = ProceduralDirector(); activeAction = nil; touchStatus = nil
+        hands = [];releasingHands = [];handWeight = 0;eyesClosed = false;bodyYaw = 0;targetBodyYaw = 0;applyBodyPresentation()
     }
 }
 
@@ -173,6 +236,7 @@ struct ImmersiveCharacterView: UIViewRepresentable {
     let showBackground: Bool
     var onTouch: ((SCNView, CGPoint, String) -> Void)? = nil
     var onEdit: ((String,CGPoint,CGSize) -> Void)? = nil
+    var onView:((SCNView)->Void)? = nil
     func makeCoordinator() -> Coordinator { Coordinator(onTouch:onTouch,onEdit:onEdit) }
     final class Coordinator: NSObject {
         var onTouch: ((SCNView,CGPoint,String) -> Void)?
@@ -198,6 +262,7 @@ struct ImmersiveCharacterView: UIViewRepresentable {
     }
     func makeUIView(context: Context) -> SCNView {
         let view = CompanionSceneView()
+        onView?(view)
         view.backgroundColor = .clear
         view.isOpaque = false
         view.antialiasingMode = .multisampling4X

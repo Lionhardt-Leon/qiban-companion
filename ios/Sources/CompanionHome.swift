@@ -14,6 +14,13 @@ struct CompanionHome: View {
     @StateObject private var senses = CompanionSenses()
     @StateObject private var camera = RearCamera()
     @State private var preparingSend = false
+    @State private var photoPicker = false
+    @State private var imageFilePicker = false
+    @State private var attachedImage:CameraFrame?
+    @State private var directlyControlledUser:UUID?
+    @State private var showingBodyState = false
+    @State private var visibleBodyState = ""
+    @AppStorage("selfAppearanceImages") private var selfAppearanceImages = true
     @AppStorage("characterEngine") private var engine = "native"
     @State private var sheet: HomeSheet?
     @State private var draft = ""
@@ -34,7 +41,7 @@ struct CompanionHome: View {
     private func companionContext(_ origin:String) -> CompanionContext {
         CompanionContext(modelKey:modelKey,modelName:modelLabel,
                          mode:isSnowbreak ? (snowbreak.companionMode == "standing" ? "看板娘站立":"皮肤互动坐姿"):"本地角色展示",
-                         activeAction:activeAction ?? "待机",origin:origin)
+                         activeAction:activeAction ?? "待机",origin:origin,bodyStatus:(isSnowbreak ? snowbreak.bodyState:stage.bodyState).summary)
     }
     private func stopAction() { if isSnowbreak { snowbreak.stop() } else { stage.stopAction() } }
     private func resumeStage() {
@@ -53,7 +60,7 @@ struct CompanionHome: View {
                 } else if !snowbreak.ready { ProgressView("正在加载恩雅…").accessibilityIdentifier("snowbreakLoading") }
             } else if let scene = stage.scene {
                 ImmersiveCharacterView(scene: scene, backgroundImage: selectedBackground, showBackground: showBackground,
-                    onTouch:nativeEditing ? nil : handleTouch,onEdit:nativeEditing ? editNativeGesture : nil).id("native-renderer").ignoresSafeArea()
+                    onTouch:nativeEditing ? nil : handleTouch,onEdit:nativeEditing ? editNativeGesture : nil,onView:stage.attachSnapshotView).id("native-renderer").ignoresSafeArea()
                     .accessibilityElement(children: .ignore)
                     .accessibilityLabel(stage.name).accessibilityIdentifier("companionScene")
             } else {
@@ -71,6 +78,12 @@ struct CompanionHome: View {
                     VStack(spacing: 12) {
                         circle("gearshape", label: "设置") { sheet = .settings }
                         Menu {
+                            Section("直接身体控制") {
+                                ForEach(BodyCommand.allCases.filter{availableActions.contains($0.rawValue)},id:\.rawValue){command in
+                                    Button(command.label){Task{await performBody(command)}}
+                                }
+                            }
+                            Button("查看当前身体状态"){Task{if isSnowbreak{await snowbreak.refreshBodyState()};showingBodyState = true}}
                             Button(senses.environment ? "停止环境聆听" : "环境声音反馈（本机）") { senses.toggleEnvironment() }
                             if isSnowbreak {
                                 if snowbreak.variantIDs.count == 4 {
@@ -109,7 +122,13 @@ struct CompanionHome: View {
                     Spacer()
                     VStack(alignment:.trailing,spacing: 12) {
                         circle("person.crop.circle", label: "日记") { sheet = .diary }
-                        circle("rectangle.on.rectangle", label: "画中画，尚未接入", enabled: false) { }
+                        Menu {
+                            Button("从相册发送图片"){senses.suspend();photoPicker = true}
+                            Button("从文件发送图片"){senses.suspend();imageFilePicker = true}
+                            Button("附上自身模型画面"){Task{do{attachedImage = try await ownPortrait()}catch{store.error = error.localizedDescription}}}
+                            Toggle("询问外观时附模型截图",isOn:$selfAppearanceImages)
+                        } label:{Image(systemName:"photo.badge.plus").font(.system(size:22)).foregroundStyle(.white).frame(width:46,height:46).background(.ultraThinMaterial,in:Circle())}
+                            .accessibilityLabel("图片与自身形象").disabled(preparingSend)
                         if camera.enabled, let session = camera.session {
                             VStack(spacing:6) {
                                 RearCameraPreview(session:session).frame(width:112,height:164)
@@ -127,6 +146,26 @@ struct CompanionHome: View {
             }
         }
         .preferredColorScheme(.dark)
+        .alert("播放器身体实况",isPresented:$showingBodyState){Button("关闭",role:.cancel){}} message:{Text(visibleBodyState)}
+        .task(id:showingBodyState) {
+            while showingBodyState && !Task.isCancelled {
+                if isSnowbreak {await snowbreak.refreshBodyState()}
+                visibleBodyState = (isSnowbreak ? snowbreak.bodyState:stage.bodyState).summary
+                try? await Task.sleep(nanoseconds:200_000_000)
+            }
+        }
+        .sheet(isPresented:$photoPicker) {ChatPhotoPicker {result in photoPicker = false;do{if let image = try result.get(){attachedImage = image}}catch{store.error = error.localizedDescription}}}
+        .sheet(isPresented:$imageFilePicker) {
+            CharacterDocumentPicker {result in
+                imageFilePicker = false
+                do {
+                    guard let url = try result.get() else{return}
+                    let access = url.startAccessingSecurityScopedResource();defer{if access{url.stopAccessingSecurityScopedResource()}}
+                    guard (try url.resourceValues(forKeys:[.fileSizeKey]).fileSize ?? Int.max)<=20_000_000 else {throw CompanionError.message("图片超过20MB。")}
+                    attachedImage = try ChatImage.prepare(Data(contentsOf:url))
+                }catch{store.error = error.localizedDescription}
+            }
+        }
         .safeAreaInset(edge: .bottom, spacing: 0) { composer }
         .fullScreenCover(item: $sheet, onDismiss: {
             resumeStage()
@@ -159,6 +198,7 @@ struct CompanionHome: View {
         .onChange(of:store.busy) { value in if !value,store.error != nil {senses.replyFailed()} }
         .onChange(of: store.dialogueAction?.id) { _ in
             guard let event = store.dialogueAction else { return }
+            if let direct = directlyControlledUser,store.archive.messages.dropLast().last?.id == direct {pendingMotionRevision = nil;return}
             if sheet == nil, scenePhase == .active,
                pendingMotionRevision == currentRevision {
                 if isSnowbreak { snowbreak.play(event.action,withVoice:false,automatic:true) }
@@ -202,6 +242,10 @@ struct CompanionHome: View {
 
     private var composer: some View {
         VStack(spacing: 10) {
+            if let image = attachedImage,let thumbnail = UIImage(data:image.jpeg) {
+                HStack(spacing:12){Image(uiImage:thumbnail).resizable().scaledToFit().frame(width:64,height:64);Text(image.source.label+"\n发送时交给当前识图 API，不写入备份").font(.caption);Spacer();Button("移除"){attachedImage = nil}}
+                    .padding(10).background(.ultraThinMaterial,in:RoundedRectangle(cornerRadius:16)).padding(.horizontal,18).accessibilityIdentifier("pendingChatImage")
+            }
             if store.archive.messages.isEmpty,let card = store.currentCard,!card.firstMessages.isEmpty {
                 Menu("使用角色开场白") {
                     ForEach(card.firstMessages.indices,id:\.self){index in
@@ -240,7 +284,7 @@ struct CompanionHome: View {
             if !senses.status.isEmpty {Text(senses.status).font(.caption).foregroundStyle(.white).lineLimit(2)}
             if !camera.status.isEmpty {Text(camera.status).font(.caption2).foregroundStyle(.white).lineLimit(2).padding(.horizontal)}
             HStack(spacing: 8) {
-                circle("paperplane", label: "发送消息", enabled: !store.busy && !preparingSend && !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) { send() }
+                circle("paperplane", label: "发送消息", enabled: !store.busy && !preparingSend && (!draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || attachedImage != nil)) { send() }
                 TextField("输入消息……", text: $draft, axis: .vertical).lineLimit(1...4)
                     .foregroundStyle(.white).padding(.horizontal, 16).padding(.vertical, 14)
                     .background(.ultraThinMaterial, in: Capsule()).overlay(Capsule().stroke(.white.opacity(0.2)))
@@ -262,24 +306,38 @@ struct CompanionHome: View {
 
     private func send(_ explicitText:String? = nil,origin:String = "文字对话") {
         guard !store.busy,!preparingSend else { return }
-        let text = explicitText ?? draft
+        let selectedImage = attachedImage
+        let text = explicitText ?? (draft.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty && selectedImage != nil ? (selectedImage?.source == .selfPortrait ? "这是你自己的模型画面，看看你现在的样子。":"请看看这张图片，告诉我你看到了什么。"):draft)
         guard !text.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty else { return }
         preparingSend = true
         Task { @MainActor in
             defer { preparingSend = false }
             do {
-                let image = try await camera.frame()
+                var executed:BodyCommand?
+                if let command = BodyCommand.resolve(text),availableActions.contains(command.rawValue) {await performBody(command);executed = command}
+                if isSnowbreak {await snowbreak.refreshBodyState()}
+                var images:[CameraFrame] = []
+                if let selectedImage = selectedImage {images.append(selectedImage)}
+                if let frame = try await camera.frame(){images.append(frame)}
+                if selfAppearanceImages,BodyCommand.asksAppearance(text),!images.contains(where:{$0.source == .selfPortrait}) {images.append(try await ownPortrait())}
                 guard sheet == nil,scenePhase == .active,!store.busy else { return }
                 let before = store.archive.messages.count
                 senses.prepareReply()
-                store.send(text, actions:availableActions, image:image,context:companionContext(origin))
+                store.send(text, actions:availableActions, image:images.first,images:Array(images.dropFirst()),context:companionContext(origin))
                 if store.archive.messages.count > before {
+                    directlyControlledUser = executed == nil ? nil:store.archive.messages.last?.id
+                    attachedImage = nil
                     if explicitText == nil,draft == text { draft = "" }
                     if DialogueMotion.isStopRequest(text) { stopAction() }
                     pendingMotionRevision = currentRevision
                 } else { senses.replyFailed() }
             } catch { store.error = error.localizedDescription;senses.replyFailed() }
         }
+    }
+    private func ownPortrait() async throws -> CameraFrame {if isSnowbreak{return try await snowbreak.portrait()};return try stage.portrait()}
+    private func performBody(_ command:BodyCommand) async {
+        if isSnowbreak {_ = await snowbreak.executeBody(command)}
+        else {_ = stage.executeBody(command);try? await Task.sleep(nanoseconds:850_000_000)}
     }
 
     private func handleTouch(_ view: SCNView, _ point: CGPoint, _ kind: String) {

@@ -7,6 +7,7 @@ struct APISettings: Codable {
     var temperature = 0.7
     var personas:PersonaLibrary? = nil
     var runtimeContext:CompanionContext? = nil
+    var runtimeImages:[CameraFrame] = []
     private enum CodingKeys:String,CodingKey {case endpoint,model,persona,temperature,personas}
 }
 

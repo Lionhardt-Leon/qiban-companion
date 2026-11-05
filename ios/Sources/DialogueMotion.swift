@@ -49,7 +49,7 @@ enum DialogueMotion {
         ("enya_yuki_dance_90bpm", "恩雅站立全身舞蹈，90 BPM，只适用于站立看板娘"),
         ("enya_yuki_dance_120bpm", "恩雅站立全身舞蹈，120 BPM，只适用于站立看板娘"),
         ("enya_yuki_f_vibe_dance_60_bpm_002", "恩雅站立全身舞蹈，60 BPM，只适用于站立看板娘")
-    ]
+    ] + BodyCommand.allCases.map{(id:$0.rawValue,meaning:$0.label+"；由播放器直接控制并提供身体状态回执")}
 
     static func allowed(_ ids: [String]) -> [String] {
         catalog.map(\.id).filter { ids.contains($0) }
@@ -98,7 +98,8 @@ enum DialogueMotion {
                   !reply.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
                 throw CompanionError.message("模型返回的回复格式不完整，请重试。")
             }
-            let id = (envelope["action"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let raw = (envelope["action"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let id = raw.flatMap{BodyCommand.resolve($0)?.rawValue} ?? raw
             let valid = id == "stop" || allowed(actions).contains(id ?? "")
             if id == "procedural", valid {
                 if let object = envelope["motion"], let data = try? JSONSerialization.data(withJSONObject: object),

@@ -5,13 +5,15 @@ struct ChatRequest: Encodable {
         let role: String
         let content: String
         var image: CameraFrame? = nil
+        var additionalImages:[CameraFrame] = []
         private enum CodingKeys: String, CodingKey { case role, content }
         func encode(to encoder: Encoder) throws {
             var container = encoder.container(keyedBy:CodingKeys.self)
             try container.encode(role,forKey:.role)
             if let image = image {
-                let parts = [Part(type:"text",text:content,image_url:nil),
+                var parts = [Part(type:"text",text:content,image_url:nil),
                              Part(type:"image_url",text:nil,image_url:.init(url:image.dataURL,detail:"auto"))]
+                for frame in additionalImages {parts.append(Part(type:"text",text:frame.source.label,image_url:nil));parts.append(Part(type:"image_url",text:nil,image_url:.init(url:frame.dataURL,detail:"auto")))}
                 try container.encode(parts,forKey:.content)
             } else { try container.encode(content,forKey:.content) }
         }
@@ -59,7 +61,10 @@ struct APIClient {
         request.timeoutInterval = 90
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         if !key.isEmpty { request.setValue("Bearer " + key, forHTTPHeaderField: "Authorization") }
-        let system = try PersonaPrompt.compose(settings:settings,memories:memories,actions:DialogueMotion.allowed(actions),hasImage:image != nil)
+        let images = (image.map{[$0]} ?? [])+settings.runtimeImages
+        guard images.count <= 3,images.allSatisfy({$0.isFresh()}) else {throw CompanionError.message("图片已过期或超过单次3张上限，请重新发送。")}
+        var promptSettings = settings;var context = settings.runtimeContext ?? CompanionContext();context.imageSources = images.map{$0.source.label};promptSettings.runtimeContext = context
+        let system = try PersonaPrompt.compose(settings:promptSettings,memories:memories,actions:DialogueMotion.allowed(actions),hasImage:!images.isEmpty)
         // Bound both history count and payload size; never silently send the entire archive.
         var turns: [ChatRequest.Turn] = []
         var remaining = 24_000
@@ -69,10 +74,11 @@ struct APIClient {
             remaining -= message.content.count
         }
         guard !turns.isEmpty else { throw CompanionError.message("消息过长，请缩短后重试。") }
-        if let image = image {
+        if let image = images.first {
             guard turns.last?.role == "user" else { throw CompanionError.message("相机画面只能附在当前用户消息上。") }
             guard image.isFresh() else { throw CompanionError.message("镜头画面已过期，请重新发送。") }
             turns[turns.count-1].image = image
+            turns[turns.count-1].additionalImages = Array(images.dropFirst())
         }
         request.httpBody = try JSONEncoder().encode(ChatRequest(
             model: settings.model, messages: [.init(role: "system", content:system)] + turns,

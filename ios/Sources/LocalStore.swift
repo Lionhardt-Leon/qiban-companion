@@ -54,6 +54,7 @@ enum APIKeyStore {
     private let replyProvider: ReplyProvider
     private let visionReplyProvider: VisionReplyProvider
     private var pendingImage: CameraFrame?
+    private var pendingExtraImages:[CameraFrame] = []
     private var context = CompanionContext()
     private let readKey: () throws -> String
 
@@ -147,7 +148,7 @@ enum APIKeyStore {
         }
     }
 
-    func send(_ text: String, actions: [String] = [], image: CameraFrame? = nil, context suppliedContext:CompanionContext? = nil) {
+    func send(_ text: String, actions: [String] = [], image: CameraFrame? = nil, images:[CameraFrame] = [],context suppliedContext:CompanionContext? = nil) {
         let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty, !busy else { return }
         do {
@@ -166,6 +167,7 @@ enum APIKeyStore {
             try commit(next)
             availableActions = DialogueMotion.allowed(actions)
             pendingImage = image
+            pendingExtraImages = images
             beginReply(key: key)
         } catch { self.error = error.localizedDescription }
     }
@@ -173,7 +175,7 @@ enum APIKeyStore {
     func retry() {
         guard !busy, archive.messages.last?.role == "user" else { return }
         do {
-            guard pendingImage == nil else { throw CompanionError.message("含镜头画面的请求请重新发送，以便附带最新画面。") }
+            guard pendingImage == nil,pendingExtraImages.isEmpty else { throw CompanionError.message("含图片的请求请重新发送，以便确认图片与最新状态。") }
             beginReply(key: try readKey())
         }
         catch { self.error = error.localizedDescription }
@@ -186,7 +188,7 @@ enum APIKeyStore {
         let id = UUID()
         requestID = id
         let snapshot = archive
-        var settings = snapshot.settings;settings.runtimeContext = context
+        var settings = snapshot.settings;settings.runtimeContext = context;settings.runtimeImages = pendingExtraImages
         let actions = availableActions
         let image = pendingImage
         requestTask = Task {
@@ -201,6 +203,7 @@ enum APIKeyStore {
                 next.messages.append(Message(role: "assistant", content: reply.text))
                 try commit(next)
                 pendingImage = nil
+                pendingExtraImages = []
                 let action = DialogueMotion.isStopRequest(snapshot.messages.last?.content ?? "") ? "stop" : reply.action
                 if let action = action, action == "stop" || actions.contains(action) {
                     dialogueAction = DialogueActionEvent(action: action, motion: action == "procedural" ? reply.motion : nil)
@@ -212,9 +215,9 @@ enum APIKeyStore {
     }
 
     func cancel() {
-        requestTask?.cancel(); requestID = nil; requestTask = nil; busy = false; dialogueAction = nil; pendingImage = nil
+        requestTask?.cancel(); requestID = nil; requestTask = nil; busy = false; dialogueAction = nil; pendingImage = nil;pendingExtraImages = []
     }
-    func discardCameraFrame() { pendingImage = nil }
+    func discardCameraFrame() { if pendingImage?.source == .camera {pendingImage = nil};pendingExtraImages.removeAll{$0.source == .camera} }
     func saveMemories(_ text: String) throws {
         var next = archive; next.memories = text; try commit(next)
     }

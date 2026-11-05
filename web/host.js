@@ -76,7 +76,7 @@ async function load(url,id,variant){
     const close=document.createElement('button');close.textContent='关闭工具';close.onclick=closeEditor;editorHost.prepend(close);
     const select=editorHost.querySelector('#snowSurfaceRegion'),edit=editorHost.querySelector('#snowSurfaceEdit');
     edit.addEventListener('change',()=>{if(edit.checked){editorHost.classList.remove('open');finishPaint.textContent='完成'+select.selectedOptions[0].textContent+'标注';finishPaint.hidden=false;}});
-    text('');emit({type:'ready',selection:opened.selection,variants:opened.variants,characterId:opened.manifest.characterId,skinId:opened.manifest.skinId,
+    text('');emit({type:'ready',bodyActions:display.embodiment.snapshot().available,selection:opened.selection,variants:opened.variants,characterId:opened.manifest.characterId,skinId:opened.manifest.skinId,
       stance:opened.runtime.getAsset('stateTransition')?.data.stance||'seated',samples:display.sampleOptions().map(x=>x.id),voices:voices.snapshot().available,learned:display.learnedOptions().map(x=>x.id)});
     window.__snowbreakMigration={display,adapter,editor,presentation,manifest:opened.manifest};
   }catch(error){
@@ -91,10 +91,14 @@ async function command(value){
   if(value.type==='load')return load(value.url,value.nonce);
   if(value.type==='variant'){if(!collection?.variants.some(v=>v.id===value.id))return;return load(null,nonce,value.id);}
   if(!adapter)return;
+  if(value.type==='body'){
+    if(paused)throw new Error('模型暂停中');learned=null;adapter.stop('body-command');adapter.enterStandby();display.embodiment.command(value.id);
+    await new Promise(resolve=>setTimeout(resolve,750));emit({type:'selfState',state:inspect(),requestId:value.requestId});return;
+  }
   if(value.type==='gaze'){display.setGaze(value.x,value.y);return;}
-  if(value.type==='pause'){display.resetSenses();learned=null;paused=true;lighting?.close();presentation?.close();canvas.dataset.snowbreakPaused='true';adapter.stop('background');closeEditor();return;}
+  if(value.type==='pause'){display.embodiment.reset();display.resetSenses();learned=null;paused=true;lighting?.close();presentation?.close();canvas.dataset.snowbreakPaused='true';adapter.stop('background');closeEditor();return;}
   if(value.type==='resume'){paused=false;canvas.dataset.snowbreakPaused='false';last=performance.now();adapter.enterStandby();return;}
-  if(value.type==='stop'){if(learned){learned.stop=performance.now();return;}adapter.stop();adapter.enterStandby();return;}
+  if(value.type==='stop'){display.embodiment.reset();if(learned){learned.stop=performance.now();return;}adapter.stop();adapter.enterStandby();return;}
   if(value.type==='edit'){learned=null;presentation.close();if(editorHost.classList.contains('open')||!finishPaint.hidden)closeEditor();else editorHost.classList.add('open');return;}
   if(value.type==='lightingEdit'){presentation.close();closeEditor();lighting.toggle();return;}
   if(value.type==='frameEdit'){learned=null;presentation.toggle();return;}
@@ -113,6 +117,8 @@ async function command(value){
     learned={id:clip.id,duration:clip.duration,start:performance.now()};
   }
 }
-window.SnowbreakHost={receive:value=>{void command(value).catch(error=>emit({type:'notice',message:String(error.message||error)}));}};
+function inspect(){return display?{...display.embodiment.snapshot(),outfit:collection?.selection?.outfit||'unknown',mode:collection?.selection?.mode||'unknown'}:null;}
+function portrait(){if(!display||paused)throw new Error('模型尚未就绪');const c=document.createElement('canvas'),ratio=1024/Math.max(canvas.width,canvas.height);c.width=Math.round(canvas.width*ratio);c.height=Math.round(canvas.height*ratio);const ctx=c.getContext('2d');ctx.fillStyle='#22202a';ctx.fillRect(0,0,c.width,c.height);display.drawSnapshot(ctx,c.width,c.height);return c.toDataURL('image/jpeg',.65);}
+window.SnowbreakHost={inspect,portrait,receive:value=>{void command(value).catch(error=>emit({type:'notice',message:String(error.message||error)}));}};
 addEventListener('pagehide',()=>{generation++;cleanup();});
 emit({type:'pageReady'});

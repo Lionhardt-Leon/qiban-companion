@@ -73,7 +73,29 @@ struct SnowbreakTouchEvent { let id = UUID(); let label:String }
     @Published private(set) var companionMode = "standing"
     @Published private(set) var companionOutfit = "normal"
     @Published private(set) var variantIDs:[String] = []
-    var dialogueActions:[String] { ready ? actions + (variantIDs.count == 4 ? ["enya_outfit_normal","enya_outfit_nude","enya_mode_standing","enya_mode_interaction"] : []) : [] }
+    @Published private(set) var bodyActions:[String] = []
+    @Published private(set) var bodyState = BodyState()
+    var dialogueActions:[String] { ready ? actions + bodyActions + (variantIDs.count == 4 ? ["enya_outfit_normal","enya_outfit_nude","enya_mode_standing","enya_mode_interaction"] : []) : [] }
+    func refreshBodyState() async {
+        guard ready else {bodyState = BodyState(lastResult:"模型未就绪或正在切换");return}
+        guard let webView = webView,let result = try? await webView.evaluateJavaScript("window.SnowbreakHost.inspect()"),let value = result as? [String:Any] else {return}
+        updateBody(value)
+    }
+    private func updateBody(_ value:[String:Any]) {
+        bodyState = BodyState(outfit:companionOutfit == "nude" ? "当前已加载果体版模型，没有穿衣":companionOutfit == "normal" ? "当前已加载护士正常服饰模型":"服饰未确认",
+            eyes:value["eyes"] as? String ?? "未确认",hands:value["hands"] as? String ?? "未确认",facing:value["facing"] as? String ?? "未确认",lastResult:value["lastResult"] as? String ?? "无回执")
+    }
+    func executeBody(_ command:BodyCommand,automatic:Bool = false) async -> Bool {
+        guard ready,!paused,bodyActions.contains(command.rawValue) else {return false}
+        if !automatic {interactionRevision += 1}
+        send(["type":"body","id":command.rawValue]);try? await Task.sleep(nanoseconds:850_000_000)
+        await refreshBodyState();return ready && !paused
+    }
+    func portrait() async throws -> CameraFrame {
+        guard ready,!paused,let webView = webView,let text = try await webView.evaluateJavaScript("window.SnowbreakHost.portrait()") as? String,
+              let segment = text.split(separator:",").last,let data = Data(base64Encoded:String(segment)) else {throw CompanionError.message("尚未获取到自身模型画面。")}
+        return try CameraFrame(jpeg:data,source:.selfPortrait)
+    }
     func selectVariant(mode:String? = nil,outfit:String? = nil) {
         let id=(mode ?? companionMode)+"_"+(outfit ?? companionOutfit)
         guard ready,variantIDs.contains(id) else { return }
@@ -136,12 +158,14 @@ struct SnowbreakTouchEvent { let id = UUID(); let label:String }
                 if let staged = staged { try library.commit(staged);self.staged = nil }
                 let variants = body["variants"] as? [[String:String]] ?? []
                 variantIDs = variants.compactMap { v in guard let id=v["id"],["standing_normal","standing_nude","interaction_normal","interaction_nude"].contains(id) else { return nil };return id }
-                if let selected=body["selection"] as? [String:String] { companionMode=selected["mode"] ?? "standing";companionOutfit=selected["outfit"] ?? "normal" }
+                if let selected=body["selection"] as? [String:String] { companionMode=selected["mode"] ?? "standing";companionOutfit=selected["outfit"] ?? "unknown" }
+                else {companionMode = body["stance"] as? String == "standing" ? "standing":"interaction";companionOutfit = "unknown"}
                 let samples = body["samples"] as? [String] ?? []
                 actions = ["head","left","right","home_login","home_invite","home_shy","home_check","home_kiss","show_02","show_03","show_04","show_05","sequence","idle_01","idle_02"].filter { samples.contains($0) }.map { "snowbreak_"+$0 }
                 let learned = body["learned"] as? [String] ?? []
                 actions += ["yuki_hello","yuki_Yes","yuki_No","yuki_Peace_hand","yuki_dance_90bpm","yuki_dance_120bpm","yuki_f_vibe_dance_60_bpm_002"].filter { learned.contains($0) && (!$0.contains("dance") || body["stance"] as? String == "standing") }.map { "enya_"+$0 }
                 ready = true;error = nil
+                bodyActions = (body["bodyActions"] as? [String] ?? []).filter{BodyCommand(rawValue:$0) != nil}
                 if paused { send(["type":"pause"]) }
             } catch { self.error = "角色保存失败："+error.localizedDescription }
         case "playback":
@@ -149,6 +173,7 @@ struct SnowbreakTouchEvent { let id = UUID(); let label:String }
             if active,activeAction == nil { interactionRevision += 1 }
             let status = body["status"] as? String ?? ""
             activeAction = active ? (status.hasPrefix("learned:") ? "恩雅 · Yuki 学习动作" : "恩雅互动") : nil
+        case "selfState": if let value = body["state"] as? [String:Any] {updateBody(value)}
         case "touch":
             if !paused,body["completed"] as? Bool == true,let label = body["label"] as? String,label.count <= 30 {
                 interactionRevision += 1;touch = SnowbreakTouchEvent(label:label)
@@ -161,6 +186,7 @@ struct SnowbreakTouchEvent { let id = UUID(); let label:String }
         }
     }
     func play(_ id:String,withVoice:Bool = true,automatic:Bool = false) {
+        if let command = BodyCommand(rawValue:id) {Task{_ = await executeBody(command,automatic:automatic)};return}
         if id == "stop" { stop();return }
         if ready,dialogueActions.contains(id) {
             if id.hasPrefix("enya_outfit_") { selectVariant(outfit:String(id.dropFirst("enya_outfit_".count)));return }
