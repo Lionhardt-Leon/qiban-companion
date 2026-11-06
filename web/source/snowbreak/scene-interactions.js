@@ -39,6 +39,7 @@ export function createSceneInteractions(root,camera,canvas,pick,config,contactSu
   const found=pickContact(pick(e.clientX,e.clientY));start(e,found);
  }
  function start(e,found){
+  if(canvas.dataset.snowbreakPaused==='true'||canvas.dataset.snowbreakFrameEdit==='true'||document.querySelector('#snowSurfaceEdit')?.checked)return;
   lastPick={contact:found?.contact.id,handle:e.target?.dataset?.legHandle||null};if(!found||active)return;
   const foot=found.bone,calf=foot.parent,thigh=calf?.parent;lastPick.chain=[foot,calf,thigh].map(b=>({name:b?.name,isBone:b?.isBone}));if(!thigh?.isBone||!calf?.isBone)return;
   e.preventDefault();e.stopImmediatePropagation();hooks.beforeDrag?.();recover=null;

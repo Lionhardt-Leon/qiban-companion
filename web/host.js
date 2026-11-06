@@ -50,7 +50,7 @@ async function load(url,id,variant){
     display.showFaceCandidate(true);adapter.enterStandby();display.faceViewer();last=performance.now();
     let editingScene=null;
     const placementEditing=editing=>{if(editing){const state=adapter.snapshot();editingScene=state.sceneId?{id:state.sceneId,time:state.sceneTime}:null;display.editingScene=editingScene?.id||null;display.sceneInteractions.cancel();adapter.stop('placement-edit');if(editingScene){display.selectSample(editingScene.id);display.seek(editingScene.time%display.duration);}closeEditor();}else if(!paused){if(editingScene)adapter.enterScene(editingScene.id,editingScene.time);else adapter.enterStandby();editingScene=null;display.editingScene=null;}};
-    const setupModelEditor=()=>{modelEditor?.dispose();modelEditor=createPresentationEditor({setFrame:display.setModelFrame,frameState:display.modelFrameState},canvas,'model-placement:'+opened.selection?.mode+':'+(adapter.snapshot().sceneId||'main'),{initialFrame:{...FULL_FRAME,depth:0},title:'仅移动角色',idPrefix:'model',allowDepth:true,allowStretch:false,onEditing:placementEditing});};
+    const setupModelEditor=()=>{modelEditor?.dispose();modelEditor=createPresentationEditor({setFrame:display.setModelFrame,frameState:display.modelFrameState},canvas,'model-placement:'+opened.selection?.mode+':'+(adapter.snapshot().sceneId||'main'),{initialFrame:{...FULL_FRAME,depth:0},title:'仅移动角色',idPrefix:'model',allowDepth:true,allowStretch:false,verticalSign:-1,dragScale:display.modelDragScale,onEditing:placementEditing});};
     display.setupModelEditor=setupModelEditor;setupModelEditor();
     presentation=createPresentationEditor(display,canvas,'presentation:'+(opened.selection?'enya-'+opened.selection.mode:opened.manifest.skinId),{
       initialFrame:display.presentationDefault,onEditing:placementEditing
@@ -67,7 +67,7 @@ async function load(url,id,variant){
         }
       }
       const state=adapter.snapshot(),playStatus=learned?'learned:'+learned.id:state.status;
-      if(playStatus!==previousStatus){previousStatus=playStatus;emit({type:'selfState',state:inspect()});emit({type:'playback',active:!!learned||['playing','scene-preview','local-arm-preview'].includes(state.status),status:playStatus});}
+      if(playStatus!==previousStatus){previousStatus=playStatus;emit({type:'selfState',state:inspect()});emit({type:'playback',active:!!learned||['playing','scene-preview','local-arm-preview'].includes(state.status),status:playStatus,label:display.sampleOptions().find(s=>s.id===display.sampleState().sampleId)?.label});}
     });
     const geometry=opened.manifest.resources.filter(r=>r.kind==='geometry').map(r=>r.assetId).join('-');
     const labelKey='surface:'+opened.manifest.skinId+':'+geometry;
@@ -139,7 +139,7 @@ async function command(value){
     learned={id:clip.id,kind:clip.kind,duration:clip.duration,start:performance.now(),offset:0,rate:clip.kind==='standing-dance'?danceControls.get().tempo:1};
   }
 }
-function inspect(){return display?{...display.embodiment.snapshot(),learnedMotion:learned?{id:learned.id,time:motionTime(learned,performance.now()),rate:learned.rate,amplitude:danceControls.get().amplitude}:null,interactionScene:adapter?.snapshot().sceneId||null,outfit:collection?.selection?.outfit||'unknown',mode:collection?.selection?.mode||'unknown'}:null;}
+function inspect(){if(!display)return null;const body=display.embodiment.snapshot(),state=adapter?.snapshot(),sample=display.sampleOptions().find(s=>s.id===display.sampleState().sampleId);return {...body,lastResult:state?.status==='playing'&&sample?'正在播放原作动作：'+sample.label:body.lastResult,sourceAction:state?.status==='playing'?sample?.id:null,learnedMotion:learned?{id:learned.id,time:motionTime(learned,performance.now()),rate:learned.rate,amplitude:danceControls.get().amplitude}:null,interactionScene:state?.sceneId||null,outfit:collection?.selection?.outfit||'unknown',mode:collection?.selection?.mode||'unknown'};}
 function portrait(){if(!display||paused)throw new Error('模型尚未就绪');const c=document.createElement('canvas'),ratio=1024/Math.max(canvas.width,canvas.height);c.width=Math.round(canvas.width*ratio);c.height=Math.round(canvas.height*ratio);const ctx=c.getContext('2d');ctx.fillStyle='#22202a';ctx.fillRect(0,0,c.width,c.height);display.drawSnapshot(ctx,c.width,c.height);return c.toDataURL('image/jpeg',.65);}
 window.SnowbreakHost={inspect,portrait,receive:value=>{void command(value).catch(error=>emit({type:'notice',message:String(error.message||error)}));}};
 addEventListener('pagehide',()=>{generation++;cleanup();});

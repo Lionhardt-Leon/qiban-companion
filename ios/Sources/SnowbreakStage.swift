@@ -178,7 +178,7 @@ struct SnowbreakTouchEvent {
             let active = body["active"] as? Bool == true
             // Playback events are not user edits and must not invalidate a pending AI turn.
             let status = body["status"] as? String ?? ""
-            activeAction = active ? (status.hasPrefix("learned:") ? "恩雅 · Yuki 学习动作" : "恩雅互动") : nil
+            activeAction = active ? (status.hasPrefix("learned:") ? "恩雅 · Yuki 学习动作" : String((body["label"] as? String ?? "恩雅互动").prefix(60))) : nil
         case "selfState": if let value = body["state"] as? [String:Any] {updateBody(value)}
         case "touch":
             if !paused,body["completed"] as? Bool == true,let label = body["label"] as? String,label.count <= 30 {
