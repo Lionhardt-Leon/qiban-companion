@@ -6,7 +6,10 @@ struct SpeechPreferences:Codable,Equatable {
     var autoPlay = false
     var speed:Float = 1
     var volume:Float = 1
+    var computeMode:String?
+    var acceleration:VoiceComputeMode {VoiceComputeMode(rawValue:computeMode ?? "automatic") ?? .automatic}
     func validate() throws {
+        guard computeMode == nil || VoiceComputeMode(rawValue:computeMode!) != nil else{throw CompanionError.message("语音加速设置无效。")}
         guard ["zh","ja"].contains(language),!voiceID.isEmpty,voiceID.count <= 120,speed.isFinite,(0.7...1.3).contains(speed),volume.isFinite,(0...1).contains(volume) else {throw CompanionError.message("语音设置无效。")}
     }
     func text(for message:Message) throws -> String {

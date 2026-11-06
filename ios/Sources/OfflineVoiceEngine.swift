@@ -70,16 +70,18 @@ final class VoiceWordPiece {
 // One instance lives on the synthesis queue. The UI never runs neural inference.
 final class OfflineVoiceEngine {
     let voice:VoiceManifest.Voice
+    let computeMode:VoiceComputeMode
+    private(set) var diagnostics=""
     private let env:ORTEnv
-    private let encoder:ORTSession,step:ORTSession,vocoder:ORTSession
-    private let bert:ORTSession?
+    private let encoder:AcceleratedVoiceSession,step:AcceleratedVoiceSession,vocoder:AcceleratedVoiceSession
+    private let bert:AcceleratedVoiceSession?
     private let tokenizer:VoiceWordPiece?
     private let condition:VoiceConditioning
     private let referenceBert:[Float]
     private let prompt:ORTValue,spectrogram:ORTValue
     private let vocabularySize=732
-    init(root:URL,voice:VoiceManifest.Voice) throws {
-        self.voice=voice
+    init(root:URL,voice:VoiceManifest.Voice,computeMode:VoiceComputeMode = .automatic) throws {
+        self.voice=voice;self.computeMode=computeMode
         let path=root.appendingPathComponent(voice.directory)
         let data=try Data(contentsOf:path.appendingPathComponent("conditioning.json"));guard data.count<=128*1024 else {throw CompanionError.message("语音参考索引过大。")}
         condition=try JSONDecoder().decode(VoiceConditioning.self,from:data);try condition.validate()
@@ -89,12 +91,12 @@ final class OfflineVoiceEngine {
         let resources=root.appendingPathComponent("resources").path,config=path.appendingPathComponent("config.json").path
         guard resources.withCString({resource in config.withCString{qiban_g2p_initialize(resource,$0)}})==1 else {throw CompanionError.message("中／日语音字典未就绪，请重新导入完整语音包。")}
         env=try ORTEnv(loggingLevel:.warning)
-        let options=try ORTSessionOptions();try options.setIntraOpNumThreads(2);try options.setGraphOptimizationLevel(.all)
-        encoder=try ORTSession(env:env,modelPath:path.appendingPathComponent("gpt_encoder.onnx").path,sessionOptions:options)
-        step=try ORTSession(env:env,modelPath:path.appendingPathComponent("gpt_step.onnx").path,sessionOptions:options)
-        vocoder=try ORTSession(env:env,modelPath:path.appendingPathComponent("sovits.onnx").path,sessionOptions:options)
+        let cache=try AcceleratedVoiceSession.cacheDirectory(root:root)
+        encoder=try AcceleratedVoiceSession(env:env,model:path.appendingPathComponent("gpt_encoder.onnx"),module:"encoder",mode:computeMode,cache:cache.appendingPathComponent(voice.language+"-encoder"))
+        step=try AcceleratedVoiceSession(env:env,model:path.appendingPathComponent("gpt_step.onnx"),module:"step",mode:computeMode,cache:cache.appendingPathComponent(voice.language+"-step"))
+        vocoder=try AcceleratedVoiceSession(env:env,model:path.appendingPathComponent("sovits.onnx"),module:"sovits",mode:computeMode,cache:cache.appendingPathComponent(voice.language+"-sovits"))
         if voice.language=="zh" {
-            bert=try ORTSession(env:env,modelPath:root.appendingPathComponent("shared/bert.onnx").path,sessionOptions:options)
+            bert=try AcceleratedVoiceSession(env:env,model:root.appendingPathComponent("shared/bert.onnx"),module:"bert",mode:computeMode,cache:cache.appendingPathComponent("bert"))
             tokenizer=try VoiceWordPiece(url:root.appendingPathComponent("shared/tokenizer.json"))
         }else {bert=nil;tokenizer=nil}
     }
@@ -114,8 +116,8 @@ final class OfflineVoiceEngine {
         let data=try value.tensorData() as Data;guard data.count%8==0 else {throw CompanionError.message("语音语义输出类型无效。")}
         return data.withUnsafeBytes{bytes in stride(from:0,to:bytes.count,by:8).map{bytes.loadUnaligned(fromByteOffset:$0,as:Int64.self)}}
     }
-    private func run(_ session:ORTSession,_ inputs:[String:ORTValue],_ outputs:[String]) throws -> [String:ORTValue] {
-        try session.run(withInputs:inputs,outputNames:Set(outputs),runOptions:nil)
+    private func run(_ session:AcceleratedVoiceSession,_ inputs:[String:ORTValue],_ outputs:[String]) throws -> [String:ORTValue] {
+        try session.run(inputs,outputs)
     }
     private func phones(_ text:String) throws -> (ids:[Int64],features:[Float]) {
         let data=try text.withCString {textPointer in try voice.language.withCString {languagePointer -> Data in
@@ -138,6 +140,8 @@ final class OfflineVoiceEngine {
         return(ids,result)
     }
     func synthesize(_ text:String,speed:Float,cancellation:SpeechCancellation) throws -> [Float] {
+        let started=ProcessInfo.processInfo.systemUptime
+        for session in [bert,encoder,step,vocoder].compactMap({$0}) {session.resetMetrics()}
         try cancellation.check();let target=try phones(text);try cancellation.check()
         let referenceCount=condition.referencePhones.count,n=target.ids.count,allCount=referenceCount+n
         var feature:[Float]=[];feature.reserveCapacity(1024*allCount)
@@ -161,6 +165,8 @@ final class OfflineVoiceEngine {
         guard let value=pcm["audio"] else {throw CompanionError.message("声码器没有输出声音。")}
         let samples=try Self.floats(value.tensorData() as Data)
         guard !samples.isEmpty,samples.count<=32000*20,samples.allSatisfy(\.isFinite),samples.contains(where:{abs($0)>0.0001}) else {throw CompanionError.message("生成的音频无效。")}
+        let elapsed=ProcessInfo.processInfo.systemUptime-started,duration=Double(samples.count)/32000
+        diagnostics="本段合成 "+String(format:"%.2fs / 音频 %.2fs · RTF %.2f",elapsed,duration,elapsed/max(duration,0.001))+"\n"+[bert.map{"BERT："+$0.summary},"编码："+encoder.summary,"逐步生成："+step.summary,"声码器："+vocoder.summary].compactMap{$0}.joined(separator:"\n")
         return samples
     }
     private func sample(_ output:[String:ORTValue],history:[Int64],allowEnd:Bool) throws -> Int64 {

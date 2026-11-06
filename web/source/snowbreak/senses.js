@@ -6,7 +6,8 @@ export function createSenses(root,camera,canvas){
  const channels=[],meshes=new Map(),centers={value:Array.from({length:4},()=>new THREE.Vector3())},offsets={value:Array.from({length:4},()=>new THREE.Vector3())},radii={value:[.05,.05,.05,.05]},direction=new THREE.Vector3();let contact=null;
  root.traverse(m=>{if(m.isMesh&&m.userData.snowbreakSurfaceKey)meshes.set(m.userData.snowbreakSurfaceKey,m);});
  function anchor(channel){const hit=channel.hit,mesh=meshes.get(hit.mesh);if(!mesh||!hit.barycentric)return new THREE.Vector3().fromArray(hit.point);const index=mesh.geometry.index,p=new THREE.Vector3();for(let j=0;j<3;j++){const i=index?index.getX(hit.triangle*3+j):hit.triangle*3+j;p.addScaledVector(mesh.getVertexPosition(i,new THREE.Vector3()),hit.barycentric[j]);}return mesh.localToWorld(p);}
- const eyes=[],bases=new Map();root.traverse(m=>{
+ const eyes=[],bases=new Map(),skinSkeletons=new Set();root.traverse(m=>{
+  if(m.isSkinnedMesh)skinSkeletons.add(m.skeleton);
   if(m.isBone&&/^EyeJoint_[LR]$/.test(m.name))eyes.push(m);
   if(!m.isSkinnedMesh||!['skin','cloth-or-room'].includes(m.material?.userData.profile))return;
   const material=m.material,previous=material.onBeforeCompile,cache=material.customProgramCacheKey.bind(material);
@@ -32,7 +33,7 @@ gl_Position=projectionMatrix*mvPosition;`);};material.customProgramCacheKey=()=>
   for(let i=channels.length-1;i>=0;i--){channels[i].spring.step(dt);if(!channels[i].spring.active)channels.splice(i,1);}
   offset=0;velocity=0;active=channels.length>0;
   for(let i=0;i<4;i++){const c=channels[i];offsets.value[i].set(0,0,0);if(!c)continue;centers.value[i].copy(anchor(c));radii.value[i]=c.spring.profile.radius;offsets.value[i].copy(c.direction).multiplyScalar(c.spring.offset);if(Math.abs(c.spring.offset)>Math.abs(offset))offset=c.spring.offset;velocity+=Math.abs(c.spring.velocity);}
-  const skeletons=new Set();if(eyes.length)root.traverse(m=>{if(m.isSkinnedMesh&&!skeletons.has(m.skeleton)){m.skeleton.update();skeletons.add(m.skeleton);}});
+  if(eyes.length)for(const skeleton of skinSkeletons)skeleton.update();
  }
  function restore(){for(const [eye,q] of bases)if(eye.quaternion.angleTo(q.applied)<.000001)eye.quaternion.copy(q.base);bases.clear();}
  return {gaze,touch,tick,restore,reset(){restore();pressed=active=held=false;touchUntil=0;offset=velocity=0;channels.length=0;contact=null;for(const value of offsets.value)value.set(0,0,0);target.set(0,0);current.set(0,0);},snapshot:()=>({eyes:eyes.length,gaze:current.toArray(),offset,pressed,active,contacts:channels.map(c=>({region:c.region,offset:c.spring.offset,velocity:c.spring.velocity,pressed:c.spring.pressed,center:anchor(c).toArray()}))}),dispose(){for(const [name,fn] of [['pointerdown',down],['pointermove',pointer],['pointerup',release],['pointercancel',release]])canvas.removeEventListener(name,fn);}};

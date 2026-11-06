@@ -39,12 +39,16 @@ export function installCharacterLights(scene,renderer){
   const panel=new THREE.Mesh(panelGeometry,material);panel.position.fromArray(position);panel.scale.set(scale[0],scale[1],1);panel.lookAt(0,1,0);studio.add(panel);
  }
  const generator=new THREE.PMREMGenerator(renderer),environment=generator.fromScene(studio,.08,.1,30);generator.dispose();panelGeometry.dispose();for(const m of panelMaterials)m.dispose();scene.environment=environment.texture;
- let state={exposure:1.05,warmth:.5,reflection:1,shadows:true};
+ let shadowCap=2048;
+ function resizeShadow(size){if(key.shadow.mapSize.x===size)return;key.shadow.mapSize.set(size,size);key.shadow.map?.dispose();key.shadow.map=null;key.shadow.needsUpdate=true;}
+ let state={exposure:1.05,warmth:.5,reflection:1,shadows:true,shadowSize:1024,key:1.9,fill:1,rim:.9};
  function set(next){
   const value={...state,...next};if(![value.exposure,value.warmth,value.reflection].every(Number.isFinite)||typeof value.shadows!=='boolean'||value.exposure<.65||value.exposure>1.45||value.warmth<0||value.warmth>1||value.reflection<0||value.reflection>1.5)throw new Error('Invalid lighting settings');
-  state={exposure:value.exposure,warmth:value.warmth,reflection:value.reflection,shadows:value.shadows};renderer.toneMappingExposure=state.exposure;renderer.shadowMap.enabled=state.shadows;
+  if(![512,1024,2048].includes(value.shadowSize)||![value.key,value.fill,value.rim].every(v=>Number.isFinite(v)&&v>=0&&v<=3))throw new Error('Invalid light quality');
+  resizeShadow(Math.min(value.shadowSize,shadowCap));
+  state={exposure:value.exposure,warmth:value.warmth,reflection:value.reflection,shadows:value.shadows,shadowSize:value.shadowSize,key:value.key,fill:value.fill,rim:value.rim};key.intensity=state.key;fill.intensity=state.fill;rim.intensity=state.rim;renderer.toneMappingExposure=state.exposure;renderer.shadowMap.enabled=state.shadows;
   key.color.set(0xe9f1ff).lerp(new THREE.Color(0xffe4c7),state.warmth);scene.environmentIntensity=state.reflection;return {...state};
  }
  function frame(box){const center=box.getCenter(new THREE.Vector3()),radius=Math.max(1.5,box.getSize(new THREE.Vector3()).length()*.7);key.target.position.copy(center);key.position.copy(center).add(new THREE.Vector3(-2,4,5).normalize().multiplyScalar(radius*3));Object.assign(key.shadow.camera,{left:-radius,right:radius,top:radius,bottom:-radius,near:.1,far:radius*6});key.shadow.camera.updateProjectionMatrix();key.target.updateMatrixWorld();}
- return {set,frame,snapshot:()=>({...state,environment:true,shadowMapSize:1024}),dispose(){scene.environment=null;environment.dispose();key.shadow.dispose();key.target.removeFromParent();for(const light of [hemi,key,fill,rim])light.removeFromParent();}};
+ return {set,frame,setBudget(value){shadowCap=value.thermal==='critical'?512:value.thermal==='serious'||value.lowPower?1024:2048;resizeShadow(Math.min(state.shadowSize,shadowCap));},snapshot:()=>({...state,environment:true,shadowMapSize:key.shadow.mapSize.x}),dispose(){scene.environment=null;environment.dispose();key.shadow.dispose();key.target.removeFromParent();for(const light of [hemi,key,fill,rim])light.removeFromParent();}};
 }

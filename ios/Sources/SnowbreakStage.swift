@@ -161,7 +161,7 @@ struct SnowbreakTouchEvent {
         switch type {
         case "editing": isEditing=body["active"] as? Bool == true
         case "ready":
-            isEditing=false
+            applyHardwareBudget();isEditing=false
             guard body["characterId"] as? String == "Enya" else { error = "这不是恩雅角色包。";return }
             do {
                 if let staged = staged { try library.commit(staged);self.staged = nil }
@@ -216,7 +216,8 @@ struct SnowbreakTouchEvent {
     }
     func stop() { interactionRevision += 1;send(["type":"stop"]);activeAction = nil }
     func pause() { paused = true;isEditing=false;interactionRevision += 1;send(["type":"pause"]);activeAction = nil }
-    func resume() { paused = false;send(["type":"resume"]) }
+    func resume() { paused = false;applyHardwareBudget();send(["type":"resume"]) }
+    func applyHardwareBudget(){send(["type":"hardwareBudget","thermal":AppleHardwareBudget.thermal,"lowPower":ProcessInfo.processInfo.isLowPowerModeEnabled])}
     func editTouch() { interactionRevision += 1;send(["type":"edit"]) }
     func editModel(){interactionRevision += 1;isEditing=true;send(["type":"modelEdit"])}
     func editDance(){send(["type":"danceEdit"])}

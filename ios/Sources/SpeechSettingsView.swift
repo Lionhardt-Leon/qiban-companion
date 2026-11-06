@@ -38,6 +38,12 @@ struct SpeechSettingsView:View {
                     Slider(value:$draft.volume,in:0...1){Text("音量")}
                     Button("保存语音设置"){save()}.disabled(store.busy || speech.importing).accessibilityIdentifier("saveSpeechSettings")
                 }
+                Section("苹果硬件加速") {
+                    Picker("本机合成后端",selection:Binding(get:{draft.acceleration.rawValue},set:{draft.computeMode=$0})) {ForEach(VoiceComputeMode.allCases){Text($0.title).tag($0.rawValue)}}
+                    Text("自动分工将 BERT／声码器交给 Core ML，允许神经引擎参与；逐步生成保留 CPU。首次编译可能较慢，结果会缓存。实际执行可包含 CPU 分图，不能据此认定全程使用 NPU；不兼容时回退 CPU。切换后保存，再试听同一句比较。")
+                        .font(.caption).foregroundStyle(.secondary)
+                    Text(speech.diagnostics).font(.caption.monospaced()).textSelection(.enabled).accessibilityIdentifier("speechComputeMetrics")
+                }
                 Section("试听") {
                     Button("试听当前音色") {
                         let sample=Message(role:"assistant",content:"下午好，我在这里陪着你。",spokenJapanese:"こんにちは。今日は何を話しましょうか。")

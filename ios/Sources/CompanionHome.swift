@@ -18,6 +18,10 @@ struct CompanionHome: View {
     @State private var photoPicker = false
     @State private var imageFilePicker = false
     @State private var attachedImage:CameraFrame?
+    @State private var localVisionBusy=false
+    @State private var localVisionResult=""
+    @State private var showingLocalVision=false
+    @State private var localVisionTicket=UUID()
     @State private var showingBodyState = false
     @AppStorage("selfAppearanceImagePolicy") private var selfAppearanceImagePolicy = "questions"
     @AppStorage("characterEngine") private var engine = "native"
@@ -148,6 +152,7 @@ struct CompanionHome: View {
                         Menu {
                             Button("从相册发送图片"){senses.suspend();photoPicker = true}
                             Button("从文件发送图片"){senses.suspend();imageFilePicker = true}
+                            Button(localVisionBusy ? "正在本机识图…":"本机识图（已选照片／后摄）"){analyzeLocally()}.disabled(localVisionBusy || (attachedImage == nil && !camera.enabled)).accessibilityIdentifier("analyzeLocally")
                             Button("附上自身模型画面"){Task{do{attachedImage = try await ownPortrait()}catch{store.error = error.localizedDescription}}}
                             Picker("自身形象输入",selection:$selfAppearanceImagePolicy) {
                                 Text("仅身体状态文字").tag("off")
@@ -173,6 +178,9 @@ struct CompanionHome: View {
             }
         }
         .preferredColorScheme(.dark)
+        .sheet(isPresented:$showingLocalVision) {
+            NavigationStack {ScrollView {Text(localVisionResult).textSelection(.enabled).padding()}.navigationTitle("本机识图").toolbar {ToolbarItem(placement:.confirmationAction){Button("完成"){showingLocalVision=false}};ToolbarItem(placement:.bottomBar){Button("附到聊天输入"){draft += (draft.isEmpty ? "":"\n")+localVisionResult;showingLocalVision=false}}}}
+        }
         .sheet(isPresented:$showingBodyState) {
             BodyStatusInspector {
                 if isSnowbreak {await snowbreak.refreshBodyState()}
@@ -260,13 +268,24 @@ struct CompanionHome: View {
         .onChange(of:snowbreak.ready) { ready in if !ready {clearTouches();waitingBodyAction=nil};if ready { snowbreak.sceneVisible(showBackground);snowbreak.setVoice(snowbreakVoice);snowbreak.setTouchPolicy(touchAI && !store.archive.settings.endpoint.isEmpty);greetIfReady() } }
         .onChange(of:snowbreakVoice) { value in snowbreak.setVoice(value) }
         .onChange(of:stage.name){_ in greetIfReady()}
+        .onReceive(NotificationCenter.default.publisher(for:ProcessInfo.thermalStateDidChangeNotification)){_ in snowbreak.applyHardwareBudget();stage.applyHardwareBudget()}
+        .onReceive(NotificationCenter.default.publisher(for:Notification.Name.NSProcessInfoPowerStateDidChange)){_ in snowbreak.applyHardwareBudget();stage.applyHardwareBudget()}
         .task { resumeStage() }
-        .onDisappear { waitingBodyAction=nil;clearTouches();camera.stop();senses.suspend();speech.stop();stage.stop();snowbreak.pause() }
+        .onDisappear { localVisionTicket=UUID();localVisionBusy=false;waitingBodyAction=nil;clearTouches();camera.stop();senses.suspend();speech.stop();stage.stop();snowbreak.pause() }
         .onChange(of: scenePhase) { phase in
             if phase == .active, sheet == nil { resumeStage() } else { clearTouches();camera.stop();senses.suspend();speech.stop();stage.stop();snowbreak.pause() }
         }
     }
 
+    private func analyzeLocally(){
+        guard !localVisionBusy else{return};localVisionBusy=true;let ticket=UUID();localVisionTicket=ticket;let selected=attachedImage
+        Task {@MainActor in
+            defer{if localVisionTicket==ticket{localVisionBusy=false}}
+            do {guard let frame=try await selectedFrameForLocalVision(selected) else{throw CompanionError.message("请先选择照片或打开后置主摄。")};let result=try await AppleLocalVision.analyze(frame.jpeg);guard localVisionTicket==ticket,scenePhase == .active else{return};localVisionResult=result.summary;showingLocalVision=true}
+            catch {if localVisionTicket==ticket{store.error=error.localizedDescription}}
+        }
+    }
+    private func selectedFrameForLocalVision(_ selected:CameraFrame?) async throws -> CameraFrame? {if let selected=selected{return selected};return try await camera.frame()}
     private var background: some View {
         GeometryReader { proxy in
             if showBackground, let image = stage.backgrounds[backgroundName] ?? stage.backgrounds.values.first {

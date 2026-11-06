@@ -43,7 +43,8 @@ import simd
             hands:measured.isEmpty ? (hands.isEmpty ? "未测到举手":"正在抬手或受关节限制"):measured.joined(separator:"、")+"实际抬起",
             facing:abs(bodyYaw-targetBodyYaw)>2 ? "正在转身":abs(abs(yaw)-180)<3 ? "背向镜头":abs(yaw)<3 ? "面向镜头":"转向\(Int(yaw))度",lastResult:lastBodyResult)
     }
-    func attachSnapshotView(_ view:SCNView){snapshotView = view}
+    func attachSnapshotView(_ view:SCNView){snapshotView = view;applyHardwareBudget()}
+    func applyHardwareBudget(){snapshotView?.preferredFramesPerSecond=AppleHardwareBudget.frameRate}
     func portrait() throws -> CameraFrame {
         guard let view = snapshotView,let data = view.snapshot().jpegData(compressionQuality:0.7) else {throw CompanionError.message("模型画面尚未就绪。")}
         return try ChatImage.prepare(data,source:.selfPortrait)
@@ -270,12 +271,12 @@ struct ImmersiveCharacterView: UIViewRepresentable {
         }
     }
     func makeUIView(context: Context) -> SCNView {
-        let view = CompanionSceneView()
+        let view = CompanionSceneView(frame:.zero,options:[SCNView.Option.preferredRenderingAPI.rawValue:SCNRenderingAPI.metal.rawValue])
         onView?(view)
         view.backgroundColor = .clear
         view.isOpaque = false
         view.antialiasingMode = .multisampling4X
-        view.preferredFramesPerSecond = 60
+        view.preferredFramesPerSecond = AppleHardwareBudget.frameRate
         view.autoenablesDefaultLighting = true
         view.scene = scene
         view.pointOfView = scene.rootNode.childNodes.first { $0.camera != nil }

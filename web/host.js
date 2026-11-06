@@ -10,7 +10,7 @@ import {FULL_FRAME,createPresentationEditor} from './presentation-editor.js';
 
 let aiControlledTouch=true;
 const canvas=document.querySelector('#stage'), status=document.querySelector('#status'), editorHost=document.querySelector('#editor');
-let collection=null,pausedScene=null;
+let collection=null,pausedScene=null,hardwareBudget={};
 let generation=0,nonce='',runtime,display,adapter,voices,editor,presentation,modelEditor,lighting,learned,last=0,paused=false,voiceEnabled=true;
 const danceControls=createDanceControls(value=>retimeDance(learned,value.tempo,performance.now()));
 const finishPaint=document.createElement('button');finishPaint.id='finishPaint';finishPaint.hidden=true;
@@ -42,7 +42,7 @@ async function load(url,id,variant){
     };
     if(ticket!==generation){nextDisplay.dispose();nextVoices.dispose();void opened.runtime.dispose();return;}
     collection=opened.variants.length?opened:null;if(opened.selection)localStorage.setItem('enya-collection-selection',opened.selection.id);
-    runtime=opened.runtime;display=nextDisplay;voices=nextVoices;
+    runtime=opened.runtime;display=nextDisplay;voices=nextVoices;display.setRenderBudget(hardwareBudget);
     const background=display.sceneState().available?'#201d29':'transparent';document.body.style.background=background;document.documentElement.style.background=background;
     adapter=createSnowbreakSampleAdapter(display,{audioForSample:sample=>voices.getAudio(sample)});
     display.sceneInteractions.configure({scene:()=>adapter.snapshot().sceneId||display.editingScene,reaction:id=>{void adapter.playSceneReaction(id,{withVoice:voiceEnabled});},voice:id=>{if(voiceEnabled){const audio=voices.getAudio(id);if(audio){audio.currentTime=0;void audio.play().catch(()=>{});}}},event:emit});
@@ -93,6 +93,7 @@ async function load(url,id,variant){
 }
 
 async function command(value){
+  if(value.type==='hardwareBudget'){hardwareBudget={thermal:value.thermal,lowPower:value.lowPower};display?.setRenderBudget(hardwareBudget);return;}
   if(value.type==='dispose'){generation++;cleanup();return;}
   if(value.type==='load')return load(value.url,value.nonce);
   if(value.type==='variant'){if(!collection?.variants.some(v=>v.id===value.id))return;return load(null,nonce,value.id);}
@@ -145,6 +146,6 @@ async function command(value){
 }
 function inspect(){if(!display)return null;const body=display.embodiment.snapshot(),state=adapter?.snapshot(),sample=display.sampleOptions().find(s=>s.id===display.sampleState().sampleId);return {...body,lastResult:state?.status==='playing'&&sample?'正在播放原作动作：'+sample.label:body.lastResult,sourceAction:state?.status==='playing'?sample?.id:null,learnedMotion:learned?{id:learned.id,time:motionTime(learned,performance.now()),rate:learned.rate,amplitude:danceControls.get().amplitude}:null,interactionScene:state?.sceneId||null,outfit:collection?.selection?.outfit||'unknown',mode:collection?.selection?.mode||'unknown'};}
 function portrait(){if(!display||paused)throw new Error('模型尚未就绪');const c=document.createElement('canvas'),ratio=1024/Math.max(canvas.width,canvas.height);c.width=Math.round(canvas.width*ratio);c.height=Math.round(canvas.height*ratio);const ctx=c.getContext('2d');ctx.fillStyle='#22202a';ctx.fillRect(0,0,c.width,c.height);display.drawSnapshot(ctx,c.width,c.height);return c.toDataURL('image/jpeg',.65);}
-window.SnowbreakHost={inspect,portrait,receive:value=>{void command(value).catch(error=>emit({type:'notice',message:String(error.message||error)}));}};
+window.SnowbreakHost={inspect,portrait,performance:()=>display?.performanceState(),receive:value=>{void command(value).catch(error=>emit({type:'notice',message:String(error.message||error)}));}};
 addEventListener('pagehide',()=>{generation++;cleanup();});
 emit({type:'pageReady'});

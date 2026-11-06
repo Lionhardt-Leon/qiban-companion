@@ -13,17 +13,18 @@ enum SpeechWAV {
 private final class SpeechEngineWorker:@unchecked Sendable {
     private let queue=DispatchQueue(label:"qiban.offline-speech",qos:.userInitiated)
     private var engine:OfflineVoiceEngine?
-    func render(root:URL,voice:VoiceManifest.Voice,parts:[String],speed:Float,cancellation:SpeechCancellation,gate:SpeechBackpressure,chunk:@escaping(Data)->Void,finish:@escaping(Error?)->Void) {
+    func render(root:URL,voice:VoiceManifest.Voice,parts:[String],speed:Float,computeMode:VoiceComputeMode,cancellation:SpeechCancellation,gate:SpeechBackpressure,chunk:@escaping(Data,String)->Void,finish:@escaping(Error?)->Void) {
         queue.async {
             do {
+                let renderStarted=ProcessInfo.processInfo.systemUptime
                 try cancellation.check()
-                if self.engine?.voice.id != voice.id {self.engine=nil;self.engine=try OfflineVoiceEngine(root:root,voice:voice)}
+                if self.engine?.voice.id != voice.id || self.engine?.computeMode != computeMode {self.engine=nil;self.engine=try OfflineVoiceEngine(root:root,voice:voice,computeMode:computeMode)}
                 guard let engine=self.engine else {throw CompanionError.message("离线语音引擎没有就绪。")}
-                for text in parts {
+                for (partIndex,text) in parts.enumerated() {
                     try gate.acquire()
                     try cancellation.check()
                     let audio=try autoreleasepool {SpeechWAV.encode(try engine.synthesize(text,speed:speed,cancellation:cancellation))}
-                    try cancellation.check();chunk(audio)
+                    try cancellation.check();chunk(audio,(partIndex==0 ? String(format:"首段可播耗时 %.2fs（含加载／编译）\n",ProcessInfo.processInfo.systemUptime-renderStarted):"")+engine.diagnostics)
                 }
                 finish(nil)
             }catch {finish(error)}
@@ -41,6 +42,7 @@ private final class SpeechEngineWorker:@unchecked Sendable {
     private var speakingMessageID:UUID?,startedGeneration:UUID?
     private var meter:Timer?
     @Published private(set) var status=""
+    @Published private(set) var diagnostics="尚无本机合成记录"
     @Published private(set) var importing=false
     @Published private(set) var importProgress=0.0
     @Published var error:String?
@@ -96,8 +98,8 @@ private final class SpeechEngineWorker:@unchecked Sendable {
             }
             guard let voice=voices.first(where:{$0.id==preferences.voiceID && $0.language==preferences.language}) else {throw CompanionError.message("所选训练音色尚未导入，请到设置 → 离线语音导入语音包。")}
             let token=SpeechCancellation(),ticket=generation,gate=SpeechBackpressure();self.gate=gate;cancellation=token;status="正在本机合成 \(voice.title)…"
-            worker.render(root:library.current,voice:voice,parts:SpeechPreferences.sentences(text),speed:preferences.speed,cancellation:token,gate:gate,chunk:{[weak self] data in
-                DispatchQueue.main.async {guard let self=self,self.generation==ticket else{gate.release();return};self.queued.append(data);self.playNext()}
+            worker.render(root:library.current,voice:voice,parts:SpeechPreferences.sentences(text),speed:preferences.speed,computeMode:preferences.acceleration,cancellation:token,gate:gate,chunk:{[weak self] data,metrics in
+                DispatchQueue.main.async {guard let self=self,self.generation==ticket else{gate.release();return};self.diagnostics=metrics;self.queued.append(data);self.playNext()}
             },finish:{[weak self] failure in
                 DispatchQueue.main.async {
                     guard let self=self,self.generation==ticket else{return}
