@@ -1,3 +1,4 @@
+import {motionTime,retimeDance,createDanceControls} from './dance-controls.js';
 import {createLightingEditor} from './lighting-editor.js';
 import {openSkinArchive} from './source/snowbreak/archive.js';
 import {createSnowbreakRenderer} from './source/snowbreak/renderer.js';
@@ -11,6 +12,7 @@ let aiControlledTouch=true;
 const canvas=document.querySelector('#stage'), status=document.querySelector('#status'), editorHost=document.querySelector('#editor');
 let collection=null,pausedScene=null;
 let generation=0,nonce='',runtime,display,adapter,voices,editor,presentation,lighting,learned,last=0,paused=false,voiceEnabled=true;
+const danceControls=createDanceControls(value=>retimeDance(learned,value.tempo,performance.now()));
 const finishPaint=document.createElement('button');finishPaint.id='finishPaint';finishPaint.hidden=true;
 finishPaint.style.cssText='position:fixed;bottom:23%;left:8%;right:8%;z-index:5';document.body.appendChild(finishPaint);
 function closeEditor(){
@@ -26,7 +28,7 @@ const emit=message=>{
   window.dispatchEvent(new CustomEvent('snowbreak-event',{detail:value}));
 };
 const text=value=>{status.textContent=value;status.hidden=!value;};
-function cleanup(){learned=null;finishPaint.hidden=true;presentation?.dispose();lighting?.dispose();editor?.dispose();adapter?.stop('renderer-close');voices?.dispose();display?.dispose();void runtime?.dispose();lighting=presentation=editor=adapter=voices=display=runtime=null;editorHost.replaceChildren();}
+function cleanup(){danceControls.close();learned=null;finishPaint.hidden=true;presentation?.dispose();lighting?.dispose();editor?.dispose();adapter?.stop('renderer-close');voices?.dispose();display?.dispose();void runtime?.dispose();lighting=presentation=editor=adapter=voices=display=runtime=null;editorHost.replaceChildren();}
 
 async function load(url,id,variant){
   const ticket=++generation;nonce=id;paused=false;canvas.dataset.snowbreakPaused='false';cleanup();text('正在加载恩雅和病房…');
@@ -54,10 +56,10 @@ async function load(url,id,variant){
     display.setFrameHandler(()=>{
       const now=performance.now();if(!paused)adapter.tick(Math.min(100,Math.max(0,now-last)));last=now;
       if(!paused&&learned){
-        const time=(now-learned.start)/1000,end=Math.min(learned.duration,learned.stop===undefined?Infinity:(learned.stop-learned.start)/1000+.3);
-        if(time>=end){learned=null;}else{
-          const ramp=Math.max(0,Math.min(1,time/.3,(end-time)/.3)),weight=ramp*ramp*(3-2*ramp);
-          display.applyLearnedMotion(learned.id,time,weight);
+        const time=motionTime(learned,now),end=learned.duration,stopFade=learned.stop===undefined?1:Math.max(0,1-(now-learned.stop)/300);
+        if(time>=end||stopFade===0){learned=null;}else{
+          const ramp=Math.max(0,Math.min(1,time/.3,(end-time)/(.3*learned.rate),stopFade)),weight=ramp*ramp*(3-2*ramp);
+          display.applyLearnedMotion(learned.id,time,weight,{amplitude:danceControls.get().amplitude});
         }
       }
       const state=adapter.snapshot(),playStatus=learned?'learned:'+learned.id:state.status;
@@ -100,9 +102,11 @@ async function command(value){
     emit({type:'selfState',state:inspect()});return;
   }
   if(value.type==='touchPolicy'){aiControlledTouch=!!value.aiControlled;return;}
+  if(value.type==='danceSettings'){danceControls.set(value);return;}
+  if(value.type==='danceEdit'){danceControls.toggle();return;}
   if(value.type==='speechLevel'){display.embodiment.setSpeechLevel(value.value);return;}
   if(value.type==='gaze'){display.setGaze(value.x,value.y);return;}
-  if(value.type==='pause'){pausedScene=adapter.snapshot().sceneId;display.sceneInteractions.cancel();display.embodiment.reset();display.resetSenses();learned=null;paused=true;lighting?.close();presentation?.close();canvas.dataset.snowbreakPaused='true';adapter.stop('background');closeEditor();return;}
+  if(value.type==='pause'){danceControls.close();pausedScene=adapter.snapshot().sceneId;display.sceneInteractions.cancel();display.embodiment.reset();display.resetSenses();learned=null;paused=true;lighting?.close();presentation?.close();canvas.dataset.snowbreakPaused='true';adapter.stop('background');closeEditor();return;}
   if(value.type==='resume'){paused=false;canvas.dataset.snowbreakPaused='false';last=performance.now();if(pausedScene){adapter.enterScene(pausedScene);pausedScene=null;}else adapter.enterStandby();return;}
   if(value.type==='stop'){display.embodiment.reset();if(learned){learned.stop=performance.now();return;}adapter.stop();adapter.enterStandby();return;}
   if(value.type==='officialTouchPoints'){const count=display.sceneInteractions.togglePoints();if(!count)emit({type:'notice',message:'当前包／场景没有已移植的原作触点；互动4、5需使用新版互动包。'});return;}
@@ -126,10 +130,10 @@ async function command(value){
     display.embodiment.releaseHands();
     const clip=display.learnedOptions().find(c=>c.id===value.id);if(!clip)return;
     presentation.close();adapter.stop('learned-motion');adapter.enterStandby();
-    learned={id:clip.id,duration:clip.duration,start:performance.now()};
+    learned={id:clip.id,kind:clip.kind,duration:clip.duration,start:performance.now(),offset:0,rate:clip.kind==='standing-dance'?danceControls.get().tempo:1};
   }
 }
-function inspect(){return display?{...display.embodiment.snapshot(),interactionScene:adapter?.snapshot().sceneId||null,outfit:collection?.selection?.outfit||'unknown',mode:collection?.selection?.mode||'unknown'}:null;}
+function inspect(){return display?{...display.embodiment.snapshot(),learnedMotion:learned?{id:learned.id,time:motionTime(learned,performance.now()),rate:learned.rate,amplitude:danceControls.get().amplitude}:null,interactionScene:adapter?.snapshot().sceneId||null,outfit:collection?.selection?.outfit||'unknown',mode:collection?.selection?.mode||'unknown'}:null;}
 function portrait(){if(!display||paused)throw new Error('模型尚未就绪');const c=document.createElement('canvas'),ratio=1024/Math.max(canvas.width,canvas.height);c.width=Math.round(canvas.width*ratio);c.height=Math.round(canvas.height*ratio);const ctx=c.getContext('2d');ctx.fillStyle='#22202a';ctx.fillRect(0,0,c.width,c.height);display.drawSnapshot(ctx,c.width,c.height);return c.toDataURL('image/jpeg',.65);}
 window.SnowbreakHost={inspect,portrait,receive:value=>{void command(value).catch(error=>emit({type:'notice',message:String(error.message||error)}));}};
 addEventListener('pagehide',()=>{generation++;cleanup();});

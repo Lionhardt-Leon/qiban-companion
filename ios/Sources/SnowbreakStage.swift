@@ -214,6 +214,7 @@ struct SnowbreakTouchEvent {
     func pause() { paused = true;interactionRevision += 1;send(["type":"pause"]);activeAction = nil }
     func resume() { paused = false;send(["type":"resume"]) }
     func editTouch() { interactionRevision += 1;send(["type":"edit"]) }
+    func editDance(){send(["type":"danceEdit"])}
     func officialTouchPoints(){send(["type":"officialTouchPoints"])}
     func sceneVisible(_ value:Bool) { send(["type":"scene","visible":value]) }
     func gaze(x:CGFloat,y:CGFloat) { if ready { send(["type":"gaze","x":Double(x),"y":Double(y)]) } }

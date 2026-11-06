@@ -113,6 +113,7 @@ struct CompanionHome: View {
                                 Button("显示／隐藏原作触点") {snowbreak.officialTouchPoints()}
                                 Button("展示编辑：移动 / 旋转 / 缩放") { snowbreak.editFrame() }
                                 Button("采光与材质") { snowbreak.editLighting() }
+                                Button("舞蹈幅度与节奏") {snowbreak.editDance()}
                             } else {
                             ForEach(stage.actions) { action in Button(action.name) { stage.playAction(action.id) } }
                             if stage.supportsProcedural { Button("自由动作示范：抬手") { stage.demoMotion() } }

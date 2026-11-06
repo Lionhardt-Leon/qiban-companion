@@ -24,6 +24,8 @@ jobs:
       - name: Generate project
         working-directory: ios
         run: xcodegen generate
+      - name: Verify dance playback clock
+        run: node tools/test-dance-clock.mjs
       - name: Run core tests
         working-directory: ios
         run: |

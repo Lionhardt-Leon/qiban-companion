@@ -44,18 +44,20 @@ export function createLearnedMotions(root,camera,config,stance){
   return {right,up,front,vector:v=>right.clone().multiplyScalar(v[0]).addScaledVector(up,v[1]).addScaledVector(front,v[2])};
  }
  const solved=new Map();let lastClip=null,lastTime=-1;
- function apply(id,time,weight){
-  const clip=clips.get(id);if(!clip||weight<=0)return;diagnostics.fingerWrites=0;diagnostics.armWrites=0;diagnostics.chestWrites=0;diagnostics.workspaceAdjusted=0;
+ function apply(id,time,weight,options={}){
+  const clip=clips.get(id);if(!clip||weight<=0)return;const fullBody=clip.kind==='standing-dance',amplitude=fullBody&&Number.isFinite(options.amplitude)?THREE.MathUtils.clamp(options.amplitude,.5,1.2):1;diagnostics.fingerWrites=0;diagnostics.armWrites=0;diagnostics.chestWrites=0;diagnostics.workspaceAdjusted=0;
   if(id!==lastClip||time<=lastTime||time-lastTime>.2)solved.clear();lastClip=id;lastTime=time;
   root.updateWorldMatrix(true,true);let body=basis();const f=THREE.MathUtils.clamp(time*clip.fps,0,clip.frames-1),lo=Math.floor(f),hi=Math.min(lo+1,clip.frames-1),t=f-lo;
   function channel(key){const c=clip.channels[key];if(!c)return null;
+   if(fullBody&&c.width===1)return [THREE.MathUtils.lerp(c.values[lo],c.values[hi],t)];
+   if(fullBody&&c.width===3)return new THREE.Vector3().fromArray(c.values,lo*3).lerp(new THREE.Vector3().fromArray(c.values,hi*3),t).normalize().toArray();
    if(c.width===1){let sum=0;for(const offset of [-2,-1,0,1,2]){const sample=THREE.MathUtils.clamp(f+offset,0,clip.frames-1),a=Math.floor(sample),b=Math.min(a+1,clip.frames-1);sum+=(c.values[a]+(c.values[b]-c.values[a])*(sample-a))*(offset===0?.4:Math.abs(offset)===1?.2:.1);}return [sum];}
    if(c.width===4)return new THREE.Quaternion().fromArray(c.values,lo*4).slerp(new THREE.Quaternion().fromArray(c.values,hi*4),t).normalize().toArray();
    const result=new THREE.Vector3();
    for(const offset of [-2,-1,0,1,2]){const sample=THREE.MathUtils.clamp(f+offset,0,clip.frames-1),a=Math.floor(sample),b=Math.min(a+1,clip.frames-1);result.add(new THREE.Vector3().fromArray(c.values,a*3).lerp(new THREE.Vector3().fromArray(c.values,b*3),sample-a).multiplyScalar(offset===0?.4:Math.abs(offset)===1?.2:.1));}
    return result.normalize().toArray();
   }
-  function bounded(bone,reference,desired,max,strength=weight){const angle=reference.angleTo(desired),limit=THREE.MathUtils.degToRad(max);if(angle>limit)diagnostics.limited++;bone.quaternion.copy(reference).slerp(desired,strength*Math.min(1,limit/Math.max(angle,1e-8))).normalize();}
+  function bounded(bone,reference,desired,max,strength=weight){const angle=reference.angleTo(desired),limit=THREE.MathUtils.degToRad(max);if(angle>limit)diagnostics.limited++;bone.quaternion.copy(reference).slerp(desired,strength*Math.min(amplitude,limit/Math.max(angle,1e-8))).normalize();}
   function aim(bone,child,direction,max,strength=weight){
     bone.parent.updateWorldMatrix(true,false);
     const reference=bone.quaternion.clone(),transported=reference.clone();
@@ -71,14 +73,14 @@ export function createLearnedMotions(root,camera,config,stance){
    const parent=new THREE.Matrix4().extractRotation(bone.parent.matrixWorld),localDelta=parent.clone().invert().multiply(worldDelta).multiply(parent);
    const reference=bone.quaternion.clone(),desired=new THREE.Quaternion().setFromRotationMatrix(localDelta).multiply(reference).normalize();bounded(bone,reference,desired,limit,strength);bone.updateWorldMatrix(false,true);
   }
-  const fullBody=clip.kind==='standing-dance',groundUp=new THREE.Vector3(0,1,0).transformDirection(root.parent.matrixWorld),ground=fullBody?Math.min(...Object.values(legs).map(l=>pos(l.foot).dot(groundUp))):0;
-  diagnostics.legWrites=0;diagnostics.groundCorrection=0;
-  if(fullBody){applyDelta(pelvis,channel('pelvisDelta'),18,weight*.8);body=basis();}
-  const chestMotion=channel('chestDelta');if(chestMotion){applyDelta(chest,chestMotion,fullBody?25:10,weight*(fullBody?.75:.35));body=basis();diagnostics.chestWrites=1;}
+  const groundUp=new THREE.Vector3(0,1,0).transformDirection(root.parent.matrixWorld),ground=fullBody?Math.min(...Object.values(legs).map(l=>pos(l.foot).dot(groundUp))):0;
+  diagnostics.legWrites=0;diagnostics.groundCorrection=0;diagnostics.sourceTime=time;diagnostics.sourceFrame=f;diagnostics.sourceFPS=clip.fps;diagnostics.amplitude=amplitude;diagnostics.sourceBPM=fullBody?(id.includes('90bpm')?90:id.includes('120bpm')?120:60):null;
+  if(fullBody){applyDelta(pelvis,channel('pelvisDelta'),30,weight);body=basis();}
+  const chestMotion=channel('chestDelta');if(chestMotion){applyDelta(chest,chestMotion,fullBody?35:10,weight*(fullBody?1:.35));body=basis();diagnostics.chestWrites=1;}
   if(fullBody){
    for(const [side,leg] of Object.entries(legs)){
     if(leg.calf.parent!==leg.thigh||leg.foot.parent!==leg.calf)throw new Error('Standing leg hierarchy mismatch');
-    aim(leg.thigh,leg.calf,body.vector(channel(side+'Thigh')),110,weight);aim(leg.calf,leg.foot,body.vector(channel(side+'Calf')),150,weight);applyDelta(leg.foot,channel(side+'FootDelta'),35,weight*.65);diagnostics.legWrites+=3;
+    aim(leg.thigh,leg.calf,body.vector(channel(side+'Thigh')),110,weight);aim(leg.calf,leg.foot,body.vector(channel(side+'Calf')),150,weight);applyDelta(leg.foot,channel(side+'FootDelta'),45,weight);diagnostics.legWrites+=3;
    }
    const correction=THREE.MathUtils.clamp(ground-Math.min(...Object.values(legs).map(l=>pos(l.foot).dot(groundUp))),-.18,.18);
    const point=pos(pelvis),inverse=pelvis.parent.matrixWorld.clone().invert(),offset=point.clone().addScaledVector(groundUp,correction).applyMatrix4(inverse).sub(point.clone().applyMatrix4(inverse));pelvis.position.add(offset);pelvis.updateWorldMatrix(false,true);diagnostics.groundCorrection=correction;
@@ -103,7 +105,7 @@ export function createLearnedMotions(root,camera,config,stance){
   }
   for(const side of clip.arms){
    const chain=chains[side],digits=digitsBySide[side],upper=channel(side+'Upper'),lower=channel(side+'Lower');if(!upper||!lower)continue;
-   const armWeight=['greeting','peace'].includes(clip.kind)?weight*THREE.MathUtils.smoothstep(lower[1],-1,1):weight*.72;
+   const armWeight=['greeting','peace'].includes(clip.kind)?weight*THREE.MathUtils.smoothstep(lower[1],-1,1):weight*(fullBody?1:.72);
    const directions=clip.kind==='seated-dance'?seatedDirections(chain,upper,lower,side):{upper:body.vector(upper),lower:body.vector(lower)};
    aim(chain.upper,chain.lower,directions.upper,120,armWeight);aim(chain.lower,chain.hand,directions.lower,170,armWeight);diagnostics.armWrites+=2;
    const widthChannel=channel(side+'HandWidth'),forwardChannel=channel(side+'HandForward');
