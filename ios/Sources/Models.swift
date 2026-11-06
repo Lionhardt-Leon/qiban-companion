@@ -34,8 +34,10 @@ struct LocalArchive: Codable {
     var diary: [JournalEntry] = []
     var personaConversations:[String:PersonaConversation]? = nil
     var personaSessionKey:String? = nil
+    var moods:[String:CompanionMood]? = nil
 
     func validate() throws {
+        guard (moods?.count ?? 0)<=64,(moods ?? [:]).keys.allSatisfy({$0.count<=80}) else{throw CompanionError.message("心情资料过多。")};for mood in (moods ?? [:]).values {try mood.validate()}
         try settings.personas?.validate()
         try settings.speech?.validate()
         let saved = Array((personaConversations ?? [:]).values)

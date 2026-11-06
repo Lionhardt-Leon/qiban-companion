@@ -45,6 +45,7 @@ enum APIKeyStore {
     @Published private(set) var busy = false
     @Published var error: String?
     @Published private(set) var storageReady = false
+    @Published private(set) var behaviorStatus="等待本轮行为决定"
     @Published private(set) var dialogueAction: DialogueActionEvent?
     @Published private(set) var replyForSpeech:Message?
     @Published private(set) var conversationID = UUID()
@@ -93,6 +94,8 @@ enum APIKeyStore {
         archive = next
     }
 
+    private var moodKey:String {currentCard?.id.uuidString ?? "model:"+context.modelKey}
+    var mood:CompanionMood {archive.moods?[moodKey] ?? CompanionMood()}
     var currentCard:PersonaCard? {archive.settings.personas?.card(for:context.modelKey)}
     private func switchConversation(_ next:inout LocalArchive,to key:String) {
         guard next.personaSessionKey != key else {return}
@@ -108,6 +111,7 @@ enum APIKeyStore {
     }
     func activateCompanion(_ modelKey:String) {
         guard ["native","enya"].contains(modelKey) else {return}
+        if context.modelKey != modelKey {cancel()}
         if let card = archive.settings.personas?.card(for:modelKey),archive.personaSessionKey != card.id.uuidString {
             cancel();var next = archive;switchConversation(&next,to:card.id.uuidString)
             do {try commit(next)} catch {self.error = error.localizedDescription;return}
@@ -193,7 +197,7 @@ enum APIKeyStore {
         let snapshot = archive
         var settings = snapshot.settings
         var latestContext = context;latestContext.speechLanguage = settings.speech?.language ?? "zh"
-        settings.runtimeContext = latestContext;settings.runtimeImages = pendingExtraImages
+        latestContext.mood = mood.summary;settings.runtimeContext = latestContext;settings.runtimeImages = pendingExtraImages
         let actions = availableActions
         let image = pendingImage
         requestTask = Task {
@@ -206,8 +210,10 @@ enum APIKeyStore {
                 guard requestID == id else { return }
                 var next = archive
                 let assistant=Message(role: "assistant", content: reply.text,spokenJapanese:reply.spokenJapanese)
+                if let affect=reply.affect {var value=mood;try value.apply(affect);if next.moods == nil {next.moods=[:]};next.moods?[moodKey]=value}
                 next.messages.append(assistant)
                 try commit(next)
+                behaviorStatus=reply.hasBodyDecision || reply.action != nil ? (reply.action.map{"已绑定行为："+$0} ?? "本轮未选择动作") : "接口未返回有效身体决定，本轮仅显示文字"
                 replyForSpeech=assistant
                 pendingImage = nil
                 pendingExtraImages = []
@@ -232,7 +238,7 @@ enum APIKeyStore {
     }
     func restartConversation() throws {
         var next = archive
-        next.messages = [];next.memories = ""
+        next.messages = [];next.memories = "";next.moods?.removeValue(forKey:moodKey)
         if let key = next.personaSessionKey {next.personaConversations?.removeValue(forKey:key)}
         // Preserve a local recovery snapshot; it never enters the new API context.
         guard storageReady else {throw CompanionError.message("本地存储未就绪，未清除资料。")}

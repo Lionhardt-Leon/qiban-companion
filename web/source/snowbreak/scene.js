@@ -11,7 +11,7 @@ export async function createLocalScene(runtime,parent,prepare){
   const config=runtime.getAsset('localScene')?.data;
   if(!config)return {root:null,setVisible(){},setRoomVisible(){},setCutaway(){},updateView(){},snapshot:()=>({available:false,originalSceneVerified:false})};
   if(config.schema!=='snowbreak-local-scene/1'||config.characterId!==runtime.current.characterId||config.originalSceneVerified!==false||!/^[a-f0-9]{64}$/.test(config.sourceMapSha256)||!Array.isArray(config.objects)||!config.objects.length||config.objects.length>16)throw new Error('Invalid local scene');
-  const inverse=sceneTransform(config.characterWorld).invert(),root=new THREE.Group(),room=new THREE.Group(),ids=new Set(),items=[],cutawayMaterials=[];
+  const inverse=sceneTransform(config.characterWorld).invert(),root=new THREE.Group(),room=new THREE.Group(),ids=new Set(),items=[],cutawayMaterials=[],furnitureMeshes=[];
   root.add(room);const cutPlane=new THREE.Plane();let cutaway=true;
   for(const item of config.objects){
     const asset=runtime.getAsset(item.assetRole);
@@ -22,6 +22,7 @@ export async function createLocalScene(runtime,parent,prepare){
     let triangles=0;part.traverse(m=>{if(m.isSkinnedMesh)throw new Error('Animated scene needs a separate binding');if(m.isMesh)triangles+=(m.geometry.index?.count||m.geometry.attributes.position.count)/3;});
     const holder=new THREE.Group();holder.name=item.id;holder.matrixAutoUpdate=false;holder.matrix.copy(matrix);holder.add(part);(item.group==='room'?room:root).add(holder);prepare(part);
     part.traverse(m=>{if(m.isMesh){if(item.group==='room')m.material.side=THREE.FrontSide;if(item.cutaway){m.material.clippingPlanes=[cutPlane];cutawayMaterials.push(m.material);}if(item.group==='room'||item.cutaway)m.material.needsUpdate=true;}});
+    if(item.group!=='room')part.traverse(mesh=>{if(mesh.isMesh)furnitureMeshes.push(mesh);});
     items.push({id:item.id,assetRole:item.assetRole,group:item.group||'furniture',cutaway:!!item.cutaway,triangles,matrix:matrix.toArray()});
   }
   parent.add(root);root.updateMatrixWorld(true);
@@ -35,5 +36,14 @@ export async function createLocalScene(runtime,parent,prepare){
     cutPlane.setFromNormalAndCoplanarPoint(towards.negate(),point);
   }
   function setCutaway(value){const next=!!value;if(next===cutaway)return;cutaway=next;for(const material of cutawayMaterials){material.clippingPlanes=cutaway?[cutPlane]:null;material.needsUpdate=true;}}
-  return {root,hasCutaway:cutawayMaterials.length>0,updateView,setRoomVisible:value=>{room.visible=!!value;},setCutaway,setVisible:value=>{root.visible=!!value;},snapshot:()=>({available:true,visible:root.visible,roomAvailable:room.children.length>0,roomVisible:room.visible,cutawayAvailable:cutawayMaterials.length>0,cutaway,clipPlane:[...cutPlane.normal.toArray(),cutPlane.constant],objects:items.map(x=>({...x,matrix:[...x.matrix]})),originalSceneVerified:false})};
+  const heights=new Map(),ray=new THREE.Raycaster(),up=new THREE.Vector3(0,1,0);
+  function contactSurface(worldPoint){
+    if(!root.visible)return null;root.updateWorldMatrix(true,true);const point=root.worldToLocal(worldPoint.clone()),key=Math.round(point.x/.015)+':'+Math.round(point.z/.015);let height=heights.get(key);
+    if(height===undefined){const box=new THREE.Box3().setFromObject(root).applyMatrix4(root.matrixWorld.clone().invert()),origin=root.localToWorld(new THREE.Vector3(point.x,box.max.y+.3,point.z)),direction=up.clone().transformDirection(root.matrixWorld).negate();ray.set(origin,direction);height=null;
+      for(const hit of ray.intersectObjects(furnitureMeshes,false)){const normal=hit.face?.normal.clone().transformDirection(hit.object.matrixWorld);if(normal&&Math.abs(normal.dot(direction))>.65){height=root.worldToLocal(hit.point.clone()).y;break;}}
+      heights.set(key,height);if(heights.size>512)heights.delete(heights.keys().next().value);
+    }
+    return height===null?null:{clearance:point.y-height,normal:up.clone().transformDirection(root.matrixWorld),height};
+  }
+  return {root,contactSurface,hasCutaway:cutawayMaterials.length>0,updateView,setRoomVisible:value=>{room.visible=!!value;},setCutaway,setVisible:value=>{root.visible=!!value;},snapshot:()=>({available:true,visible:root.visible,roomAvailable:room.children.length>0,roomVisible:room.visible,cutawayAvailable:cutawayMaterials.length>0,cutaway,clipPlane:[...cutPlane.normal.toArray(),cutPlane.constant],objects:items.map(x=>({...x,matrix:[...x.matrix]})),originalSceneVerified:false})};
 }

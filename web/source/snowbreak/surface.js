@@ -1,9 +1,10 @@
+import {createBindAnatomy} from './bind-anatomy.js';
 import * as THREE from 'three';
 import {weightedAnatomy} from './anatomy.js';
 // Raycast the current skinned triangles, then test their actual texture alpha.
 // Bone proximity is deliberately not treated as a semantic body-part label.
 export function createSurfacePicker(root,camera,canvas,occluder=null){
-  const ray=new THREE.Raycaster(),alphaIds=new WeakMap(),alphaTiles=new Map();let alphaID=0;
+  const ray=new THREE.Raycaster(),alphaIds=new WeakMap(),alphaTiles=new Map(),anatomyByMesh=new WeakMap();let alphaID=0;
   const alphaCanvas=document.createElement('canvas');alphaCanvas.width=alphaCanvas.height=32;
   const alphaContext=alphaCanvas.getContext('2d',{willReadFrequently:true});
   function refineTorso(anatomy,point){
@@ -53,18 +54,19 @@ export function createSurfacePicker(root,camera,canvas,occluder=null){
       const bary=THREE.Triangle.getBarycoord(local,...vertices,new THREE.Vector3());
       const influences=[],skin=mesh.geometry.getAttribute('skinIndex'),weights=mesh.geometry.getAttribute('skinWeight');
       if(mesh.isSkinnedMesh&&skin&&weights&&bary)for(let v=0;v<3;v++)for(let j=0;j<4;j++)influences.push({name:mesh.skeleton.bones[skin.getComponent(ids[v],j)]?.name,weight:weights.getComponent(ids[v],j)*bary.getComponent(v)});
-      return {mesh:mesh.userData.snowbreakSurfaceKey,triangle:hit.faceIndex,barycentric:bary?.toArray(),anatomy:refineTorso(weightedAnatomy(influences),hit.point),uv:hit.uv?.toArray()||null,point:hit.point.toArray(),distance:hit.distance,alphaVerified:alpha!==null,material:mesh.userData.snowbreakMaterialName};
+      if(!anatomyByMesh.has(mesh))anatomyByMesh.set(mesh,createBindAnatomy(mesh));const weighted=weightedAnatomy(influences),anatomy=anatomyByMesh.get(mesh)(ids,bary,weighted)||refineTorso(weighted,hit.point);
+      return {skinBones:influences.filter(i=>i.weight>.05).map(i=>i.name),mesh:mesh.userData.snowbreakSurfaceKey,triangle:hit.faceIndex,barycentric:bary?.toArray(),anatomy,uv:hit.uv?.toArray()||null,point:hit.point.toArray(),distance:hit.distance,alphaVerified:alpha!==null,material:mesh.userData.snowbreakMaterialName};
     }
     return null;
   };
 }
 
-export const SURFACE_REGIONS={head:'头部',forehead:'额头',hair:'头发',left_cheek:'左脸颊',right_cheek:'右脸颊',left_shoulder:'左肩',right_shoulder:'右肩',face:'脸部',neck:'颈部',chest:'胸部',hips:'臀部',torso:'躯干',waist:'腰部',abdomen:'腹部',back:'背部',arm:'手臂',hand:'手',left_hand:'左手',right_hand:'右手',leg:'腿部',foot:'脚'};
+export const SURFACE_REGIONS={head:'头部',forehead:'额头',hair:'头发',left_cheek:'左脸颊',right_cheek:'右脸颊',left_shoulder:'左肩',right_shoulder:'右肩',face:'脸部',neck:'颈部',chest:'胸部',pelvis_front:'骨盆前部',hips:'臀部',torso:'躯干',waist:'腰部',abdomen:'腹部',back:'背部',arm:'手臂',hand:'手',left_hand:'左手',right_hand:'右手',leg:'腿部',foot:'脚'};
 export function surfaceKey(hit){if(!hit||typeof hit.mesh!=='string'||!Number.isInteger(hit.triangle)||hit.triangle<0)return null;return hit.mesh+':'+hit.triangle;}
 export function classifySurface(hit,labels){
   const key=surfaceKey(hit),value=key&&labels[key],id=typeof value==='string'?value:value?.id;
   if(!hit?.alphaVerified)return null;
-  if(value===undefined&&['weighted-skinned-triangle','rig-surface-estimate'].includes(hit.anatomy?.source)&&hit.anatomy.confidence>=.7&&Object.hasOwn(SURFACE_REGIONS,hit.anatomy.id))return {...hit.anatomy,label:SURFACE_REGIONS[hit.anatomy.id]+(hit.anatomy.source==='rig-surface-estimate'?'（骨骼估计）':''),group:hit.anatomy.id};
+  if(value===undefined&&['weighted-skinned-triangle','rig-surface-estimate','bind-pose-surface'].includes(hit.anatomy?.source)&&hit.anatomy.confidence>=.7&&Object.hasOwn(SURFACE_REGIONS,hit.anatomy.id))return {...hit.anatomy,label:SURFACE_REGIONS[hit.anatomy.id]+(hit.anatomy.source==='rig-surface-estimate'?'（骨骼估计）':''),group:hit.anatomy.id};
   if(!Object.hasOwn(SURFACE_REGIONS,id))return null;
   const anatomy=id==='left_hand'?{group:'hand',side:'left'}:id==='right_hand'?{group:'hand',side:'right'}:{group:id};
   if(typeof value==='string')return {id,label:SURFACE_REGIONS[id],...anatomy,confidence:1,source:'manual-skinned-triangle'};

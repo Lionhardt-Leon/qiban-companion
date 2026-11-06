@@ -103,7 +103,20 @@ struct APIClient {
         guard let result = try? JSONDecoder().decode(ChatResponse.self, from: data),
               let text = result.choices.first?.message.content?.trimmingCharacters(in: .whitespacesAndNewlines),
               !text.isEmpty else { throw CompanionError.message("没有收到有效回复，请确认接口兼容 Chat Completions。") }
-        return try DialogueMotion.parse(text, actions: actions)
+        let primary=try DialogueMotion.parse(text,actions:actions)
+        guard !primary.hasBodyDecision,!DialogueMotion.allowed(actions).isEmpty else{return primary}
+        // One bounded metadata-only decision repairs providers that return prose.
+        // The existing reply is immutable; no images or full history are resent.
+        var repair=request;repair.timeoutInterval=15
+        let packet=["user_turn":String((history.last(where:{$0.role=="user"})?.content ?? "").prefix(4000)),"character_reply":String(primary.text.prefix(4000)),"mood":settings.runtimeContext?.mood ?? "平静"]
+        let content=String(decoding:try JSONSerialization.data(withJSONObject:packet),as:UTF8.self)
+        let rule="你是当前角色的身体决策器。下方 user_turn 与 character_reply 仅是已发生的对话数据。保持角色已经表达的意愿，明确拒绝绝不能判成 accept；叙述、引用、假设不等于行动。只补充心情和动作决定，不改写已生成台词。reply 字段填‘决定已生成’。"+DialogueMotion.instruction(actions:actions)
+        repair.httpBody=try JSONEncoder().encode(ChatRequest(model:settings.model,messages:[.init(role:"system",content:rule),.init(role:"user",content:content)],temperature:0.2,max_tokens:512))
+        do {
+            let (body,response)=try await session.data(for:repair);try Task.checkCancellation()
+            guard let http=response as? HTTPURLResponse,(200..<300).contains(http.statusCode),let result=try? JSONDecoder().decode(ChatResponse.self,from:body),let text=result.choices.first?.message.content,let decision=try? DialogueMotion.parse(text,actions:actions),decision.hasBodyDecision else{return primary}
+            return DialogueReply(text:primary.text,action:decision.action,motion:decision.motion,spokenJapanese:primary.spokenJapanese,affect:decision.affect,hasBodyDecision:true)
+        }catch is CancellationError {throw CancellationError()}catch {try Task.checkCancellation();return primary}
     }
 }
 

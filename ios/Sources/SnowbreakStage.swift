@@ -176,7 +176,7 @@ struct SnowbreakTouchEvent {
             } catch { self.error = "角色保存失败："+error.localizedDescription }
         case "playback":
             let active = body["active"] as? Bool == true
-            if active,activeAction == nil { interactionRevision += 1 }
+            // Playback events are not user edits and must not invalidate a pending AI turn.
             let status = body["status"] as? String ?? ""
             activeAction = active ? (status.hasPrefix("learned:") ? "恩雅 · Yuki 学习动作" : "恩雅互动") : nil
         case "selfState": if let value = body["state"] as? [String:Any] {updateBody(value)}
@@ -214,6 +214,7 @@ struct SnowbreakTouchEvent {
     func pause() { paused = true;interactionRevision += 1;send(["type":"pause"]);activeAction = nil }
     func resume() { paused = false;send(["type":"resume"]) }
     func editTouch() { interactionRevision += 1;send(["type":"edit"]) }
+    func editModel(){send(["type":"modelEdit"])}
     func editDance(){send(["type":"danceEdit"])}
     func officialTouchPoints(){send(["type":"officialTouchPoints"])}
     func sceneVisible(_ value:Bool) { send(["type":"scene","visible":value]) }

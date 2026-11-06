@@ -10,7 +10,8 @@ export function mountSurfaceEditor(display,canvas,host,{load,save,tracker,onEven
   const legend=document.createElement('div');for(const [id,name] of Object.entries(SURFACE_REGIONS)){const item=document.createElement('span');item.textContent='■ '+name+' ';item.style.color='#'+SURFACE_COLORS[id].toString(16).padStart(6,'0');legend.appendChild(item);}host.appendChild(legend);
   const undo=document.createElement('button'),redo=document.createElement('button');undo.id='snowSurfaceUndo';redo.id='snowSurfaceRedo';undo.textContent='撤销标注';redo.textContent='重做标注';host.append(undo,redo);
   const overlayInfo=document.createElement('p');overlayInfo.id='snowSurfaceOverlayInfo';host.appendChild(overlayInfo);
-  const status=document.createElement('p');status.id='snowSurfaceStatus';status.textContent='颜色只表示已确认标签，不代表自动识别正确；未标注表面按蒙皮权重保守识别，不确定时保持未知。';host.appendChild(status);
+  const reset=document.createElement('button');reset.id='snowSurfaceReset';reset.textContent='重新自动识别部位（可撤销）';host.append(reset);
+  const status=document.createElement('p');status.id='snowSurfaceStatus';status.textContent='颜色只表示已确认标签，不代表自动识别正确；未标注表面按绑定姿态分区及蒙皮权重识别，不确定时保持未知。';host.appendChild(status);
   let active=null,scheduled=0,disposed=false;
   const classify=hit=>{const key=surfaceKey(hit);return classifySurface(hit,key?{[key]:labels.get(key)}:{});};
   function sync(){if(disposed)return;const state=labels.state();undo.disabled=!state.undo;redo.disabled=!state.redo;const overlay=display.setSurfaceLabels?.(labels.snapshot(),view.checked);overlayInfo.textContent=view.checked?`已显示 ${overlay?.triangles||0} 个标签三角形${overlay?.truncated?'（显示上限5000，其余标签仍保留）':''}；颜色不是自动识别准确率。`:'显示颜色默认关闭；撤销历史仅保留本次页面最近30次操作。';}
@@ -19,6 +20,7 @@ export function mountSurfaceEditor(display,canvas,host,{load,save,tracker,onEven
   function cancelActive(){if(!active)return;if(active.mode==='paint')labels.cancel();tracker.cancel();const id=active.id;active=null;if(canvas.hasPointerCapture(id))canvas.releasePointerCapture(id);sync();}
   edit.onchange=()=>{cancelActive();if(edit.checked)view.checked=true;sync();};select.onchange=cancelActive;view.onchange=sync;
   undo.onclick=()=>{cancelActive();if(labels.undo()){persist();status.textContent='已撤销一次标注操作。';}};redo.onclick=()=>{cancelActive();if(labels.redo()){persist();status.textContent='已重做一次标注操作。';}};
+  reset.onclick=()=>{cancelActive();labels.begin();for(const key of Object.keys(labels.snapshot()))labels.set(key,undefined);if(labels.commit())persist();status.textContent='已移除当前模型的旧标注，改用绑定姿态分区；可撤销。';};
   function mark(hit){const key=surfaceKey(hit);if(!key||!hit.alphaVerified)return;labels.set(key,active.region||undefined);schedule();status.textContent=`当前共 ${labels.state().count} 个表面三角形；${SURFACE_REGIONS[active.region]||'擦除'}，松手保存。`;}
   function down(e){
     if(active||canvas.dataset.snowbreakFrameEdit==='true'||(!edit.checked&&!enabled()))return;e.stopPropagation();const hit=display.pickSurface(e.clientX,e.clientY);

@@ -24,6 +24,9 @@ struct CompanionHome: View {
     @State private var sheet: HomeSheet?
     @State private var draft = ""
     @State private var pendingMotionRevision: Int?
+    @State private var waitingBodyAction:WaitingBodyAction?
+    @State private var greetedModels=Set<String>()
+    @State private var showingMood=false
     @State private var nativeEditing = false
     @State private var nativeRotating = false
     @State private var nativePresentation = ScenePresentation.load()
@@ -45,10 +48,12 @@ struct CompanionHome: View {
                          mode:isSnowbreak ? (snowbreak.companionMode == "standing" ? "看板娘站立":"皮肤互动场景（以身体实况为准）"):"本地角色展示",
                          activeAction:activeAction ?? "待机",origin:origin,bodyStatus:(isSnowbreak ? snowbreak.bodyState:stage.bodyState).summary+"；最近屏幕互动："+lastTouchSummary)
     }
-    private func stopAction() { if isSnowbreak { snowbreak.stop() } else { stage.stopAction() } }
+    private func stopAction() {waitingBodyAction=nil; if isSnowbreak { snowbreak.stop() } else { stage.stopAction() } }
+    private func performMotion(_ event:DialogueActionEvent){if isSnowbreak{snowbreak.play(event.action,withVoice:false,automatic:true)}else{stage.performDialogueAction(event.action,motion:event.motion)}}
+    private func greetIfReady(){guard isSnowbreak,sheet==nil,scenePhase == .active,!greetedModels.contains(modelKey),let action=CompanionBehavior.resolve("greet",actions:availableActions) else{return};greetedModels.insert(modelKey);if isSnowbreak{snowbreak.play(action,withVoice:snowbreakVoice,automatic:true)}else{stage.performDialogueAction(action)}}
     private func resumeStage() {
         store.activateCompanion(modelKey)
-        if isSnowbreak { stage.stop();snowbreak.resume() }
+        if isSnowbreak { stage.stop();snowbreak.resume();greetIfReady() }
         else { snowbreak.pause();Task { await stage.refresh();stage.start() } }
     }
 
@@ -94,6 +99,7 @@ struct CompanionHome: View {
                                 }
                             }
                             Button("查看当前身体状态"){showingBodyState = true}
+                            Button("心情与行为状态"){showingMood=true}
                             Button(senses.environment ? "停止环境聆听" : "环境声音反馈（本机）") { speech.stop();senses.toggleEnvironment() }
                             if isSnowbreak {
                                 if snowbreak.variantIDs.count == 4 {
@@ -111,7 +117,8 @@ struct CompanionHome: View {
                                 }
                                 Button("精细触碰表面标注") { snowbreak.editTouch() }
                                 Button("显示／隐藏原作触点") {snowbreak.officialTouchPoints()}
-                                Button("展示编辑：移动 / 旋转 / 缩放") { snowbreak.editFrame() }
+                                Button("仅移动角色（场景不动）") {snowbreak.editModel()}
+                                Button("整体场景与镜头编辑") { snowbreak.editFrame() }
                                 Button("采光与材质") { snowbreak.editLighting() }
                                 Button("舞蹈幅度与节奏") {snowbreak.editDance()}
                             } else {
@@ -217,31 +224,35 @@ struct CompanionHome: View {
                 }
             }
         }
-        .onChange(of:store.busy) { value in if value {speech.stop();senses.prepareReply()}else {if store.error != nil {senses.replyFailed()};scheduleTouches()} }
-        .onChange(of:store.conversationID) {_ in speech.stop();clearTouches()}
+        .onChange(of:store.busy) { value in if value {waitingBodyAction=nil;speech.stop();senses.prepareReply()}else {if store.error != nil {senses.replyFailed()};scheduleTouches()} }
+        .onChange(of:store.conversationID) {_ in waitingBodyAction=nil;speech.stop();clearTouches()}
         .onChange(of:store.archive.settings.speech) {_ in speech.stop()}
         .onChange(of:speech.mouthLevel) {value in if isSnowbreak {snowbreak.setSpeechLevel(value)}else{stage.setSpeechLevel(value)}}
         .onChange(of:touchAI) {if !$0 {clearTouches()};snowbreak.setTouchPolicy($0 && !store.archive.settings.endpoint.isEmpty)}
         .onChange(of:store.archive.settings.endpoint) {_ in snowbreak.setTouchPolicy(touchAI && !store.archive.settings.endpoint.isEmpty)}
-        .onChange(of: store.dialogueAction?.id) { _ in
-            guard let event = store.dialogueAction else { return }
-            if sheet == nil, scenePhase == .active,
-               pendingMotionRevision == currentRevision {
-                if isSnowbreak { snowbreak.play(event.action,withVoice:false,automatic:true) }
-                else { stage.performDialogueAction(event.action,motion:event.motion) }
-            }
-            pendingMotionRevision = nil
+        .onChange(of:store.dialogueAction?.id){_ in
+            guard let event=store.dialogueAction else{return}
+            if sheet==nil,scenePhase == .active,pendingMotionRevision==currentRevision {
+                if event.action != "stop",speech.busy,let reply=store.replyForSpeech {waitingBodyAction=WaitingBodyAction(event:event,messageID:reply.id,conversationID:store.conversationID,revision:currentRevision)}else{performMotion(event)}
+            };pendingMotionRevision=nil
         }
+        .onChange(of:speech.playbackStarted?.id){_ in
+            guard let started=speech.playbackStarted,let pending=waitingBodyAction else{return};waitingBodyAction=nil
+            if sheet==nil,scenePhase == .active,pending.matches(messageID:started.messageID,conversationID:store.conversationID,revision:currentRevision){performMotion(pending.event)}
+        }
+        .onChange(of:speech.busy){if !$0 {waitingBodyAction=nil}}
+        .alert("心情与行为状态",isPresented:$showingMood){Button("关闭",role:.cancel){}}message:{Text(store.mood.summary+"\n当前动作："+(activeAction ?? "待机")+"\n"+store.behaviorStatus+"\n非结构化回复会补一次动作决策请求。行为在语音实际开始时启动。")}
         .onChange(of:snowbreak.touch?.id) { _ in
             guard isSnowbreak,let touch=snowbreak.touch else{return};queueTouch(touch.message)
         }
         .onChange(of:engine) { _ in clearTouches();pendingMotionRevision = nil;nativeEditing = false;resumeStage() }
         .onChange(of:nativePresentation) { value in stage.setPresentation(value);value.save() }
         .onChange(of:showBackground) { value in snowbreak.sceneVisible(value) }
-        .onChange(of:snowbreak.ready) { ready in if ready { snowbreak.sceneVisible(showBackground);snowbreak.setVoice(snowbreakVoice);snowbreak.setTouchPolicy(touchAI && !store.archive.settings.endpoint.isEmpty) } }
+        .onChange(of:snowbreak.ready) { ready in if ready { snowbreak.sceneVisible(showBackground);snowbreak.setVoice(snowbreakVoice);snowbreak.setTouchPolicy(touchAI && !store.archive.settings.endpoint.isEmpty);greetIfReady() } }
         .onChange(of:snowbreakVoice) { value in snowbreak.setVoice(value) }
+        .onChange(of:stage.name){_ in greetIfReady()}
         .task { resumeStage() }
-        .onDisappear { clearTouches();camera.stop();senses.suspend();speech.stop();stage.stop();snowbreak.pause() }
+        .onDisappear { waitingBodyAction=nil;clearTouches();camera.stop();senses.suspend();speech.stop();stage.stop();snowbreak.pause() }
         .onChange(of: scenePhase) { phase in
             if phase == .active, sheet == nil { resumeStage() } else { clearTouches();camera.stop();senses.suspend();speech.stop();stage.stop();snowbreak.pause() }
         }
