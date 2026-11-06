@@ -69,7 +69,7 @@ struct PersonaView:View {
                         do {
                             guard let url = try result.get() else{return}
                             let granted = url.startAccessingSecurityScopedResource();defer{if granted{url.stopAccessingSecurityScopedResource()}}
-                            guard (try url.resourceValues(forKeys:[.fileSizeKey]).fileSize ?? 0) <= 2_000_000 else {throw CompanionError.message("角色卡 JSON 超过 2MB。")}
+                            guard (try url.resourceValues(forKeys:[.fileSizeKey]).fileSize ?? 0) <= PersonaLimits.transferBytes else {throw CompanionError.message("角色卡 JSON 超过50MB。")}
                             let value = try PersonaTransfer.decode(Data(contentsOf:url),into:library)
                             library = value.0;selected = value.1;tab = "AI 人设";notice = "已读入草稿，点击保存后生效。导入不会连接外部资源。"
                         } catch {store.error = error.localizedDescription}
@@ -116,7 +116,7 @@ struct PersonaView:View {
             editor("场景",text:card.scenario,hint:"你们目前所处的情境与关系阶段")
             editor("示例对话",text:card.examples,hint:"支持 {{char}} 与 {{user}}；示例不会当作真实聊天经历。")
             DisclosureGroup("开场白与备注") {
-                editor("开场白",text:greetings,hint:"多条之间单独一行写 ---；只在空对话中手动使用。")
+                editor("开场白",text:greetings,hint:"多条之间单独一行写 ---；每条最多8000字、最多20条，只在空对话中手动使用。",limit:nil)
                 editor("创作者备注",text:card.notes,hint:"仅本地管理，不发给 AI。")
             }.padding(16).background(.white.opacity(0.035),in:RoundedRectangle(cornerRadius:18))
         }
@@ -135,7 +135,7 @@ struct PersonaView:View {
     }
     private var systemFields:some View {
         VStack(spacing:16) {
-            editor("全局系统提示词",text:$library.systemPrompt,hint:"所有角色共用的语言、回复长度及相处规则",id:"personaSystemInput")
+            editor("全局系统提示词",text:$library.systemPrompt,hint:"所有角色共用的语言、回复长度及相处规则。正文单字段最多100万字，当前人设拼接最多200万字；字数不是token，实际容量取决于所选模型和接口。",id:"personaSystemInput")
             editor("当前角色补充规则",text:card.systemRules,hint:"仅针对当前角色的特殊要求")
             editor("回复补充规则",text:card.replyRules,hint:"角色卡的 post_history_instructions 在此作为系统补充规则使用。")
             Button("预览实际发送的提示词") {
@@ -178,12 +178,12 @@ struct PersonaView:View {
         VStack(alignment:.leading,spacing:10){Text(title).font(.headline);Text(hint).font(.caption).foregroundStyle(.secondary);content()}
             .frame(maxWidth:.infinity,alignment:.leading).padding(16).background(.white.opacity(0.035),in:RoundedRectangle(cornerRadius:18))
     }
-    private func editor(_ title:String,text:Binding<String>,hint:String,id:String = "") -> some View {
+    private func editor(_ title:String,text:Binding<String>,hint:String,id:String = "",limit:Int? = PersonaLimits.fieldCharacters) -> some View {
         panel(title,hint) {
             TextEditor(text:text).frame(minHeight:110).scrollContentBackground(.hidden).padding(8)
                 .background(.black.opacity(0.18),in:RoundedRectangle(cornerRadius:12))
                 .accessibilityLabel(title).accessibilityIdentifier(id)
-            Text("\(text.wrappedValue.count) 字").font(.caption2).foregroundStyle(.secondary).frame(maxWidth:.infinity,alignment:.trailing)
+            Text("\(text.wrappedValue.count) 字"+(limit.map{" / 上限\($0)字"} ?? "")).font(.caption2).foregroundStyle(.secondary).frame(maxWidth:.infinity,alignment:.trailing)
         }
     }
 }

@@ -1,5 +1,12 @@
 import Foundation
 
+enum PersonaLimits {
+    static let fieldCharacters=1_000_000
+    static let promptCharacters=2_000_000
+    static let libraryTextBytes=64_000_000
+    static let transferBytes=50_000_000
+}
+
 struct PersonaCard: Codable, Identifiable, Equatable {
     var id = UUID()
     var title = "新角色"
@@ -42,18 +49,24 @@ struct PersonaLibrary: Codable, Equatable {
               defaultCardID.map({ids.contains($0)}) == true,
               modelBindings.keys.allSatisfy({["native","enya"].contains($0)}),
               modelBindings.values.allSatisfy({ids.contains($0)}),
-              [systemPrompt,userDescription,bodyStyle].allSatisfy({$0.count <= 12_000}),userName.count <= 120 else {
+              [systemPrompt,userDescription,bodyStyle].allSatisfy({$0.count <= PersonaLimits.fieldCharacters}),userName.count <= 120 else {
             throw CompanionError.message("人设库格式无效，最多保存 50 张角色卡。")
         }
+        var textBytes=[systemPrompt,userName,userDescription,bodyStyle].reduce(0){$0+$1.utf8.count}
         for card in cards {
             guard !card.title.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty,
                   card.title.count <= 120,!card.name.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty,card.name.count <= 120,
-                  [card.description,card.personality,card.scenario,card.examples,card.systemRules,card.replyRules,card.userDescription,card.notes].allSatisfy({$0.count <= 12_000}),
                   card.userName.count <= 120,card.firstMessages.count <= 20,card.firstMessages.allSatisfy({$0.count <= 8_000}),
                   card.tags.count <= 20,card.tags.allSatisfy({$0.count <= 100}) else {
-                throw CompanionError.message("角色卡字段过长或名称为空，请检查后保存。")
+                throw CompanionError.message("请检查角色名称（1～120字）、标签及开场白（每条最多8000字，最多20条）。")
             }
+            for (label,text) in [("人物描述",card.description),("性格",card.personality),("场景",card.scenario),("示例对话",card.examples),("角色规则",card.systemRules),("回复规则",card.replyRules),("专属用户人设",card.userDescription),("创作者备注",card.notes)] {
+                guard text.count<=PersonaLimits.fieldCharacters else{throw CompanionError.message("「\(card.title)」的\(label)超过100万字，原内容未保存。")}
+                textBytes+=text.utf8.count
+            }
+            textBytes += ([card.title,card.name,card.userName]+card.firstMessages+card.tags).reduce(0){$0+$1.utf8.count}
         }
+        guard textBytes<=PersonaLimits.libraryTextBytes else{throw CompanionError.message("人设库正文合计超过64MB，请分库管理后重试。")}
     }
 }
 
@@ -74,15 +87,18 @@ enum PersonaPrompt {
         // One pass: replacement names cannot introduce new macros recursively.
         let pattern = #"\{\{(char|user)\}\}"#
         guard let regex = try? NSRegularExpression(pattern:pattern,options:.caseInsensitive) else { return text }
-        var result = text
-        for match in regex.matches(in:text,range:NSRange(text.startIndex...,in:text)).reversed() {
-            guard let keyRange = Range(match.range(at:1),in:text),let range = Range(match.range,in:result) else {continue}
-            result.replaceSubrange(range,with:text[keyRange].lowercased() == "char" ? char:user)
+        var result="";result.reserveCapacity(text.utf8.count);var cursor=text.startIndex
+        regex.enumerateMatches(in:text,range:NSRange(text.startIndex...,in:text)){match,_,_ in
+            guard let match=match,let keyRange=Range(match.range(at:1),in:text),let range=Range(match.range,in:text) else{return}
+            result.append(contentsOf:text[cursor..<range.lowerBound]);result.append(text[keyRange].lowercased()=="char" ? char:user);cursor=range.upperBound
         }
+        result.append(contentsOf:text[cursor...])
         return result
     }
     static func character(settings:APISettings,context:CompanionContext) throws -> String {
-        guard let library = settings.personas else { return String(settings.persona.prefix(12_000)) }
+        guard let library = settings.personas else {
+            guard settings.persona.count<=PersonaLimits.fieldCharacters else{throw CompanionError.message("旧版人设超过100万字，请在人设页拆分整理。")};return settings.persona
+        }
         try library.validate()
         guard let card = library.card(for:context.modelKey) else {throw CompanionError.message("当前伙伴没有可用角色卡。")}
         let user = card.userName.isEmpty ? (library.userName.isEmpty ? "你":library.userName):card.userName
@@ -95,7 +111,7 @@ enum PersonaPrompt {
             ("身体表现偏好",library.bodyStyle)
         ]
         let result = sections.filter{!$0.1.isEmpty}.map{"【\($0.0)】\n"+substitute($0.1,char:card.name,user:user)}.joined(separator:"\n\n")
-        guard result.count <= 32_000 else {throw CompanionError.message("当前人设提示词合计超过 32000 字，请缩短后重试。")}
+        guard result.count <= PersonaLimits.promptCharacters else {throw CompanionError.message("当前选中人设拼接后超过200万字（含系统与用户人设及宏替换），请调整后重试。")}
         return result
     }
     static func app(context:CompanionContext,actions:[String],hasImage:Bool) -> String {
@@ -128,9 +144,9 @@ enum PersonaPrompt {
 
 enum PersonaTransfer {
     struct Export:Codable {var format = "qiban-personas/1";let library:PersonaLibrary}
-    static func export(_ library:PersonaLibrary) throws -> Data {try library.validate();return try JSONEncoder().encode(Export(library:library))}
+    static func export(_ library:PersonaLibrary) throws -> Data {try library.validate();let data=try JSONEncoder().encode(Export(library:library));guard data.count<=PersonaLimits.transferBytes else{throw CompanionError.message("导出的人设库超过50MB，请分库后再导出。")};return data}
     static func decode(_ data:Data,into existing:PersonaLibrary) throws -> (PersonaLibrary,UUID) {
-        guard data.count <= 2_000_000 else {throw CompanionError.message("角色卡 JSON 超过 2MB。")}
+        guard data.count <= PersonaLimits.transferBytes else {throw CompanionError.message("角色卡 JSON 超过50MB。")}
         if let document = try? JSONDecoder().decode(Export.self,from:data),document.format == "qiban-personas/1" {
             try document.library.validate();return (document.library,document.library.defaultCardID!)
         }

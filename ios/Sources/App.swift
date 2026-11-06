@@ -184,7 +184,7 @@ struct MemoryView: View {
                         do { try store.saveMemories(text) } catch { store.error = error.localizedDescription }
                     }.disabled(!store.storageReady)
                 } header: { Text("希望她记住的事") } footer: {
-                    Text("保存的记忆会随对话发送给你配置的 API。当前由你手动编辑，不会自动提取。最多注入约 12000 字的人设与记忆。")
+                    Text("保存的记忆会随对话发送给你配置的 API。当前由你手动编辑，不会自动提取。人设按人设页限制完整发送，保存的记忆最多注入12000字；实际总上下文容量取决于所选模型和接口。")
                 }
             }.navigationTitle("记忆")
                 .onAppear { text = store.archive.memories }

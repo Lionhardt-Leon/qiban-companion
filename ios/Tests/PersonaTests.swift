@@ -57,9 +57,9 @@ final class PersonaTests:XCTestCase {
     func testInvalidLibrariesAreRejectedRatherThanSilentlyTruncated() throws {
         var library = PersonaLibrary.migrating("人设")
         library.modelBindings["unknown"] = library.cards[0].id;XCTAssertThrowsError(try library.validate())
-        library.modelBindings = [:];library.cards[0].description = String(repeating:"长",count:12_001)
+        library.modelBindings = [:];library.cards[0].description = String(repeating:"长",count:PersonaLimits.fieldCharacters+1)
         XCTAssertThrowsError(try library.validate())
-        XCTAssertThrowsError(try PersonaTransfer.decode(Data(repeating:0,count:2_000_001),into:PersonaLibrary.migrating("")))
+        XCTAssertThrowsError(try PersonaTransfer.decode(Data(repeating:0,count:PersonaLimits.transferBytes+1),into:PersonaLibrary.migrating("")))
     }
     @MainActor private func makeStore(provider:LocalStore.ReplyProvider? = nil) throws -> (LocalStore,URL) {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -113,9 +113,9 @@ final class PersonaTests:XCTestCase {
     }
     @MainActor func testOversizeCombinedPromptCannotReplaceExistingSettings() throws {
         let (store,directory) = try makeStore();defer{try? FileManager.default.removeItem(at:directory)}
-        var library = PersonaLibrary.migrating(String(repeating:"背",count:12_000))
-        library.cards[0].personality = String(repeating:"性",count:12_000)
-        library.cards[0].scenario = String(repeating:"场",count:12_000)
+        var library = PersonaLibrary.migrating(String(repeating:"背",count:700_000))
+        library.cards[0].personality = String(repeating:"性",count:700_000)
+        library.cards[0].scenario = String(repeating:"场",count:700_000)
         try library.validate()
         XCTAssertThrowsError(try store.savePersonas(library,selected:library.cards[0].id,modelKey:"native"))
         XCTAssertNil(store.archive.settings.personas);XCTAssertEqual(store.archive.schemaVersion,1)
