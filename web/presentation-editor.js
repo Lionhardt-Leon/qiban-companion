@@ -19,7 +19,7 @@ export function createPresentationEditor(display,canvas,key,{onEditing=()=>{},in
  function apply(value){display.setFrame({...display.frameState(),...value});sync();}
  function flush(){scheduled=0;if(pending){apply(pending);pending=null;}}
  function update(value){pending={...(pending||{}),...value};if(!scheduled)scheduled=requestAnimationFrame(flush);}
- function finish(commit){if(scheduled){cancelAnimationFrame(scheduled);flush();}if(!commit&&before)apply(before);save();active=false;panel.hidden=true;done.hidden=true;pointers.clear();drag=null;canvas.dataset.snowbreakFrameEdit='false';onEditing(false);}
+ function finish(commit){if(scheduled){cancelAnimationFrame(scheduled);flush();}if(!commit&&before)apply(before);save();active=false;panel.hidden=true;done.hidden=true;for(const id of pointers.keys())if(canvas.hasPointerCapture(id))canvas.releasePointerCapture(id);pointers.clear();drag=null;canvas.dataset.snowbreakFrameEdit='false';onEditing(false);}
  button('主页近景','presentationHome',()=>{apply(validPresentation(initialFrame)?initialFrame:HOME_FRAME);save();});button('完整入画','presentationFull',()=>{apply(FULL_FRAME);save();});
  button('收起工具，继续手势调整','presentationFold',()=>{panel.hidden=true;done.hidden=false;});
  button('保存并退出','presentationSave',()=>finish(true));button('取消本次调整','presentationCancel',()=>finish(false));done.onclick=()=>finish(true);

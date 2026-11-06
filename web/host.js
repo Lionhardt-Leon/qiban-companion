@@ -49,7 +49,7 @@ async function load(url,id,variant){
     // The original body/face tracks, morph curves and scene transforms stay in the old renderer.
     display.showFaceCandidate(true);adapter.enterStandby();display.faceViewer();last=performance.now();
     let editingScene=null;
-    const placementEditing=editing=>{if(editing){const state=adapter.snapshot();editingScene=state.sceneId?{id:state.sceneId,time:state.sceneTime}:null;display.editingScene=editingScene?.id||null;display.sceneInteractions.cancel();adapter.stop('placement-edit');if(editingScene){display.selectSample(editingScene.id);display.seek(editingScene.time%display.duration);}closeEditor();}else if(!paused){if(editingScene)adapter.enterScene(editingScene.id,editingScene.time);else adapter.enterStandby();editingScene=null;display.editingScene=null;}};
+    const placementEditing=editing=>{emit({type:'editing',active:editing});if(editing){const state=adapter.snapshot();editingScene=state.sceneId?{id:state.sceneId,time:state.sceneTime}:null;display.editingScene=editingScene?.id||null;display.sceneInteractions.cancel();adapter.stop('placement-edit');if(editingScene){display.selectSample(editingScene.id);display.seek(editingScene.time%display.duration);}closeEditor();}else if(!paused){if(editingScene)adapter.enterScene(editingScene.id,editingScene.time);else adapter.enterStandby();editingScene=null;display.editingScene=null;}};
     const setupModelEditor=()=>{modelEditor?.dispose();modelEditor=createPresentationEditor({setFrame:display.setModelFrame,frameState:display.modelFrameState},canvas,'model-placement:'+opened.selection?.mode+':'+(adapter.snapshot().sceneId||'main'),{initialFrame:{...FULL_FRAME,depth:0},title:'仅移动角色',idPrefix:'model',allowDepth:true,allowStretch:false,verticalSign:-1,dragScale:display.modelDragScale,onEditing:placementEditing});};
     display.setupModelEditor=setupModelEditor;setupModelEditor();
     presentation=createPresentationEditor(display,canvas,'presentation:'+(opened.selection?'enya-'+opened.selection.mode:opened.manifest.skinId),{
@@ -97,6 +97,10 @@ async function command(value){
   if(value.type==='load')return load(value.url,value.nonce);
   if(value.type==='variant'){if(!collection?.variants.some(v=>v.id===value.id))return;return load(null,nonce,value.id);}
   if(!adapter)return;
+  if(['body','gesture','sample','learned','stop'].includes(value.type)){
+    if(value.automatic&&(modelEditor?.active||presentation?.active)){emit({type:'notice',message:'编辑期间已暂停自动动作，请完成调整后再互动。'});return;}
+    modelEditor?.close();presentation?.close();
+  }
   if(value.type==='body'){
     if(paused)throw new Error('模型暂停中');learned=null;if(!adapter.snapshot().sceneId){adapter.stop('body-command');adapter.enterStandby();}display.embodiment.command(value.id);
     await new Promise(resolve=>setTimeout(resolve,750));emit({type:'selfState',state:inspect(),requestId:value.requestId});return;

@@ -39,5 +39,6 @@ struct WaitingBodyAction {
     let messageID:UUID
     let conversationID:UUID
     let revision:Int
+    func needsSpeechStart(speechBusy:Bool,started:SpeechPlaybackStart?)->Bool {speechBusy && started?.messageID != messageID}
     func matches(messageID:UUID,conversationID:UUID,revision:Int)->Bool {self.messageID==messageID && self.conversationID==conversationID && self.revision==revision}
 }

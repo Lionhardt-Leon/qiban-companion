@@ -33,12 +33,15 @@ struct CompanionHome: View {
     @AppStorage("showSceneBackground") private var showBackground = true
     @AppStorage("sceneBackgroundName") private var backgroundName = "Morning_BG"
     @AppStorage("touchAI") private var touchAI = true
-    @State private var pendingTouches:[String]=[]
+    @State private var pendingTouches=TouchReplyQueue()
     @State private var lastTouchSummary="尚无本轮触碰记录"
+    @State private var lastTouchAt:TimeInterval=0
+    private var recentTouchSummary:String {ProcessInfo.processInfo.systemUptime-lastTouchAt<=30 ? lastTouchSummary:"最近没有新的触碰"}
     @State private var touchTicket=UUID()
     @AppStorage("snowbreakVoice") private var snowbreakVoice = true
     private var isSnowbreak:Bool { engine == "snowbreak" }
     private var availableActions:[String] { isSnowbreak ? snowbreak.dialogueActions : stage.dialogueActions }
+    private var modelEditing:Bool {isSnowbreak ? snowbreak.isEditing:nativeEditing}
     private var currentRevision:Int { isSnowbreak ? snowbreak.interactionRevision : stage.interactionRevision }
     private var activeAction:String? { isSnowbreak ? snowbreak.activeAction : stage.activeAction }
     private var modelKey:String {isSnowbreak ? "enya":"native"}
@@ -46,8 +49,9 @@ struct CompanionHome: View {
     private func companionContext(_ origin:String) -> CompanionContext {
         CompanionContext(modelKey:modelKey,modelName:modelLabel,
                          mode:isSnowbreak ? (snowbreak.companionMode == "standing" ? "看板娘站立":"皮肤互动场景（以身体实况为准）"):"本地角色展示",
-                         activeAction:activeAction ?? "待机",origin:origin,bodyStatus:(isSnowbreak ? snowbreak.bodyState:stage.bodyState).summary+"；最近屏幕互动："+lastTouchSummary)
+                         activeAction:activeAction ?? "待机",origin:origin,bodyStatus:(modelEditing ? "手动编辑中，自动动作暂停；":"")+(isSnowbreak ? snowbreak.bodyState:stage.bodyState).summary+"；最近屏幕互动："+recentTouchSummary)
     }
+    private func stopReading(){waitingBodyAction=nil;touchTicket=UUID();pendingTouches.removeAll();speech.stop();senses.resumeAfterPlayback()}
     private func stopAction() {waitingBodyAction=nil; if isSnowbreak { snowbreak.stop() } else { stage.stopAction() } }
     private func performMotion(_ event:DialogueActionEvent){if isSnowbreak{snowbreak.play(event.action,withVoice:false,automatic:true)}else{stage.performDialogueAction(event.action,motion:event.motion)}}
     private func greetIfReady(){guard isSnowbreak,sheet==nil,scenePhase == .active,!greetedModels.contains(modelKey),let action=CompanionBehavior.resolve("greet",actions:availableActions) else{return};greetedModels.insert(modelKey);if isSnowbreak{snowbreak.play(action,withVoice:snowbreakVoice,automatic:true)}else{stage.performDialogueAction(action)}}
@@ -211,11 +215,11 @@ struct CompanionHome: View {
             guard let event=senses.utterance,!store.busy else{return};send(event.text,origin:"语音转录")
         }
         .onChange(of:senses.sound?.id) { _ in
-            guard let event=senses.sound,!store.busy,!store.archive.settings.endpoint.isEmpty else{return}
+            guard let event=senses.sound,!store.busy,!speech.busy,!modelEditing,!store.archive.settings.endpoint.isEmpty else{return}
             store.send("[环境聆听] "+event.text,actions:availableActions,context:companionContext("环境声音分类"));pendingMotionRevision=currentRevision
         }
         .onChange(of:store.replyForSpeech?.id) { _ in
-            guard scenePhase == .active,let reply=store.replyForSpeech else{return}
+            guard sheet == nil,scenePhase == .active,let reply=store.replyForSpeech else{return}
             let preferences=store.archive.settings.speech ?? SpeechPreferences()
             if preferences.autoPlay || senses.conversation {
                 senses.preparePlayback()
@@ -232,15 +236,20 @@ struct CompanionHome: View {
         .onChange(of:store.archive.settings.endpoint) {_ in snowbreak.setTouchPolicy(touchAI && !store.archive.settings.endpoint.isEmpty)}
         .onChange(of:store.dialogueAction?.id){_ in
             guard let event=store.dialogueAction else{return}
-            if sheet==nil,scenePhase == .active,pendingMotionRevision==currentRevision {
-                if event.action != "stop",speech.busy,let reply=store.replyForSpeech {waitingBodyAction=WaitingBodyAction(event:event,messageID:reply.id,conversationID:store.conversationID,revision:currentRevision)}else{performMotion(event)}
+            if sheet==nil,scenePhase == .active,!modelEditing,pendingMotionRevision==currentRevision {
+                if event.action != "stop",let reply=store.replyForSpeech {
+                    let pending=WaitingBodyAction(event:event,messageID:reply.id,conversationID:store.conversationID,revision:currentRevision)
+                    if pending.needsSpeechStart(speechBusy:speech.busy,started:speech.playbackStarted){waitingBodyAction=pending}else{performMotion(event)}
+                }else{performMotion(event)}
             };pendingMotionRevision=nil
         }
         .onChange(of:speech.playbackStarted?.id){_ in
             guard let started=speech.playbackStarted,let pending=waitingBodyAction else{return};waitingBodyAction=nil
-            if sheet==nil,scenePhase == .active,pending.matches(messageID:started.messageID,conversationID:store.conversationID,revision:currentRevision){performMotion(pending.event)}
+            if sheet==nil,scenePhase == .active,!modelEditing,speech.busy,pending.matches(messageID:started.messageID,conversationID:store.conversationID,revision:currentRevision){performMotion(pending.event)}
         }
-        .onChange(of:speech.busy){if !$0 {waitingBodyAction=nil}}
+        .onChange(of:speech.busy){if !$0 {waitingBodyAction=nil;scheduleTouches()}}
+        .onChange(of:snowbreak.isEditing){value in if value{waitingBodyAction=nil}else{scheduleTouches()}}
+        .onChange(of:nativeEditing){value in if value{waitingBodyAction=nil}else{scheduleTouches()}}
         .alert("心情与行为状态",isPresented:$showingMood){Button("关闭",role:.cancel){}}message:{Text(store.mood.summary+"\n当前动作："+(activeAction ?? "待机")+"\n"+store.behaviorStatus+"\n非结构化回复会补一次动作决策请求。行为在语音实际开始时启动。")}
         .onChange(of:snowbreak.touch?.id) { _ in
             guard isSnowbreak,let touch=snowbreak.touch else{return};queueTouch(touch.message)
@@ -248,7 +257,7 @@ struct CompanionHome: View {
         .onChange(of:engine) { _ in clearTouches();pendingMotionRevision = nil;nativeEditing = false;resumeStage() }
         .onChange(of:nativePresentation) { value in stage.setPresentation(value);value.save() }
         .onChange(of:showBackground) { value in snowbreak.sceneVisible(value) }
-        .onChange(of:snowbreak.ready) { ready in if ready { snowbreak.sceneVisible(showBackground);snowbreak.setVoice(snowbreakVoice);snowbreak.setTouchPolicy(touchAI && !store.archive.settings.endpoint.isEmpty);greetIfReady() } }
+        .onChange(of:snowbreak.ready) { ready in if !ready {clearTouches();waitingBodyAction=nil};if ready { snowbreak.sceneVisible(showBackground);snowbreak.setVoice(snowbreakVoice);snowbreak.setTouchPolicy(touchAI && !store.archive.settings.endpoint.isEmpty);greetIfReady() } }
         .onChange(of:snowbreakVoice) { value in snowbreak.setVoice(value) }
         .onChange(of:stage.name){_ in greetIfReady()}
         .task { resumeStage() }
@@ -317,7 +326,7 @@ struct CompanionHome: View {
             }
             if !senses.status.isEmpty {Text(senses.status).font(.caption).foregroundStyle(.white).lineLimit(2)}
             if !speech.status.isEmpty {Text(speech.status).font(.caption).foregroundStyle(.white).lineLimit(2).padding(.horizontal)}
-            if speech.busy {Button("停止朗读"){speech.stop();senses.resumeAfterPlayback()}.font(.caption)}
+            if speech.busy {Button("停止朗读"){stopReading()}.font(.caption)}
             if !camera.status.isEmpty {Text(camera.status).font(.caption2).foregroundStyle(.white).lineLimit(2).padding(.horizontal)}
             HStack(spacing: 8) {
                 circle("paperplane", label: "发送消息", enabled: !store.busy && !preparingSend && (!draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || attachedImage != nil)) { send() }
@@ -346,6 +355,7 @@ struct CompanionHome: View {
         let text = explicitText ?? (draft.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty && selectedImage != nil ? (selectedImage?.source == .selfPortrait ? "这是你自己的模型画面，看看你现在的样子。":"请看看这张图片，告诉我你看到了什么。"):draft)
         guard !text.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty else { return }
         preparingSend = true
+        touchTicket=UUID();pendingTouches.removeAll()
         speech.stop()
         let conversationID = store.conversationID
         Task { @MainActor in
@@ -380,19 +390,19 @@ struct CompanionHome: View {
         guard sheet == nil, scenePhase == .active, let touch = stage.touch(in:view,point:point,kind:kind) else { return }
         queueTouch(touch.message)
     }
-    private func clearTouches(){touchTicket=UUID();pendingTouches=[];lastTouchSummary="尚无本轮触碰记录"}
+    private func clearTouches(){touchTicket=UUID();pendingTouches.removeAll();lastTouchAt=0;lastTouchSummary="尚无本轮触碰记录"}
     private func queueTouch(_ message:String){
-        guard sheet == nil,scenePhase == .active,touchAI else{return};lastTouchSummary=message
+        guard sheet == nil,scenePhase == .active,touchAI else{return};lastTouchSummary=message;lastTouchAt=ProcessInfo.processInfo.systemUptime
         guard !store.archive.settings.endpoint.isEmpty else{return}
-        pendingTouches.append(message);pendingTouches=Array(pendingTouches.suffix(8));scheduleTouches()
+        pendingTouches.append(message);scheduleTouches()
     }
     private func scheduleTouches(){
-        guard !pendingTouches.isEmpty,!store.busy,sheet == nil,scenePhase == .active else{return}
+        guard !pendingTouches.isEmpty,!store.busy,!speech.busy,!modelEditing,sheet == nil,scenePhase == .active else{return}
         let ticket=UUID(),conversation=store.conversationID;touchTicket=ticket
         Task{@MainActor in
             try? await Task.sleep(nanoseconds:400_000_000)
             guard ticket==touchTicket,conversation==store.conversationID,!store.busy,sheet == nil,scenePhase == .active,touchAI,!pendingTouches.isEmpty else{return}
-            let records=pendingTouches.joined(separator:"\n");pendingTouches=[]
+            let batch=pendingTouches.drain(chatBusy:store.busy,speechBusy:speech.busy,editing:modelEditing);guard !batch.isEmpty else{return};let records=batch.joined(separator:"\n")
             store.send(records,actions:availableActions,context:companionContext("屏幕触碰事件，已合并连续触碰"));pendingMotionRevision=currentRevision
         }
     }

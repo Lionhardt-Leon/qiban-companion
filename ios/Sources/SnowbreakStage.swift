@@ -64,6 +64,7 @@ struct SnowbreakTouchEvent {
 
 @MainActor final class SnowbreakStage: NSObject, ObservableObject, WKScriptMessageHandler, WKNavigationDelegate {
     @Published private(set) var ready = false
+    @Published private(set) var isEditing=false
     @Published private(set) var error: String?
     @Published private(set) var notice: String?
     @Published private(set) var activeAction: String?
@@ -92,9 +93,9 @@ struct SnowbreakTouchEvent {
             eyes:value["eyes"] as? String ?? "未确认",hands:value["hands"] as? String ?? "未确认",facing:value["facing"] as? String ?? "未确认",lastResult:(value["lastResult"] as? String ?? "无回执")+((value["interactionScene"] as? String).map{"；保持互动场景："+$0} ?? ""))
     }
     func executeBody(_ command:BodyCommand,automatic:Bool = false) async -> Bool {
-        guard ready,!paused,bodyActions.contains(command.rawValue) else {return false}
+        guard ready,!paused,!(automatic && isEditing),bodyActions.contains(command.rawValue) else {return false}
         if !automatic {interactionRevision += 1}
-        send(["type":"body","id":command.rawValue]);try? await Task.sleep(nanoseconds:850_000_000)
+        send(["type":"body","id":command.rawValue,"automatic":automatic]);try? await Task.sleep(nanoseconds:850_000_000)
         await refreshBodyState();return ready && !paused
     }
     func portrait() async throws -> CameraFrame {
@@ -158,7 +159,9 @@ struct SnowbreakTouchEvent {
         if type == "pageReady" { pageReady = true;loadSelected();return }
         guard body["nonce"] as? String == nonce else { return }
         switch type {
+        case "editing": isEditing=body["active"] as? Bool == true
         case "ready":
+            isEditing=false
             guard body["characterId"] as? String == "Enya" else { error = "这不是恩雅角色包。";return }
             do {
                 if let staged = staged { try library.commit(staged);self.staged = nil }
@@ -195,8 +198,9 @@ struct SnowbreakTouchEvent {
         }
     }
     func play(_ id:String,withVoice:Bool = true,automatic:Bool = false) {
+        guard !(automatic && isEditing) else{return}
         if let plan=BodyGesture.plan(id),ready,!paused,bodyActions.contains(id),let data=try? JSONEncoder().encode(plan),let object=try? JSONSerialization.jsonObject(with:data) {
-            if !automatic {interactionRevision += 1};send(["type":"gesture","id":id,"plan":object]);return
+            if !automatic {interactionRevision += 1};send(["type":"gesture","id":id,"plan":object,"automatic":automatic]);return
         }
         if let command = BodyCommand(rawValue:id) {Task{_ = await executeBody(command,automatic:automatic)};return}
         if id == "stop" { stop();return }
@@ -207,20 +211,20 @@ struct SnowbreakTouchEvent {
         guard ready,actions.contains(id) else { return }
         if !automatic { interactionRevision += 1 }
         notice = nil
-        if id.hasPrefix("enya_yuki_") { send(["type":"learned","id":String(id.dropFirst("enya_".count))]);return }
-        send(["type":"sample","id":String(id.dropFirst("snowbreak_".count)),"withVoice":withVoice])
+        if id.hasPrefix("enya_yuki_") { send(["type":"learned","id":String(id.dropFirst("enya_".count)),"automatic":automatic]);return }
+        send(["type":"sample","id":String(id.dropFirst("snowbreak_".count)),"withVoice":withVoice,"automatic":automatic])
     }
     func stop() { interactionRevision += 1;send(["type":"stop"]);activeAction = nil }
-    func pause() { paused = true;interactionRevision += 1;send(["type":"pause"]);activeAction = nil }
+    func pause() { paused = true;isEditing=false;interactionRevision += 1;send(["type":"pause"]);activeAction = nil }
     func resume() { paused = false;send(["type":"resume"]) }
     func editTouch() { interactionRevision += 1;send(["type":"edit"]) }
-    func editModel(){send(["type":"modelEdit"])}
+    func editModel(){interactionRevision += 1;isEditing=true;send(["type":"modelEdit"])}
     func editDance(){send(["type":"danceEdit"])}
     func officialTouchPoints(){send(["type":"officialTouchPoints"])}
     func sceneVisible(_ value:Bool) { send(["type":"scene","visible":value]) }
     func gaze(x:CGFloat,y:CGFloat) { if ready { send(["type":"gaze","x":Double(x),"y":Double(y)]) } }
     func editLighting() { send(["type":"lightingEdit"]) }
-    func editFrame() { interactionRevision += 1;send(["type":"frameEdit"]) }
+    func editFrame() { interactionRevision += 1;isEditing=true;send(["type":"frameEdit"]) }
     func detach(_ view:WKWebView) {
         view.evaluateJavaScript("window.SnowbreakHost?.receive({type:'dispose'})",completionHandler:nil)
         view.stopLoading();view.navigationDelegate = nil
