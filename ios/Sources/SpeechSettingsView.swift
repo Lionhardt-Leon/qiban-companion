@@ -36,7 +36,10 @@ struct SpeechSettingsView:View {
                         .font(.caption).foregroundStyle(.secondary)
                     Slider(value:$draft.speed,in:0.7...1.3){Text("语速")};Text("语速 \(draft.speed,specifier:"%.2f")×").font(.caption)
                     Slider(value:$draft.volume,in:0...1){Text("音量")}
-                    Button("保存语音设置"){save()}.disabled(store.busy || speech.importing).accessibilityIdentifier("saveSpeechSettings")
+                    VStack(alignment:.leading,spacing:8) {
+                        Button("保存语音设置"){save()}.disabled(store.busy || speech.importing).accessibilityIdentifier("saveSpeechSettings")
+                        if !notice.isEmpty {Text(notice).font(.caption).accessibilityIdentifier("speechSettingsNotice")}
+                    }
                 }
                 Section("苹果硬件加速") {
                     Picker("本机合成后端",selection:Binding(get:{draft.acceleration.rawValue},set:{draft.computeMode=$0})) {ForEach(VoiceComputeMode.allCases){Text($0.title).tag($0.rawValue)}}
@@ -52,7 +55,6 @@ struct SpeechSettingsView:View {
                     Button("停止朗读"){speech.stop()}.disabled(!speech.busy)
                     if !speech.status.isEmpty {Text(speech.status).font(.caption)}
                     if let error=speech.error {Text(error).foregroundStyle(.red).font(.caption)}
-                    if !notice.isEmpty {Text(notice).accessibilityIdentifier("speechSettingsNotice")}
                 }
                 Section {Text("音色设置为全局设置。更换模型或人设不会自动改用另一种声音。原作自带的互动原声片段由“恩雅原声”开关单独控制，可关闭以避免与配音混用。语言选择影响 AI 后续回复；离线合成不代表 AI 对话也改为本地运行。")
                     .font(.caption).foregroundStyle(.secondary)}

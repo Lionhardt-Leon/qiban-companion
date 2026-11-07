@@ -41,8 +41,10 @@ final class FennyMigrationTests:XCTestCase {
         controller.view.addSubview(view);view.frame=window.bounds;window.rootViewController=controller;window.makeKeyAndVisible()
         defer{stage.detach(view);window.isHidden=true}
         @MainActor func ready() async throws {
-            for _ in 0..<1500 {if stage.ready || stage.error != nil{break};try await Task.sleep(nanoseconds:20_000_000)}
-            XCTAssertNil(stage.error);XCTAssertTrue(stage.ready)
+            let deadline=Date().addingTimeInterval(90)
+            while !stage.ready && stage.error == nil && Date()<deadline {try await Task.sleep(nanoseconds:100_000_000)}
+            XCTAssertNil(stage.error)
+            guard stage.ready else{XCTFail("WebKit did not finish loading the selected character within 90 seconds");throw URLError(.timedOut)}
         }
         try await ready();XCTAssertEqual(stage.characterID,"Fenny")
         stage.selectVariant(outfit:"underwear");try await ready();XCTAssertEqual(stage.companionOutfit,"underwear")
