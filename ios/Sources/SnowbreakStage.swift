@@ -8,19 +8,23 @@ struct SnowbreakLibrary {
             .appendingPathComponent(AppIdentity.storageNamespace+"/SnowbreakLibrary",isDirectory:true)
     }
     var current: URL { directory.appendingPathComponent("current.snowbreak") }
+    func savedFile(_ id:String)->URL {directory.appendingPathComponent(id == "Fenny" ? "Fenny.snowbreak":"Enya.snowbreak")}
+    var savedCharacters:[String] {["Enya","Fenny"].filter{FileManager.default.fileExists(atPath:savedFile($0).path)}}
     var hasCurrent: Bool { FileManager.default.fileExists(atPath:current.path) }
     func stage(_ data: Data) throws -> URL {
         guard (22...128*1024*1024).contains(data.count), data.prefix(4) == Data([0x50,0x4b,3,4]) else {
-            throw CompanionError.message("请选择完整的恩雅 .snowbreak 素材包（不超过128MB）。")
+            throw CompanionError.message("请选择完整的角色 .snowbreak 素材包（不超过128MB）。")
         }
         try FileManager.default.createDirectory(at:directory,withIntermediateDirectories:true)
         let url = directory.appendingPathComponent("staged-\(UUID().uuidString).snowbreak")
         try data.write(to:url,options:[.atomic,.completeFileProtection]); return url
     }
-    func commit(_ staged: URL) throws {
+    func commit(_ staged: URL,characterID:String = "Enya") throws {
+        guard ["Enya","Fenny"].contains(characterID) else{throw CompanionError.message("不支持的角色标识。")}
         guard staged.deletingLastPathComponent().standardizedFileURL == directory.standardizedFileURL,
               staged.lastPathComponent.hasPrefix("staged-") else { throw CompanionError.message("角色暂存路径无效。") }
         let data = try Data(contentsOf:staged)
+        try data.write(to:savedFile(characterID),options:[.atomic,.completeFileProtection])
         try data.write(to:current,options:[.atomic,.completeFileProtection])
         try? FileManager.default.removeItem(at:staged)
     }
@@ -63,6 +67,10 @@ struct SnowbreakTouchEvent {
 }
 
 @MainActor final class SnowbreakStage: NSObject, ObservableObject, WKScriptMessageHandler, WKNavigationDelegate {
+    @Published private(set) var characterID="Enya"
+    var characterName:String {characterID == "Fenny" ? "芬妮婚皮":"恩雅护士"}
+    var modelKey:String {characterID.lowercased()}
+    @Published private(set) var savedCharacters:[String]=[]
     @Published private(set) var ready = false
     @Published private(set) var isEditing=false
     @Published private(set) var error: String?
@@ -82,14 +90,22 @@ struct SnowbreakTouchEvent {
     @Published private(set) var variantIDs:[String] = []
     @Published private(set) var bodyActions:[String] = []
     @Published private(set) var bodyState = BodyState()
-    var dialogueActions:[String] { ready ? actions + bodyActions + (variantIDs.count == 4 ? ["enya_outfit_normal","enya_outfit_nude","enya_mode_standing","enya_mode_interaction"] : []) : [] }
+    var outfitLabel:String {companionOutfit == "underwear" ? "婚纱内衣版":companionOutfit == "nude" ? "果体版":characterID == "Fenny" ? "原婚纱":"正常服饰"}
+    var dialogueActions:[String] {
+        guard ready else{return []}
+        var result=actions+bodyActions
+        if characterID == "Fenny" {
+            for outfit in ["normal","underwear"] where variantIDs.contains(companionMode+"_"+outfit){result.append("fenny_outfit_"+outfit)}
+        }else if variantIDs.count == 4 {result += ["enya_outfit_normal","enya_outfit_nude","enya_mode_standing","enya_mode_interaction"]}
+        return result
+    }
     func refreshBodyState() async {
         guard ready else {bodyState = BodyState(lastResult:"模型未就绪或正在切换");return}
         guard let webView = webView,let result = try? await webView.evaluateJavaScript("window.SnowbreakHost.inspect()"),let value = result as? [String:Any] else {return}
         updateBody(value)
     }
     private func updateBody(_ value:[String:Any]) {
-        bodyState = BodyState(outfit:companionOutfit == "nude" ? "当前已加载果体版模型，没有穿衣":companionOutfit == "normal" ? "当前已加载护士正常服饰模型":"服饰未确认",
+        bodyState = BodyState(outfit:companionOutfit == "nude" ? "当前已加载果体版模型，没有穿衣":companionOutfit == "underwear" ? "当前加载芬妮婚纱内衣版，穿有胸衣、手套、袜饰，保留头纱与装饰，不是裸体":companionOutfit == "normal" ? "当前已加载"+(characterID == "Fenny" ? "芬妮原婚纱":"恩雅护士正常服饰")+"模型":"服饰未确认",
             eyes:value["eyes"] as? String ?? "未确认",hands:value["hands"] as? String ?? "未确认",facing:value["facing"] as? String ?? "未确认",lastResult:(value["lastResult"] as? String ?? "无回执")+((value["interactionScene"] as? String).map{"；保持互动场景："+$0} ?? ""))
     }
     func executeBody(_ command:BodyCommand,automatic:Bool = false) async -> Bool {
@@ -109,7 +125,7 @@ struct SnowbreakTouchEvent {
         interactionRevision += 1;activeAction = nil;ready = false;send(["type":"variant","id":id])
     }
 
-    init(library:SnowbreakLibrary = SnowbreakLibrary()) { self.library = library }
+    init(library:SnowbreakLibrary = SnowbreakLibrary()) { self.library = library;self.savedCharacters=library.savedCharacters }
     func makeView() -> WKWebView {
         let configuration = WKWebViewConfiguration()
         configuration.setURLSchemeHandler(SnowbreakScheme(library:library),forURLScheme:"companion-snowbreak")
@@ -145,7 +161,7 @@ struct SnowbreakTouchEvent {
     }
     private func loadSelected() {
         let file = staged ?? (library.hasCurrent ? library.current : nil)
-        guard let file = file else { error = "请在设置中导入恩雅护士 .snowbreak 包。";return }
+        guard let file = file else { error = "请在设置中导入本地角色 .snowbreak 包。";return }
         send(["type":"load","url":"companion-snowbreak://local/package/"+file.lastPathComponent,"nonce":nonce])
     }
     private func send(_ value:[String:Any]) {
@@ -162,15 +178,17 @@ struct SnowbreakTouchEvent {
         case "editing": isEditing=body["active"] as? Bool == true
         case "ready":
             applyHardwareBudget();isEditing=false
-            guard body["characterId"] as? String == "Enya" else { error = "这不是恩雅角色包。";return }
+            guard let identity=body["characterId"] as? String,["Enya","Fenny"].contains(identity) else {error="不支持的角色包。";return}
             do {
-                if let staged = staged { try library.commit(staged);self.staged = nil }
+                if staged == nil,library.hasCurrent,!library.savedCharacters.contains(identity){try Data(contentsOf:library.current).write(to:library.savedFile(identity),options:[.atomic,.completeFileProtection])}
+                if let staged = staged { try library.commit(staged,characterID:identity);self.staged = nil }
+                characterID=identity;savedCharacters=library.savedCharacters
                 let variants = body["variants"] as? [[String:String]] ?? []
-                variantIDs = variants.compactMap { v in guard let id=v["id"],["standing_normal","standing_nude","interaction_normal","interaction_nude"].contains(id) else { return nil };return id }
+                variantIDs = variants.compactMap { v in guard let id=v["id"],["standing_normal","standing_nude","standing_underwear","interaction_normal","interaction_nude","interaction_underwear"].contains(id) else { return nil };return id }
                 if let selected=body["selection"] as? [String:String] { companionMode=selected["mode"] ?? "standing";companionOutfit=selected["outfit"] ?? "unknown" }
                 else {companionMode = body["stance"] as? String == "standing" ? "standing":"interaction";companionOutfit = "unknown"}
                 let samples = body["samples"] as? [String] ?? []
-                actions = ["head","left","right","home_login","home_invite","home_shy","home_check","home_kiss","show_02","show_03","show_04","show_05","sequence","idle_01","idle_02"].filter { samples.contains($0) }.map { "snowbreak_"+$0 }
+                actions = ["head","left","right","home_login","home_invite","home_shy","home_check","home_kiss","home_jealous","home_marry","home_sigh","home_stage","home_stand","show_02","show_03","show_04","show_05","sequence","idle_01","idle_02"].filter { samples.contains($0) }.map { "snowbreak_"+$0 }
                 let learned = body["learned"] as? [String] ?? []
                 actions += ["yuki_hello","yuki_Yes","yuki_No","yuki_Peace_hand","yuki_dance_90bpm","yuki_dance_120bpm","yuki_f_vibe_dance_60_bpm_002"].filter { learned.contains($0) && (!$0.contains("dance") || body["stance"] as? String == "standing") }.map { "enya_"+$0 }
                 ready = true;error = nil
@@ -191,7 +209,7 @@ struct SnowbreakTouchEvent {
                 if UserDefaults.standard.object(forKey:"touchHaptics") as? Bool ?? true {UIImpactFeedbackGenerator(style:.light).impactOccurred()}
             }
         case "error":
-            error = String((body["message"] as? String ?? "恩雅加载失败。").prefix(500));ready = false
+            error = String((body["message"] as? String ?? "角色加载失败。").prefix(500));ready = false
             if let failed = staged { try? FileManager.default.removeItem(at:failed);staged = nil }
         case "notice": notice = String((body["message"] as? String ?? "").prefix(200))
         default: break
@@ -205,6 +223,7 @@ struct SnowbreakTouchEvent {
         if let command = BodyCommand(rawValue:id) {Task{_ = await executeBody(command,automatic:automatic)};return}
         if id == "stop" { stop();return }
         if ready,dialogueActions.contains(id) {
+            if id.hasPrefix("fenny_outfit_"){selectVariant(outfit:String(id.dropFirst("fenny_outfit_".count)));return}
             if id.hasPrefix("enya_outfit_") { selectVariant(outfit:String(id.dropFirst("enya_outfit_".count)));return }
             if id.hasPrefix("enya_mode_") { selectVariant(mode:String(id.dropFirst("enya_mode_".count)));return }
         }
@@ -224,6 +243,10 @@ struct SnowbreakTouchEvent {
     func officialTouchPoints(){send(["type":"officialTouchPoints"])}
     func sceneVisible(_ value:Bool) { send(["type":"scene","visible":value]) }
     func gaze(x:CGFloat,y:CGFloat) { if ready { send(["type":"gaze","x":Double(x),"y":Double(y)]) } }
+    func selectCharacter(_ identity:String){
+        guard ["Enya","Fenny"].contains(identity),identity != characterID else{return}
+        do {let file=library.savedFile(identity);guard FileManager.default.fileExists(atPath:file.path) else{return};interactionRevision+=1;pause();paused=false;staged=try library.stage(Data(contentsOf:file));nonce=UUID().uuidString;ready=false;error=nil;loadSelected()}catch{self.error=error.localizedDescription}
+    }
     func editLighting() { send(["type":"lightingEdit"]) }
     func editFrame() { interactionRevision += 1;isEditing=true;send(["type":"frameEdit"]) }
     func detach(_ view:WKWebView) {
@@ -239,7 +262,7 @@ struct SnowbreakTouchEvent {
         let url = navigationAction.request.url
         decisionHandler(url?.scheme == "companion-snowbreak" && url?.host == "local" ? .allow : .cancel)
     }
-    func webViewWebContentProcessDidTerminate(_ webView:WKWebView) { ready = false;error = "角色渲染已中断，请切换回恩雅重新加载。" }
+    func webViewWebContentProcessDidTerminate(_ webView:WKWebView) { ready = false;error = "角色渲染已中断，请重新加载当前角色。" }
 }
 
 struct SnowbreakCharacterView:UIViewRepresentable {
@@ -261,18 +284,18 @@ struct SnowbreakImportView:View {
     var body:some View {
         NavigationStack {
             Form {
-                Section("恩雅护士 · 本地移植") {
+                Section("尘白角色 · 本地移植") {
                     Text("沿用旧项目 V13 .snowbreak 包，包含病房、原声、待机和头部/左右手反应。")
-                    Button("选择恩雅素材包") { picking = true }.accessibilityIdentifier("importSnowbreak")
+                    Button("选择角色素材包") { picking = true }.accessibilityIdentifier("importSnowbreak")
                     Button("App 文件夹") { local = true }
-                    if stage.library.hasCurrent { Text("已保存恩雅素材，下次启动会从本机加载。") }
+                    if stage.library.hasCurrent { Text("已保存角色素材，下次启动会从本机加载。") }
                     if let error = stage.error { Text(error).foregroundStyle(.red) }
                 }
                 Section("触碰") {
                     Text("进入恩雅后，动作菜单可播放三组原作反应及原声。首次使用精细触碰时，从动作菜单打开表面标注，为头部或左右手画上标签；未标注区域不会猜测部位。")
                     Text("原 App 内保存的标注不会跨 App 自动读取；模型和原始互动资源可以沿用。")
                 }
-            }.navigationTitle("导入恩雅")
+            }.navigationTitle("导入尘白角色")
         }.sheet(isPresented:$picking) {
             CharacterDocumentPicker { result in
                 picking = false

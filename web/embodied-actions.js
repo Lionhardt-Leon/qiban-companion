@@ -6,7 +6,7 @@ export function createEmbodiedActions(root,setYaw,frameYaw=()=>0){
   if(upper?.isBone&&lower?.parent===upper&&hand?.parent===lower)chains[side]={upper,lower,hand};
  }
  const head=root.getObjectByName('Bip001-Head'),eyes=[],skeletons=new Set();root.traverse(m=>{if(m.isSkinnedMesh)skeletons.add(m.skeleton);});
- root.traverse(m=>{if(m.isMesh&&m.morphTargetInfluences)for(const n of ['L_Eye_close','R_Eye_close']){const i=m.morphTargetDictionary?.[n];if(Number.isInteger(i))eyes.push({mesh:m,index:i,name:n});}});
+ root.traverse(m=>{if(m.isMesh&&m.morphTargetInfluences)for(const n of ['L_Eye_close','R_Eye_close']){const i=m.morphTargetDictionary?.[n]??m.morphTargetDictionary?.[n.replace('_Eye_','_eye_')];if(Number.isInteger(i))eyes.push({mesh:m,index:i,name:n});}});
  const available=['turn_left','turn_right','turn_back','face_front'];
  if(head&&chains.left)available.push('raise_left_hand');if(head&&chains.right)available.push('raise_right_hand');
  if(head&&chains.left&&chains.right)available.push('raise_both_hands','lower_hands');
@@ -97,7 +97,7 @@ export function createEmbodiedActions(root,setYaw,frameYaw=()=>0){
   }
   eyeWeight+=((closed?1:0)-eyeWeight)*blend;
   for(const e of eyes){const base=e.mesh.morphTargetInfluences[e.index]||0,applied=THREE.MathUtils.lerp(base,closed?1:0,eyeWeight);savedEyes.push({...e,base,applied});e.mesh.morphTargetInfluences[e.index]=applied;}
-  if(pose?.smile){root.traverse(m=>{if(!m.isMesh||!m.morphTargetInfluences)return;for(const name of ['L_Eye_smile','R_Eye_smile']){const index=m.morphTargetDictionary?.[name];if(!Number.isInteger(index))continue;const base=m.morphTargetInfluences[index]||0,applied=Math.max(base,Math.min(.5,pose.smile));speechSaved.push({mesh:m,index,base,applied});m.morphTargetInfluences[index]=applied;}});}
+  if(pose?.smile){root.traverse(m=>{if(!m.isMesh||!m.morphTargetInfluences)return;for(const name of ['L_Eye_smile','R_Eye_smile']){const index=m.morphTargetDictionary?.[name]??m.morphTargetDictionary?.[name.replace('_Eye_','_eye_')];if(!Number.isInteger(index))continue;const base=m.morphTargetInfluences[index]||0,applied=Math.max(base,Math.min(.5,pose.smile));speechSaved.push({mesh:m,index,base,applied});m.morphTargetInfluences[index]=applied;}});}
   speechValue+=(speechTarget-speechValue)*(1-Math.exp(-dt*(speechTarget>speechValue?24:16)));
   for(const e of mouthTargets){const base=e.mesh.morphTargetInfluences[e.index]||0,applied=Math.max(base,speechValue*.85);speechSaved.push({...e,base,applied});e.mesh.morphTargetInfluences[e.index]=applied;}
   root.updateWorldMatrix(true,true);for(const skeleton of skeletons)skeleton.update();

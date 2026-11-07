@@ -48,8 +48,8 @@ struct CompanionHome: View {
     private var modelEditing:Bool {isSnowbreak ? snowbreak.isEditing:nativeEditing}
     private var currentRevision:Int { isSnowbreak ? snowbreak.interactionRevision : stage.interactionRevision }
     private var activeAction:String? { isSnowbreak ? snowbreak.activeAction : stage.activeAction }
-    private var modelKey:String {isSnowbreak ? "enya":"native"}
-    private var modelLabel:String {isSnowbreak ? "恩雅护士":stage.name}
+    private var modelKey:String {isSnowbreak ? snowbreak.modelKey:"native"}
+    private var modelLabel:String {isSnowbreak ? snowbreak.characterName:stage.name}
     private func companionContext(_ origin:String) -> CompanionContext {
         CompanionContext(modelKey:modelKey,modelName:modelLabel,
                          mode:isSnowbreak ? (snowbreak.companionMode == "standing" ? "看板娘站立":"皮肤互动场景（以身体实况为准）"):"本地角色展示",
@@ -72,7 +72,7 @@ struct CompanionHome: View {
                 SnowbreakCharacterView(stage:snowbreak).id("snowbreak-renderer").ignoresSafeArea().accessibilityIdentifier("snowbreakScene")
                 if let error = snowbreak.error {
                     VStack { Text(error);Button("返回原伙伴") { engine = "native" } }.padding(24).background(.ultraThinMaterial,in:RoundedRectangle(cornerRadius:20))
-                } else if !snowbreak.ready { ProgressView("正在加载恩雅…").accessibilityIdentifier("snowbreakLoading") }
+                } else if !snowbreak.ready { ProgressView("正在加载本地角色…").accessibilityIdentifier("snowbreakLoading") }
             } else if let scene = stage.scene {
                 ImmersiveCharacterView(scene: scene, backgroundImage: selectedBackground, showBackground: showBackground,
                     onTouch:nativeEditing ? nil : handleTouch,onEdit:nativeEditing ? editNativeGesture : nil,onView:stage.attachSnapshotView).id("native-renderer").ignoresSafeArea()
@@ -110,6 +110,11 @@ struct CompanionHome: View {
                             Button("心情与行为状态"){showingMood=true}
                             Button(senses.environment ? "停止环境聆听" : "环境声音反馈（本机）") { speech.stop();senses.toggleEnvironment() }
                             if isSnowbreak {
+                                ForEach(snowbreak.savedCharacters,id:\.self){id in Button(id == "Fenny" ? "切换到芬妮婚皮":"切换到恩雅护士"){snowbreak.selectCharacter(id)}}
+                                if snowbreak.characterID == "Fenny" {
+                                    Button("原婚纱"){snowbreak.selectVariant(outfit:"normal")}
+                                    Button("婚纱内衣版"){snowbreak.selectVariant(outfit:"underwear")}
+                                }
                                 if snowbreak.variantIDs.count == 4 {
                                     Section("陪伴模式") {
                                         Button(snowbreak.companionMode == "standing" ? "✓ 看板娘（站立）" : "看板娘（站立）") { snowbreak.selectVariant(mode:"standing") }
@@ -121,7 +126,7 @@ struct CompanionHome: View {
                                     }
                                 }
                                 ForEach(snowbreak.actions,id:\.self) { id in
-                                    Button(["snowbreak_home_login":"看板娘 · 登录招呼","snowbreak_home_invite":"看板娘 · 邀请","snowbreak_home_shy":"看板娘 · 害羞","snowbreak_home_check":"看板娘 · 检查","snowbreak_home_kiss":"看板娘 · 亲吻","snowbreak_show_02":"互动展示 02","snowbreak_show_03":"互动展示 03","snowbreak_show_04":"互动展示 04","snowbreak_show_05":"互动展示 05","snowbreak_sequence":"完整展示片段","snowbreak_idle_01":"互动待机变化 01","snowbreak_idle_02":"互动待机变化 02","snowbreak_head":"头部原作反应","snowbreak_left":"左手原作反应","snowbreak_right":"右手原作反应","enya_yuki_hello":"学习 Yuki · 挥手","enya_yuki_Yes":"学习 Yuki · 点头","enya_yuki_No":"学习 Yuki · 摇头","enya_yuki_Peace_hand":"学习 Yuki · 比 V","enya_yuki_dance_90bpm":"站立舞蹈 · 90 BPM","enya_yuki_dance_120bpm":"站立舞蹈 · 120 BPM","enya_yuki_f_vibe_dance_60_bpm_002":"站立舞蹈 · 60 BPM"][id] ?? id) { snowbreak.play(id,withVoice:snowbreakVoice) }
+                                    Button(["snowbreak_home_jealous":"芬妮 · 吃醋","snowbreak_home_marry":"芬妮 · 婚礼互动","snowbreak_home_sigh":"芬妮 · 叹气","snowbreak_home_stage":"芬妮 · 主页展示","snowbreak_home_stand":"芬妮 · 站立待机","snowbreak_home_login":"看板娘 · 登录招呼","snowbreak_home_invite":"看板娘 · 邀请","snowbreak_home_shy":"看板娘 · 害羞","snowbreak_home_check":"看板娘 · 检查","snowbreak_home_kiss":"看板娘 · 亲吻","snowbreak_show_02":"互动展示 02","snowbreak_show_03":"互动展示 03","snowbreak_show_04":"互动展示 04","snowbreak_show_05":"互动展示 05","snowbreak_sequence":"完整展示片段","snowbreak_idle_01":"互动待机变化 01","snowbreak_idle_02":"互动待机变化 02","snowbreak_head":"头部原作反应","snowbreak_left":"左手原作反应","snowbreak_right":"右手原作反应","enya_yuki_hello":"学习 Yuki · 挥手","enya_yuki_Yes":"学习 Yuki · 点头","enya_yuki_No":"学习 Yuki · 摇头","enya_yuki_Peace_hand":"学习 Yuki · 比 V","enya_yuki_dance_90bpm":"站立舞蹈 · 90 BPM","enya_yuki_dance_120bpm":"站立舞蹈 · 120 BPM","enya_yuki_f_vibe_dance_60_bpm_002":"站立舞蹈 · 60 BPM"][id] ?? id) { snowbreak.play(id,withVoice:snowbreakVoice) }
                                 }
                                 Button("精细触碰表面标注") { snowbreak.editTouch() }
                                 Button("显示／隐藏原作触点") {snowbreak.officialTouchPoints()}
@@ -265,7 +270,8 @@ struct CompanionHome: View {
         .onChange(of:engine) { _ in clearTouches();pendingMotionRevision = nil;nativeEditing = false;resumeStage() }
         .onChange(of:nativePresentation) { value in stage.setPresentation(value);value.save() }
         .onChange(of:showBackground) { value in snowbreak.sceneVisible(value) }
-        .onChange(of:snowbreak.ready) { ready in if !ready {clearTouches();waitingBodyAction=nil};if ready { snowbreak.sceneVisible(showBackground);snowbreak.setVoice(snowbreakVoice);snowbreak.setTouchPolicy(touchAI && !store.archive.settings.endpoint.isEmpty);greetIfReady() } }
+        .onChange(of:snowbreak.ready) { ready in if !ready {clearTouches();waitingBodyAction=nil};if ready {store.activateCompanion(modelKey);snowbreak.sceneVisible(showBackground);snowbreak.setVoice(snowbreakVoice);snowbreak.setTouchPolicy(touchAI && !store.archive.settings.endpoint.isEmpty);greetIfReady() } }
+        .onChange(of:snowbreak.characterID){_ in clearTouches();waitingBodyAction=nil;pendingMotionRevision=nil;speech.stop();store.activateCompanion(modelKey)}
         .onChange(of:snowbreakVoice) { value in snowbreak.setVoice(value) }
         .onChange(of:stage.name){_ in greetIfReady()}
         .onReceive(NotificationCenter.default.publisher(for:ProcessInfo.thermalStateDidChangeNotification)){_ in snowbreak.applyHardwareBudget();stage.applyHardwareBudget()}
@@ -319,7 +325,7 @@ struct CompanionHome: View {
                 NativePresentationPanel(value:$nativePresentation,rotating:$nativeRotating) { nativeEditing = false;nativePresentation.save() }
             }
             if isSnowbreak,snowbreak.ready {
-                Text(snowbreak.variantIDs.count == 4 ? "恩雅 · \(snowbreak.companionMode == "standing" ? "看板娘" : "皮肤互动") · \(snowbreak.companionOutfit == "normal" ? "正常服饰" : "果体版")" : "恩雅已就绪").font(.caption2).foregroundStyle(.white.opacity(0.6)).accessibilityIdentifier("snowbreakReady")
+                Text(snowbreak.variantIDs.count >= 2 ? "\(snowbreak.characterName) · \(snowbreak.companionMode == "standing" ? "看板娘" : "皮肤互动") · \(snowbreak.outfitLabel)" : snowbreak.characterName+"已就绪").font(.caption2).foregroundStyle(.white.opacity(0.6)).accessibilityIdentifier("snowbreakReady")
             }
             if isSnowbreak,let notice = snowbreak.notice { Text(notice).font(.caption).foregroundStyle(.secondary).padding(.horizontal) }
             if !isSnowbreak,let status = stage.touchStatus {
@@ -459,15 +465,15 @@ struct CompanionHome: View {
                         Text(store.currentCard?.name ?? modelLabel).font(.title.bold())
                         Picker("当前伙伴",selection:$engine) {
                             Text("本地伙伴").tag("native")
-                            if snowbreak.library.hasCurrent || isSnowbreak { Text("恩雅护士").tag("snowbreak") }
+                            if snowbreak.library.hasCurrent || isSnowbreak { Text(snowbreak.characterName).tag("snowbreak") }
                         }
-                        if isSnowbreak { Toggle("恩雅原声",isOn:$snowbreakVoice).tint(.green) }
+                        if isSnowbreak { Toggle(snowbreak.characterName+"原声",isOn:$snowbreakVoice).tint(.green) }
                         if isSnowbreak,CharacterLibrary().hasCurrent {
                             Button("显示已保存的 Yuki / 本地伙伴") { engine = "native" }
                                 .accessibilityIdentifier("switchToNative")
                         }
                         if !isSnowbreak,snowbreak.library.hasCurrent {
-                            Button("显示恩雅护士") { engine = "snowbreak" }.accessibilityIdentifier("switchToSnowbreak")
+                            Button("显示"+snowbreak.characterName) { engine = "snowbreak" }.accessibilityIdentifier("switchToSnowbreak")
                         }
                         Button { sheet = .character } label: {
                             Label("切换 / 导入伙伴", systemImage: "arrow.triangle.2.circlepath")
@@ -492,7 +498,7 @@ struct CompanionHome: View {
                     Label("音乐 · 接入中", systemImage: "music.note").frame(maxWidth: .infinity, alignment: .leading).foregroundStyle(.secondary).padding(16)
                 }.modifier(SettingsCard())
                 VStack(spacing: 0) {
-                    settingsRow("导入恩雅护士（尘白）", icon:"person.crop.rectangle.stack") { sheet = .snowbreak }
+                    settingsRow("导入尘白角色", icon:"person.crop.rectangle.stack") { sheet = .snowbreak }
                     Divider().padding(.leading,50)
                     if !isSnowbreak { settingsRow("身体、触碰与光照", icon: "sun.max") { sheet = .embodiment } }
                     else { Text("恩雅沿用旧项目的材质、原作动作与病房打光。").font(.caption).foregroundStyle(.secondary).padding(16) }

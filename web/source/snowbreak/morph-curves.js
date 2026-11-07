@@ -18,7 +18,12 @@ export function createMorphCurves(config,runtime,faceRoot){
   const clips=new Map(),sourceByClip=new WeakMap(),names=new Set();let totalKeys=0;
   for(const clip of config.clips){
     const resource=runtime.getAsset(clip.animationRole),descriptor=runtime.current.resources.find(r=>r.role===clip.animationRole);
-    if(resource?.kind!=='animation'||clip.sourceSha256!==(resource.data.generatorMetadata?.sourceSha256||descriptor?.assetId)||!/^[a-f0-9]{64}$/.test(clip.sourceSha256)||clips.has(clip.sourceSha256)||clip.frames!==resource.data.frames||clip.fps!==resource.data.fps||!Array.isArray(clip.curves)||clip.curves.length>64)throw new Error('Morph curve animation mismatch');
+    if(resource?.kind!=='animation'||clip.sourceSha256!==(resource.data.generatorMetadata?.sourceSha256||descriptor?.assetId)||!/^[a-f0-9]{64}$/.test(clip.sourceSha256)||clip.frames!==resource.data.frames||clip.fps!==resource.data.fps||!Array.isArray(clip.curves)||clip.curves.length>64)throw new Error('Morph curve animation mismatch');
+    const alias=clips.get(clip.sourceSha256);
+    if(alias){
+      if(alias.frames!==clip.frames||alias.fps!==clip.fps||JSON.stringify(alias.curves)!==JSON.stringify(clip.curves))throw new Error('Conflicting morph curve alias');
+      sourceByClip.set(resource.data,clip.sourceSha256);continue;
+    }
     const unique=new Set();
     for(const curve of clip.curves){
       if(typeof curve.name!=='string'||!curve.name.length||curve.name.length>128||unique.has(curve.name)||!Array.isArray(curve.keys)||!curve.keys.length||curve.keys.length>4096)throw new Error('Invalid morph curve identity');

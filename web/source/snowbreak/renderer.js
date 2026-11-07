@@ -16,8 +16,11 @@ import {validateTouchBindings} from './touch-reactions.js';
 import {createMorphCurves} from './morph-curves.js';
 import {cueMorphTargetNamesPlugin} from './gltf-morph-names.js';
 export async function createSnowbreakRenderer(canvas,runtime){
+  const orientation=runtime.getAsset("viewOrientation")?.data;
+  if(orientation&&(orientation.schema!=="snowbreak-view-orientation/1"||!Number.isFinite(orientation.yawDegrees)||Math.abs(orientation.yawDegrees)>180))throw new Error("Invalid view orientation");
+  const baseYaw=-Math.PI/2+THREE.MathUtils.degToRad(orientation?.yawDegrees||0);
   const renderer=new THREE.WebGLRenderer({canvas,alpha:true,antialias:true,powerPreference:'high-performance'});
-  const scene=new THREE.Scene(),group=new THREE.Group(),characterGroup=new THREE.Group(),camera=new THREE.PerspectiveCamera(32,1,.01,100);group.rotation.y=-Math.PI/2;scene.add(group);group.add(characterGroup);
+  const scene=new THREE.Scene(),group=new THREE.Group(),characterGroup=new THREE.Group(),camera=new THREE.PerspectiveCamera(32,1,.01,100);group.rotation.y=baseYaw;scene.add(group);group.add(characterGroup);
   const lighting=installCharacterLights(scene,renderer);
   const budget=createRenderBudget();budget.configure({mode:localStorage.getItem('snowRenderMode')||'adaptive'});
   let budgetRatio=0;
@@ -27,7 +30,7 @@ export async function createSnowbreakRenderer(canvas,runtime){
   const bodyBoneSet=new Set(),framingByClip=new Map();const rootLock=runtime.getAsset('rootMotionPolicy')?.data;
   let lastSkeletonUpdates=0,surfaceSequence=0,resizeCount=0,fitCount=0;let viewport=null,cachedBounds=null;
   let frame={scale:1,x:0,y:0,yaw:0,pitch:0,roll:0,stretchX:1,stretchY:1},autoYaw=0,bodyYaw=0,facingReference=null;
-  function orient(){group.rotation.set(THREE.MathUtils.degToRad(frame.pitch),-Math.PI/2+autoYaw+THREE.MathUtils.degToRad(frame.yaw),THREE.MathUtils.degToRad(frame.roll));characterGroup.rotation.set(THREE.MathUtils.degToRad(modelFrame.pitch),THREE.MathUtils.degToRad(modelFrame.yaw+bodyYaw),THREE.MathUtils.degToRad(modelFrame.roll));group.updateMatrixWorld(true);}
+  function orient(){group.rotation.set(THREE.MathUtils.degToRad(frame.pitch),baseYaw+autoYaw+THREE.MathUtils.degToRad(frame.yaw),THREE.MathUtils.degToRad(frame.roll));characterGroup.rotation.set(THREE.MathUtils.degToRad(modelFrame.pitch),THREE.MathUtils.degToRad(modelFrame.yaw+bodyYaw),THREE.MathUtils.degToRad(modelFrame.roll));group.updateMatrixWorld(true);}
   let modelFrame={scale:1,x:0,y:0,depth:0,yaw:0,pitch:0,roll:0,stretchX:1,stretchY:1};
   function setModelFrame(value){
     const next={...modelFrame,...value};if(Object.values(next).some(v=>!Number.isFinite(v)))throw new Error('Invalid character placement');
@@ -41,7 +44,7 @@ export async function createSnowbreakRenderer(canvas,runtime){
     frame={scale:THREE.MathUtils.clamp(value.scale,.3,4),x:THREE.MathUtils.clamp(value.x,-1.5,1.5),y:THREE.MathUtils.clamp(value.y,-1.5,1.5),yaw:((value.yaw+180)%360+360)%360-180,pitch:THREE.MathUtils.clamp(value.pitch,-65,65),roll:THREE.MathUtils.clamp(value.roll,-45,45),stretchX:THREE.MathUtils.clamp(value.stretchX,.65,1.5),stretchY:THREE.MathUtils.clamp(value.stretchY,.65,1.5)};
     orient();fit();return {...frame};
   }
-  function correctFacing(){if(!facingReference)return;group.rotation.y=-Math.PI/2;group.updateMatrixWorld(true);const q=facingReference.bone.getWorldQuaternion(new THREE.Quaternion()),v=facingReference.axis.clone().applyQuaternion(q);if(Math.hypot(v.x,v.z)>.1)autoYaw=facingReference.heading-Math.atan2(v.x,v.z);orient();}
+  function correctFacing(){if(!facingReference)return;group.rotation.y=baseYaw;group.updateMatrixWorld(true);const q=facingReference.bone.getWorldQuaternion(new THREE.Quaternion()),v=facingReference.axis.clone().applyQuaternion(q);if(Math.hypot(v.x,v.z)>.1)autoYaw=facingReference.heading-Math.atan2(v.x,v.z);orient();}
   function faceViewer(){frame.yaw=0;correctFacing();fit();return {...frame};}
   function prepareMeshes(part){part.traverse(m=>{if(m.isBone)m.userData.bindLocalQuaternion=m.quaternion.toArray();if(!m.isMesh)return;geometries.add(m.geometry);for(const old of Array.isArray(m.material)?m.material:[m.material]){materials.add(old);for(const v of Object.values(old))if(v?.isTexture)textures.add(v);}
     const name=m.material.name,map=maps.get(name)||null,state=states.get(name)||{};m.userData.snowbreakSurfaceKey='surface_'+surfaceSequence++;m.userData.snowbreakMaterialName=name;m.userData.previewMap=map;

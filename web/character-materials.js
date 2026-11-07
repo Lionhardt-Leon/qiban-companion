@@ -4,7 +4,8 @@ import * as THREE from 'three';
 export function characterMaterial(name,map,normal,state){
  const eye=/eye01/.test(name),face=/face01/.test(name),hair=/hair01/.test(name);
  const skin=/body00(?:_ma)?_inst|face01/.test(name);
- const shared={color:map?0xffffff:0xcac7c3,map,transparent:!!state.transparent,depthWrite:!state.transparent,alphaTest:map?(state.alphaCutoff||0):0,side:state.doubleSided===false?THREE.FrontSide:THREE.DoubleSide};
+ if(state.opacity!==undefined&&(!Number.isFinite(state.opacity)||state.opacity<0||state.opacity>1))throw new Error('Invalid material opacity');
+ const shared={opacity:state.opacity??1,color:map?0xffffff:0xcac7c3,map,transparent:!!state.transparent,depthWrite:!state.transparent,alphaTest:map?(state.alphaCutoff||0):0,side:state.doubleSided===false?THREE.FrontSide:THREE.DoubleSide};
  let material;
  if(eye)material=new THREE.MeshBasicMaterial(shared);
  else {

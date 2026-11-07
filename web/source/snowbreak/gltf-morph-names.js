@@ -12,6 +12,7 @@ export function cueMorphTargetNamesPlugin(parser){
       const extras=JSON.parse(mesh.extras);
       if(!Object.hasOwn(extras,'targetNames'))continue;
       const names=extras.targetNames;
+      if(Array.isArray(names)&&names.length===0&&mesh.primitives?.length&&mesh.primitives.every(p=>!(p.targets?.length))){const {targetNames,...other}=extras;mesh.extras=other;continue;}
       if(!Array.isArray(names)||!names.length||names.length>128||new Set(names).size!==names.length||names.some(n=>typeof n!=='string'||!n.length||n.length>128)||!mesh.primitives?.length||mesh.primitives.some(p=>(p.targets?.length||0)>names.length))throw new Error('Invalid exported morph names');
       decoded.set(index,names);
       const {targetNames,...other}=extras;mesh.extras=other;

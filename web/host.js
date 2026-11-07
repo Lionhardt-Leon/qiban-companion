@@ -31,17 +31,17 @@ const text=value=>{status.textContent=value;status.hidden=!value;};
 function cleanup(){modelEditor?.dispose();modelEditor=null;danceControls.close();learned=null;finishPaint.hidden=true;presentation?.dispose();lighting?.dispose();editor?.dispose();adapter?.stop('renderer-close');voices?.dispose();display?.dispose();void runtime?.dispose();lighting=presentation=editor=adapter=voices=display=runtime=null;editorHost.replaceChildren();}
 
 async function load(url,id,variant){
-  const ticket=++generation;nonce=id;paused=false;canvas.dataset.snowbreakPaused='false';cleanup();text('正在加载恩雅和病房…');
+  const ticket=++generation;nonce=id;paused=false;canvas.dataset.snowbreakPaused='false';cleanup();text('正在加载本地角色…');
   let opened,nextDisplay,nextVoices;
   try{
-    if(variant){if(!collection)throw new Error('请先导入恩雅整合包');opened=await collection.selectVariant(variant);}else{collection=null;const response=await fetch(url);if(!response.ok)throw new Error('本地角色包读取失败');opened=await openSkinArchive(new Uint8Array(await response.arrayBuffer()));}
-    if(opened.manifest.characterId!=='Enya')throw new Error('此入口当前只支持恩雅护士包');
+    if(variant){if(!collection)throw new Error('请先导入角色整合包');opened=await collection.selectVariant(variant);}else{collection=null;const response=await fetch(url);if(!response.ok)throw new Error('本地角色包读取失败');opened=await openSkinArchive(new Uint8Array(await response.arrayBuffer()));}
+    if(!['Enya','Fenny'].includes(opened.manifest.characterId))throw new Error('不支持的本地角色包');
     nextDisplay=await createSnowbreakRenderer(canvas,opened.runtime);
     nextVoices=opened.runtime.getAsset('voiceCatalog')?await createOriginalVoiceCatalog(opened.runtime):{
       getAudio:()=>null,snapshot:()=>({available:[]}),dispose(){}
     };
     if(ticket!==generation){nextDisplay.dispose();nextVoices.dispose();void opened.runtime.dispose();return;}
-    collection=opened.variants.length?opened:null;if(opened.selection)localStorage.setItem('enya-collection-selection',opened.selection.id);
+    collection=opened.variants.length?opened:null;if(opened.selection)localStorage.setItem(opened.manifest.characterId.toLowerCase()+'-collection-selection',opened.selection.id);
     runtime=opened.runtime;display=nextDisplay;voices=nextVoices;display.setRenderBudget(hardwareBudget);
     const background=display.sceneState().available?'#201d29':'transparent';document.body.style.background=background;document.documentElement.style.background=background;
     adapter=createSnowbreakSampleAdapter(display,{audioForSample:sample=>voices.getAudio(sample)});
@@ -50,12 +50,12 @@ async function load(url,id,variant){
     display.showFaceCandidate(true);adapter.enterStandby();display.faceViewer();last=performance.now();
     let editingScene=null;
     const placementEditing=editing=>{emit({type:'editing',active:editing});if(editing){const state=adapter.snapshot();editingScene=state.sceneId?{id:state.sceneId,time:state.sceneTime}:null;display.editingScene=editingScene?.id||null;display.sceneInteractions.cancel();adapter.stop('placement-edit');if(editingScene){display.selectSample(editingScene.id);display.seek(editingScene.time%display.duration);}closeEditor();}else if(!paused){if(editingScene)adapter.enterScene(editingScene.id,editingScene.time);else adapter.enterStandby();editingScene=null;display.editingScene=null;}};
-    const setupModelEditor=()=>{modelEditor?.dispose();modelEditor=createPresentationEditor({setFrame:display.setModelFrame,frameState:display.modelFrameState},canvas,'model-placement:'+opened.selection?.mode+':'+(adapter.snapshot().sceneId||'main'),{initialFrame:{...FULL_FRAME,depth:0},title:'仅移动角色',idPrefix:'model',allowDepth:true,allowStretch:false,verticalSign:-1,dragScale:display.modelDragScale,onEditing:placementEditing});};
+    const setupModelEditor=()=>{modelEditor?.dispose();const prefix=opened.manifest.characterId==='Enya'?'':opened.manifest.characterId.toLowerCase()+':';modelEditor=createPresentationEditor({setFrame:display.setModelFrame,frameState:display.modelFrameState},canvas,'model-placement:'+prefix+opened.selection?.mode+':'+(adapter.snapshot().sceneId||'main'),{initialFrame:{...FULL_FRAME,depth:0},title:'仅移动角色',idPrefix:'model',allowDepth:true,allowStretch:false,verticalSign:-1,dragScale:display.modelDragScale,onEditing:placementEditing});};
     display.setupModelEditor=setupModelEditor;setupModelEditor();
-    presentation=createPresentationEditor(display,canvas,'presentation:'+(opened.selection?'enya-'+opened.selection.mode:opened.manifest.skinId),{
+    presentation=createPresentationEditor(display,canvas,'presentation:'+(opened.selection?opened.manifest.characterId.toLowerCase()+'-'+opened.selection.mode:opened.manifest.skinId),{
       initialFrame:display.presentationDefault,onEditing:placementEditing
     });
-    lighting=createLightingEditor(display,'lighting:'+(opened.selection?'enya-'+opened.selection.mode:opened.manifest.skinId));
+    lighting=createLightingEditor(display,'lighting:'+(opened.selection?opened.manifest.characterId.toLowerCase()+'-'+opened.selection.mode:opened.manifest.skinId));
     let previousStatus='';
     display.setFrameHandler(()=>{
       const now=performance.now();if(!paused)adapter.tick(Math.min(100,Math.max(0,now-last)));last=now;
@@ -88,7 +88,7 @@ async function load(url,id,variant){
   }catch(error){
     if(ticket!==generation){nextDisplay?.dispose();nextVoices?.dispose();void opened?.runtime.dispose();return;}
     cleanup();nextDisplay?.dispose();nextVoices?.dispose();void opened?.runtime.dispose();
-    text('恩雅加载失败：'+String(error.message||error));emit({type:'error',message:String(error.message||error)});
+    text('角色加载失败：'+String(error.message||error));emit({type:'error',message:String(error.message||error)});
   }
 }
 

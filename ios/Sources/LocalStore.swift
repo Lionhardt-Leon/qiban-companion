@@ -110,8 +110,17 @@ enum APIKeyStore {
         next.personaSessionKey = key;next.personaConversations = sessions
     }
     func activateCompanion(_ modelKey:String) {
-        guard ["native","enya"].contains(modelKey) else {return}
+        guard ["native","enya","fenny"].contains(modelKey) else {return}
         if context.modelKey != modelKey {cancel()}
+        if modelKey == "fenny",archive.settings.personas?.modelBindings["fenny"] == nil {
+            var next=archive;var library=next.settings.personas ?? PersonaLibrary.migrating(next.settings.persona)
+            var card=PersonaCard();card.title="芬妮 · 婚皮";card.name="芬妮"
+            card.description="你通过屏幕上的芬妮婚皮模型陪伴用户。当前服饰、姿势和动作结果以应用每轮提供的身体状态为准；婚纱内衣版仍穿有内衣，不是裸体。不要把其他角色的身份、服饰或经历当作自己的。"
+            library.cards.append(card);library.modelBindings["fenny"]=card.id
+            if next.personaSessionKey == nil {next.personaSessionKey=library.defaultCardID?.uuidString}
+            next.settings.personas=library
+            do {try commit(next)}catch{self.error=error.localizedDescription;return}
+        }
         if let card = archive.settings.personas?.card(for:modelKey),archive.personaSessionKey != card.id.uuidString {
             cancel();var next = archive;switchConversation(&next,to:card.id.uuidString)
             do {try commit(next)} catch {self.error = error.localizedDescription;return}
@@ -120,7 +129,7 @@ enum APIKeyStore {
     }
     func savePersonas(_ library:PersonaLibrary,selected:UUID,modelKey:String) throws {
         guard !busy,storageReady else {throw CompanionError.message("请等待当前回复完成后保存人设。")}
-        guard ["native","enya"].contains(modelKey),library.cards.contains(where:{$0.id == selected}) else {throw CompanionError.message("角色卡或伙伴映射无效。")}
+        guard ["native","enya","fenny"].contains(modelKey),library.cards.contains(where:{$0.id == selected}) else {throw CompanionError.message("角色卡或伙伴映射无效。")}
         var library = library;library.modelBindings[modelKey] = selected;try library.validate()
         var next = archive;next.schemaVersion = 2;next.settings.personas = library
         // New cards must start empty even when chosen on the very first migration save.
