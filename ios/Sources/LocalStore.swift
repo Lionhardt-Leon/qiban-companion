@@ -118,7 +118,7 @@ enum APIKeyStore {
             card.description="你通过屏幕上的芬妮婚皮模型陪伴用户。当前服饰、姿势和动作结果以应用每轮提供的身体状态为准；婚纱内衣版仍穿有内衣，不是裸体。不要把其他角色的身份、服饰或经历当作自己的。"
             library.cards.append(card);library.modelBindings["fenny"]=card.id
             if next.personaSessionKey == nil {next.personaSessionKey=library.defaultCardID?.uuidString}
-            next.settings.personas=library
+            next.schemaVersion=2;next.settings.personas=library
             do {try commit(next)}catch{self.error=error.localizedDescription;return}
         }
         if let card = archive.settings.personas?.card(for:modelKey),archive.personaSessionKey != card.id.uuidString {

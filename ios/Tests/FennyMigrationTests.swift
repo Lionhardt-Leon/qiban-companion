@@ -26,7 +26,7 @@ final class FennyMigrationTests:XCTestCase {
     @MainActor func testFirstFennySelectionCreatesIndependentEditableIdentityAndPreservesLegacyHistory() throws {
         let folder=FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString);defer{try? FileManager.default.removeItem(at:folder)}
         let store=LocalStore(directory:folder);try store.saveMemories("旧角色的记忆")
-        store.activateCompanion("fenny");let id=try XCTUnwrap(store.currentCard?.id)
+        store.activateCompanion("fenny");XCTAssertNil(store.error);let id=try XCTUnwrap(store.currentCard?.id)
         XCTAssertEqual(store.currentCard?.name,"芬妮");XCTAssertEqual(store.archive.memories,"")
         store.activateCompanion("enya");XCTAssertEqual(store.archive.memories,"旧角色的记忆")
         store.activateCompanion("fenny");XCTAssertEqual(store.currentCard?.id,id)
