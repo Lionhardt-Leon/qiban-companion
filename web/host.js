@@ -10,7 +10,7 @@ import {FULL_FRAME,createPresentationEditor} from './presentation-editor.js';
 
 let aiControlledTouch=true;
 const canvas=document.querySelector('#stage'), status=document.querySelector('#status'), editorHost=document.querySelector('#editor');
-let collection=null,pausedScene=null,hardwareBudget={};
+let collection=null,pausedScene=null,hardwareBudget={},originalLanguage='Chinese';
 let generation=0,nonce='',runtime,display,adapter,voices,editor,presentation,modelEditor,lighting,learned,last=0,paused=false,voiceEnabled=true;
 const danceControls=createDanceControls(value=>retimeDance(learned,value.tempo,performance.now()));
 const finishPaint=document.createElement('button');finishPaint.id='finishPaint';finishPaint.hidden=true;
@@ -43,11 +43,12 @@ async function load(url,id,variant){
     if(ticket!==generation){nextDisplay.dispose();nextVoices.dispose();void opened.runtime.dispose();return;}
     collection=opened.variants.length?opened:null;if(opened.selection)localStorage.setItem(opened.manifest.characterId.toLowerCase()+'-collection-selection',opened.selection.id);
     runtime=opened.runtime;display=nextDisplay;voices=nextVoices;display.setRenderBudget(hardwareBudget);
+    voices.setLanguage?.(originalLanguage);
     const background=display.sceneState().available?'#201d29':'transparent';document.body.style.background=background;document.documentElement.style.background=background;
     adapter=createSnowbreakSampleAdapter(display,{audioForSample:sample=>voices.getAudio(sample)});
     display.sceneInteractions.configure({scene:()=>adapter.snapshot().sceneId||display.editingScene,reaction:id=>{void adapter.playSceneReaction(id,{withVoice:voiceEnabled});},voice:id=>{if(voiceEnabled){const audio=voices.getAudio(id);if(audio){audio.currentTime=0;void audio.play().catch(()=>{});}}},event:emit});
     // The original body/face tracks, morph curves and scene transforms stay in the old renderer.
-    display.showFaceCandidate(true);adapter.enterStandby();display.faceViewer();last=performance.now();
+    display.showFaceCandidate(true);const initial=display.sampleOptions().find(s=>s.id===display.sampleState().sampleId);if(initial?.persistentState)adapter.enterScene(initial.id);else adapter.enterStandby();display.faceViewer();last=performance.now();
     let editingScene=null;
     const placementEditing=editing=>{emit({type:'editing',active:editing});if(editing){const state=adapter.snapshot();editingScene=state.sceneId?{id:state.sceneId,time:state.sceneTime}:null;display.editingScene=editingScene?.id||null;display.sceneInteractions.cancel();adapter.stop('placement-edit');if(editingScene){display.selectSample(editingScene.id);display.seek(editingScene.time%display.duration);}closeEditor();}else if(!paused){if(editingScene)adapter.enterScene(editingScene.id,editingScene.time);else adapter.enterStandby();editingScene=null;display.editingScene=null;}};
     const setupModelEditor=()=>{modelEditor?.dispose();const prefix=opened.manifest.characterId==='Enya'?'':opened.manifest.characterId.toLowerCase()+':';modelEditor=createPresentationEditor({setFrame:display.setModelFrame,frameState:display.modelFrameState},canvas,'model-placement:'+prefix+opened.selection?.mode+':'+(adapter.snapshot().sceneId||'main'),{initialFrame:{...FULL_FRAME,depth:0},title:'仅移动角色',idPrefix:'model',allowDepth:true,allowStretch:false,verticalSign:-1,dragScale:display.modelDragScale,onEditing:placementEditing});};
@@ -67,7 +68,8 @@ async function load(url,id,variant){
         }
       }
       const state=adapter.snapshot(),playStatus=learned?'learned:'+learned.id:state.status;
-      if(playStatus!==previousStatus){previousStatus=playStatus;emit({type:'selfState',state:inspect()});emit({type:'playback',active:!!learned||['playing','scene-preview','local-arm-preview'].includes(state.status),status:playStatus,label:display.sampleOptions().find(s=>s.id===display.sampleState().sampleId)?.label});}
+      const playKey=playStatus+':'+(state.sceneId||'')+':'+display.sampleState().sampleId;
+      if(playKey!==previousStatus){previousStatus=playKey;emit({type:'selfState',state:inspect()});emit({type:'playback',active:!!learned||['playing','scene-preview','local-arm-preview'].includes(state.status),status:playStatus,label:display.sampleOptions().find(s=>s.id===display.sampleState().sampleId)?.label});}
     });
     const geometry=opened.manifest.resources.filter(r=>r.kind==='geometry').map(r=>r.assetId).join('-');
     const labelKey='surface:'+opened.manifest.skinId+':'+geometry;
@@ -84,7 +86,7 @@ async function load(url,id,variant){
     edit.addEventListener('change',()=>{if(edit.checked){editorHost.classList.remove('open');finishPaint.textContent='完成'+select.selectedOptions[0].textContent+'标注';finishPaint.hidden=false;}});
     text('');emit({type:'ready',bodyActions:display.embodiment.snapshot().available,selection:opened.selection,variants:opened.variants,characterId:opened.manifest.characterId,skinId:opened.manifest.skinId,
       stance:opened.runtime.getAsset('stateTransition')?.data.stance||'seated',samples:display.sampleOptions().map(x=>x.id),voices:voices.snapshot().available,learned:display.learnedOptions().map(x=>x.id)});
-    window.__snowbreakMigration={display,adapter,editor,presentation,manifest:opened.manifest};
+    window.__snowbreakMigration={display,adapter,voices,editor,presentation,manifest:opened.manifest};
   }catch(error){
     if(ticket!==generation){nextDisplay?.dispose();nextVoices?.dispose();void opened?.runtime.dispose();return;}
     cleanup();nextDisplay?.dispose();nextVoices?.dispose();void opened?.runtime.dispose();
@@ -97,8 +99,14 @@ async function command(value){
   if(value.type==='dispose'){generation++;cleanup();return;}
   if(value.type==='load')return load(value.url,value.nonce);
   if(value.type==='variant'){if(!collection?.variants.some(v=>v.id===value.id))return;return load(null,nonce,value.id);}
+  if(value.type==='voiceLanguage'){
+    if(!['zh','ja'].includes(value.language))throw new Error('不支持的原声语言');originalLanguage=value.language==='ja'?'Japanese':'Chinese';
+    if(adapter){const previous=adapter.snapshot();adapter.stop('voice-language-change');voices?.setLanguage?.(originalLanguage);if(previous.sceneId)adapter.enterScene(previous.sceneId,previous.sceneTime);else adapter.enterStandby();}
+    return;
+  }
   if(!adapter)return;
   if(['body','gesture','sample','learned','stop'].includes(value.type)){
+    voices?.stop?.();
     if(value.automatic&&(modelEditor?.active||presentation?.active)){emit({type:'notice',message:'编辑期间已暂停自动动作，请完成调整后再互动。'});return;}
     modelEditor?.close();presentation?.close();
   }
@@ -115,7 +123,7 @@ async function command(value){
   if(value.type==='danceEdit'){danceControls.toggle();return;}
   if(value.type==='speechLevel'){display.embodiment.setSpeechLevel(value.value);return;}
   if(value.type==='gaze'){display.setGaze(value.x,value.y);return;}
-  if(value.type==='pause'){modelEditor?.close();danceControls.close();pausedScene=adapter.snapshot().sceneId;display.sceneInteractions.cancel();display.embodiment.reset();display.resetSenses();learned=null;paused=true;lighting?.close();presentation?.close();canvas.dataset.snowbreakPaused='true';adapter.stop('background');closeEditor();return;}
+  if(value.type==='pause'){voices?.stop?.();modelEditor?.close();danceControls.close();pausedScene=adapter.snapshot().sceneId;display.sceneInteractions.cancel();display.embodiment.reset();display.resetSenses();learned=null;paused=true;lighting?.close();presentation?.close();canvas.dataset.snowbreakPaused='true';adapter.stop('background');closeEditor();return;}
   if(value.type==='resume'){paused=false;canvas.dataset.snowbreakPaused='false';last=performance.now();if(pausedScene){adapter.enterScene(pausedScene);pausedScene=null;}else adapter.enterStandby();return;}
   if(value.type==='stop'){display.embodiment.reset();if(learned){learned.stop=performance.now();return;}adapter.stop();adapter.enterStandby();return;}
   if(value.type==='officialTouchPoints'){const count=display.sceneInteractions.togglePoints();if(!count)emit({type:'notice',message:'当前包／场景没有已移植的原作触点；互动4、5需使用新版互动包。'});return;}
@@ -126,10 +134,10 @@ async function command(value){
   if(value.type==='frameEdit'){learned=null;modelEditor.close();presentation.toggle();return;}
   if(value.type==='scene')return display.setSceneVisible(!!value.visible);
   if(value.type==='room')return display.setRoomVisible(!!value.visible);
-  if(value.type==='voice'){voiceEnabled=!!value.enabled;if(!voiceEnabled){const sceneId=adapter.snapshot().sceneId;adapter.stop('voice-disabled');if(sceneId)adapter.enterScene(sceneId);else adapter.enterStandby();}return;}
+  if(value.type==='voice'){voiceEnabled=!!value.enabled;if(!voiceEnabled){voices?.stop?.();const sceneId=adapter.snapshot().sceneId;adapter.stop('voice-disabled');if(sceneId)adapter.enterScene(sceneId);else adapter.enterStandby();}return;}
   if(value.type==='sample'&&display.sampleOptions().some(s=>s.id===value.id)){
     display.sceneInteractions.cancel();
-    if(/^show_0[2345]$/.test(value.id)){learned=null;modelEditor.close();display.embodiment.reset();adapter.enterScene(value.id);display.setupModelEditor();emit({type:'selfState',state:inspect()});return;}
+    if(/^show_0[2345]$/.test(value.id)||display.sampleOptions().find(s=>s.id===value.id)?.persistentState){learned=null;modelEditor.close();display.embodiment.reset();adapter.enterScene(value.id);display.setupModelEditor();emit({type:'selfState',state:inspect()});return;}
     if(adapter.snapshot().sceneId){const mapped=value.id==='head'?display.sceneInteractions.headReaction():null;await adapter.playSceneReaction(mapped||value.id,{withVoice:!!value.withVoice});return;}
     display.embodiment.releaseHands();
     learned=null;presentation.close();

@@ -10,7 +10,7 @@ export async function openSkinArchive(bytes){
   let variants=null;
   if(input.schema==='snowbreak-collection/1'){
     if(!['Enya','Fenny'].includes(input.characterId)||!Array.isArray(input.variants)||!(input.characterId==='Fenny'?[2,4]:[4]).includes(input.variants.length))throw new Error('Invalid character collection');
-    const ids=new Set();variants=input.variants.map(v=>{if(!['standing','interaction'].includes(v.mode)||!(input.characterId==='Fenny'?['normal','nude','underwear']:['normal','nude']).includes(v.outfit)||v.id!==v.mode+'_'+v.outfit||ids.has(v.id))throw new Error('Invalid collection variant');ids.add(v.id);return {...v,manifest:validateSkinManifest(v.manifest)};});
+    const ids=new Set();variants=input.variants.map(v=>{if(!['standing','interaction'].includes(v.mode)||!(input.characterId==='Fenny'?['normal','underwear']:['normal','nude']).includes(v.outfit)||v.id!==v.mode+'_'+v.outfit||ids.has(v.id))throw new Error('Invalid collection variant');ids.add(v.id);return {...v,manifest:validateSkinManifest(v.manifest)};});
     if(!ids.has(input.defaultVariant)||variants.some(v=>v.manifest.characterId!==input.characterId))throw new Error('Invalid collection default');
   }
   const manifests=variants?variants.map(v=>v.manifest):[validateSkinManifest(input)];

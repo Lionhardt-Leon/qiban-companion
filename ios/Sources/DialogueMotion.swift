@@ -16,6 +16,14 @@ struct DialogueActionEvent {
 }
 
 enum DialogueMotion {
+    static let fennyScenes:[(id:String,label:String,meaning:String)] = [
+        ("snowbreak_fenny_scene_01","婚礼互动 · 基础坐姿","芬妮原作婚礼基础坐姿，保持该互动场景"),
+        ("snowbreak_fenny_scene_02","婚礼互动 · 双脚","芬妮原作婚礼双脚互动坐姿，保持该互动场景"),
+        ("snowbreak_fenny_scene_03","婚礼互动 · 扶额","芬妮原作婚礼扶额坐姿，保持该互动场景"),
+        ("snowbreak_fenny_scene_07","婚礼互动 · 待机变化一","芬妮原作婚礼互动待机变化一，保持该姿态"),
+        ("snowbreak_fenny_scene_08","婚礼互动 · 待机变化二","芬妮原作婚礼互动待机变化二，保持该姿态"),
+        ("snowbreak_fenny_scene_09","婚礼互动 · 待机变化三","芬妮原作婚礼互动待机变化三，保持该姿态")
+    ]
     // Descriptions are trusted code, never instructions taken from an imported role package.
     static let catalog: [(id: String, meaning: String)] = [
         ("hello", "挥手打招呼、欢迎或告别"),
@@ -28,6 +36,8 @@ enum DialogueMotion {
         ("procedural", "自由骨骼动作，用 motion 关键帧控制四肢、头和躯干"),
         ("fenny_outfit_normal", "恢复芬妮原婚纱"),
         ("fenny_outfit_underwear", "切换已导入的芬妮婚纱内衣版，仍有内衣，不是裸体"),
+        ("fenny_mode_standing", "切到芬妮看板娘站立模式，保留当前婚纱／内衣选择"),
+        ("fenny_mode_interaction", "切到芬妮原作婚皮互动场景，保留当前婚纱／内衣选择"),
         ("enya_outfit_normal", "恢复恩雅正常服饰，保留当前陪伴模式"),
         ("enya_outfit_nude", "切换恩雅已有的果体版模型，保留当前陪伴模式"),
         ("enya_mode_standing", "切到看板娘站立模式，保留当前服饰"),
@@ -59,7 +69,7 @@ enum DialogueMotion {
         ("enya_yuki_dance_90bpm", "恩雅站立全身舞蹈，90 BPM，只适用于站立看板娘"),
         ("enya_yuki_dance_120bpm", "恩雅站立全身舞蹈，120 BPM，只适用于站立看板娘"),
         ("enya_yuki_f_vibe_dance_60_bpm_002", "恩雅站立全身舞蹈，60 BPM，只适用于站立看板娘")
-    ] + BodyCommand.allCases.map{(id:$0.rawValue,meaning:$0.label+"；由播放器直接控制并提供身体状态回执")} + BodyGesture.catalog
+    ] + fennyScenes.map{(id:$0.id,meaning:$0.meaning)} + BodyCommand.allCases.map{(id:$0.rawValue,meaning:$0.label+"；由播放器直接控制并提供身体状态回执")} + BodyGesture.catalog
 
     static func allowed(_ ids: [String]) -> [String] {
         catalog.map(\.id).filter { ids.contains($0) }

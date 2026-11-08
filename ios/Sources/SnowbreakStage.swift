@@ -96,6 +96,7 @@ struct SnowbreakTouchEvent {
         var result=actions+bodyActions
         if characterID == "Fenny" {
             for outfit in ["normal","underwear"] where variantIDs.contains(companionMode+"_"+outfit){result.append("fenny_outfit_"+outfit)}
+            if ["standing","interaction"].allSatisfy({variantIDs.contains($0+"_"+companionOutfit)}){result += ["fenny_mode_standing","fenny_mode_interaction"]}
         }else if variantIDs.count == 4 {result += ["enya_outfit_normal","enya_outfit_nude","enya_mode_standing","enya_mode_interaction"]}
         return result
     }
@@ -189,6 +190,7 @@ struct SnowbreakTouchEvent {
                 else {companionMode = body["stance"] as? String == "standing" ? "standing":"interaction";companionOutfit = "unknown"}
                 let samples = body["samples"] as? [String] ?? []
                 actions = ["head","left","right","home_login","home_invite","home_shy","home_check","home_kiss","home_jealous","home_marry","home_sigh","home_stage","home_stand","show_02","show_03","show_04","show_05","sequence","idle_01","idle_02"].filter { samples.contains($0) }.map { "snowbreak_"+$0 }
+                if identity == "Fenny" {actions += DialogueMotion.fennyScenes.map(\.id).filter{samples.contains(String($0.dropFirst("snowbreak_".count)))}}
                 let learned = body["learned"] as? [String] ?? []
                 actions += ["yuki_hello","yuki_Yes","yuki_No","yuki_Peace_hand","yuki_dance_90bpm","yuki_dance_120bpm","yuki_f_vibe_dance_60_bpm_002"].filter { learned.contains($0) && (!$0.contains("dance") || body["stance"] as? String == "standing") }.map { "enya_"+$0 }
                 ready = true;error = nil
@@ -224,6 +226,7 @@ struct SnowbreakTouchEvent {
         if id == "stop" { stop();return }
         if ready,dialogueActions.contains(id) {
             if id.hasPrefix("fenny_outfit_"){selectVariant(outfit:String(id.dropFirst("fenny_outfit_".count)));return}
+            if id.hasPrefix("fenny_mode_"){selectVariant(mode:String(id.dropFirst("fenny_mode_".count)));return}
             if id.hasPrefix("enya_outfit_") { selectVariant(outfit:String(id.dropFirst("enya_outfit_".count)));return }
             if id.hasPrefix("enya_mode_") { selectVariant(mode:String(id.dropFirst("enya_mode_".count)));return }
         }
@@ -258,6 +261,7 @@ struct SnowbreakTouchEvent {
     func setTouchPolicy(_ value:Bool){send(["type":"touchPolicy","aiControlled":value])}
     func setSpeechLevel(_ value:Float){if ready{send(["type":"speechLevel","value":value.isFinite ? min(1,max(0,value)):0])}}
     func setVoice(_ value:Bool) { send(["type":"voice","enabled":value]) }
+    func setOriginalLanguage(_ language:String){send(["type":"voiceLanguage","language":language == "ja" ? "ja":"zh"])}
     func webView(_ webView:WKWebView,decidePolicyFor navigationAction:WKNavigationAction,decisionHandler:@escaping(WKNavigationActionPolicy)->Void) {
         let url = navigationAction.request.url
         decisionHandler(url?.scheme == "companion-snowbreak" && url?.host == "local" ? .allow : .cancel)
@@ -285,14 +289,14 @@ struct SnowbreakImportView:View {
         NavigationStack {
             Form {
                 Section("尘白角色 · 本地移植") {
-                    Text("沿用旧项目 V13 .snowbreak 包，包含病房、原声、待机和头部/左右手反应。")
+                    Text("导入本地恩雅／芬妮 .snowbreak 整合包。可用模式、动作、场景和原声由素材包决定。")
                     Button("选择角色素材包") { picking = true }.accessibilityIdentifier("importSnowbreak")
                     Button("App 文件夹") { local = true }
                     if stage.library.hasCurrent { Text("已保存角色素材，下次启动会从本机加载。") }
                     if let error = stage.error { Text(error).foregroundStyle(.red) }
                 }
                 Section("触碰") {
-                    Text("进入恩雅后，动作菜单可播放三组原作反应及原声。首次使用精细触碰时，从动作菜单打开表面标注，为头部或左右手画上标签；未标注区域不会猜测部位。")
+                    Text("导入后可在动作菜单切换已保存的角色、陪伴模式和服饰。显示原作触点可查看当前场景已有的触点；也可通过精细触碰表面标注补充身体分区。")
                     Text("原 App 内保存的标注不会跨 App 自动读取；模型和原始互动资源可以沿用。")
                 }
             }.navigationTitle("导入尘白角色")

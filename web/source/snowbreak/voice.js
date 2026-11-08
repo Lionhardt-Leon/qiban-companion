@@ -9,6 +9,7 @@ export async function createOriginalVoice(asset){
 
 export async function createOriginalVoiceCatalog(runtime){
   const config=runtime.getAsset('voiceCatalog')?.data,catalog=runtime.getAsset('sampleCatalog')?.data;
+  if(config?.schema==='snowbreak-voice-catalog/2')return createBilingualVoiceCatalog(runtime,config,catalog);
   if(config?.schema!=='snowbreak-voice-catalog/1'||config.characterId!==runtime.current.characterId||config.originalSyncVerified!==false||!Array.isArray(config.samples)||!config.samples.length||config.samples.length>24||!['snowbreak-sample-catalog/1','snowbreak-sample-catalog/2'].includes(catalog?.schema)||config.defaultId!==catalog.defaultId||!/^[a-f0-9]{64}$/.test(config.sourceTableSha256)||config.sourceTableSha256!==catalog.sourceTableSha256)throw new Error('Invalid voice catalog');
   const ids=new Set(),entries=[];
   for(const item of config.samples){
@@ -23,4 +24,27 @@ export async function createOriginalVoiceCatalog(runtime){
   return {get audio(){return voices.get(config.defaultId)?.audio||null;},getAudio:id=>voices.get(id)?.audio||null,failures,
     snapshot:()=>({available:[...voices.keys()],failures:[...failures],originalSyncVerified:false}),
     dispose(){for(const voice of voices.values())voice.dispose();voices.clear();}};
+}
+
+async function createBilingualVoiceCatalog(runtime,config,catalog){
+  if(config.characterId!==runtime.current.characterId||config.originalSyncVerified!==false||!Number.isInteger(config.sourceSkinId)||config.sourceSkinId<=0||!Array.isArray(config.samples)||config.samples.length>64||!['snowbreak-sample-catalog/1','snowbreak-sample-catalog/2'].includes(catalog?.schema)||config.defaultId!==catalog.defaultId||!/^[a-f0-9]{64}$/.test(config.sourceTableSha256)||config.sourceTableSha256!==catalog.sourceTableSha256||!Array.isArray(config.events)||config.events.length>64)throw new Error('Invalid bilingual voice catalog');
+  const groups=new Map(),identities=new Set(),assets=new Map(),voices=new Map(),failures=[];
+  for(const [items,isSample] of [[config.samples,true],[config.events,false]])for(const item of items){
+    const sample=catalog.samples.find(s=>s.id===item.id),asset=runtime.getAsset(item.assetRole),descriptor=runtime.current.resources.find(r=>r.role===item.assetRole);
+    if(typeof item.id!=='string'||!/^[a-zA-Z0-9_-]{1,64}$/.test(item.id)||asset?.kind!=='audio'||!descriptor||!['Chinese','Japanese'].includes(item.language)||item.sourceSkinId!==config.sourceSkinId||item.originalSyncVerified!==false||!Number.isInteger(item.eventId)||item.eventId<=0||item.eventId>0xffffffff||typeof item.voiceId!=='string'||!/^[a-zA-Z0-9_-]{1,64}$/.test(item.voiceId)||!Number.isFinite(item.weight)||item.weight<=0||item.weight>1000000||(isSample&&(!sample||!Number.isInteger(item.sourceShowElementId)||item.sourceShowElementId<=0||sample.sourceShowElementId!==item.sourceShowElementId)))throw new Error('Bilingual voice identity mismatch');
+    const identity=item.language+':'+item.id+':'+item.eventId;if(identities.has(identity))throw new Error('Duplicate bilingual voice choice');identities.add(identity);
+    const group=item.language+':'+item.id;if(!groups.has(group))groups.set(group,[]);groups.get(group).push({hash:descriptor.assetId,weight:item.weight,eventId:item.eventId});assets.set(descriptor.assetId,asset);
+  }
+  if(!identities.size)throw new Error('Empty bilingual voice catalog');
+  const queue=[...assets];let next=0;
+  await Promise.all(Array.from({length:Math.min(4,queue.length)},async()=>{while(next<queue.length){const [hash,asset]=queue[next++];try{voices.set(hash,await createOriginalVoice(asset));}catch{failures.push(hash);}}}));
+  let language='Chinese',disposed=false;
+  function stop(){for(const voice of voices.values()){voice.audio.pause();voice.audio.currentTime=0;}}
+  function getAudio(id){
+    if(disposed)return null;const choices=(groups.get(language+':'+id)||[]).filter(c=>voices.has(c.hash)),total=choices.reduce((n,c)=>n+c.weight,0);if(!choices.length||!Number.isFinite(total)||total<=0)return null;
+    let pick=Math.random()*total;for(const choice of choices){pick-=choice.weight;if(pick<0)return voices.get(choice.hash).audio;}return voices.get(choices.at(-1).hash).audio;
+  }
+  return {get audio(){return getAudio(config.defaultId);},getAudio,stop,failures,setLanguage(value){if(!['Chinese','Japanese'].includes(value))throw new Error('Unsupported original voice language');if(language!==value){stop();language=value;}},
+    snapshot:()=>({language,available:[...groups].filter(([key,items])=>key.startsWith(language+':')&&items.some(c=>voices.has(c.hash))).map(([key])=>key.slice(language.length+1)),failures:[...failures],originalSyncVerified:false}),
+    dispose(){disposed=true;for(const voice of voices.values())voice.dispose();voices.clear();}};
 }

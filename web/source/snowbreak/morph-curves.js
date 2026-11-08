@@ -29,7 +29,9 @@ export function createMorphCurves(config,runtime,faceRoot){
       if(typeof curve.name!=='string'||!curve.name.length||curve.name.length>128||unique.has(curve.name)||!Array.isArray(curve.keys)||!curve.keys.length||curve.keys.length>4096)throw new Error('Invalid morph curve identity');
       unique.add(curve.name);names.add(curve.name);let previous=-Infinity;
       for(const key of curve.keys){
-        if(!Array.isArray(key)||key.length!==5||!key.every(Number.isFinite)||key[0]<0||key[0]>120||key[0]<=previous||Math.abs(key[1])>4||Math.abs(key[2])>1e6||Math.abs(key[3])>1e6||![0,1,2].includes(key[4]))throw new Error('Invalid morph curve key');
+        // Source curves may retain negative preroll keys. They affect the
+        // Hermite segment crossing t=0 and must not be shifted or discarded.
+        if(!Array.isArray(key)||key.length!==5||!key.every(Number.isFinite)||key[0]<-120||key[0]>120||key[0]<=previous||Math.abs(key[1])>4||Math.abs(key[2])>1e6||Math.abs(key[3])>1e6||![0,1,2].includes(key[4]))throw new Error('Invalid morph curve key');
         previous=key[0];if(++totalKeys>100000)throw new Error('Morph curve key limit');
       }
     }

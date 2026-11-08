@@ -43,7 +43,10 @@ struct CompanionHome: View {
     private var recentTouchSummary:String {ProcessInfo.processInfo.systemUptime-lastTouchAt<=30 ? lastTouchSummary:"最近没有新的触碰"}
     @State private var touchTicket=UUID()
     @AppStorage("snowbreakVoice") private var snowbreakVoice = true
+    private static let sourceActionLabels:[String:String] = ["snowbreak_home_jealous":"芬妮 · 吃醋","snowbreak_home_marry":"芬妮 · 婚礼互动","snowbreak_home_sigh":"芬妮 · 叹气","snowbreak_home_stage":"芬妮 · 主页展示","snowbreak_home_stand":"芬妮 · 站立待机","snowbreak_home_login":"看板娘 · 登录招呼","snowbreak_home_invite":"看板娘 · 邀请","snowbreak_home_shy":"看板娘 · 害羞","snowbreak_home_check":"看板娘 · 检查","snowbreak_home_kiss":"看板娘 · 亲吻","snowbreak_show_02":"互动展示 02","snowbreak_show_03":"互动展示 03","snowbreak_show_04":"互动展示 04","snowbreak_show_05":"互动展示 05","snowbreak_sequence":"完整展示片段","snowbreak_idle_01":"互动待机变化 01","snowbreak_idle_02":"互动待机变化 02","snowbreak_head":"头部原作反应","snowbreak_left":"左手原作反应","snowbreak_right":"右手原作反应","enya_yuki_hello":"学习 Yuki · 挥手","enya_yuki_Yes":"学习 Yuki · 点头","enya_yuki_No":"学习 Yuki · 摇头","enya_yuki_Peace_hand":"学习 Yuki · 比 V","enya_yuki_dance_90bpm":"站立舞蹈 · 90 BPM","enya_yuki_dance_120bpm":"站立舞蹈 · 120 BPM","enya_yuki_f_vibe_dance_60_bpm_002":"站立舞蹈 · 60 BPM"]
+    private func sourceActionLabel(_ id:String)->String {DialogueMotion.fennyScenes.first{$0.id == id}?.label ?? Self.sourceActionLabels[id] ?? id}
     private var isSnowbreak:Bool { engine == "snowbreak" }
+    private var interactionModeLabel:String {snowbreak.characterID == "Fenny" ? "皮肤互动":"皮肤互动（坐姿）"}
     private var availableActions:[String] { isSnowbreak ? snowbreak.dialogueActions : stage.dialogueActions }
     private var modelEditing:Bool {isSnowbreak ? snowbreak.isEditing:nativeEditing}
     private var currentRevision:Int { isSnowbreak ? snowbreak.interactionRevision : stage.interactionRevision }
@@ -112,21 +115,21 @@ struct CompanionHome: View {
                             if isSnowbreak {
                                 ForEach(snowbreak.savedCharacters,id:\.self){id in Button(id == "Fenny" ? "切换到芬妮婚皮":"切换到恩雅护士"){snowbreak.selectCharacter(id)}}
                                 if snowbreak.characterID == "Fenny" {
-                                    Button("原婚纱"){snowbreak.selectVariant(outfit:"normal")}
-                                    Button("婚纱内衣版"){snowbreak.selectVariant(outfit:"underwear")}
+                                    Button(snowbreak.companionOutfit == "normal" ? "✓ 原婚纱":"原婚纱"){snowbreak.selectVariant(outfit:"normal")}
+                                    Button(snowbreak.companionOutfit == "underwear" ? "✓ 婚纱内衣版":"婚纱内衣版"){snowbreak.selectVariant(outfit:"underwear")}
                                 }
                                 if snowbreak.variantIDs.count == 4 {
                                     Section("陪伴模式") {
                                         Button(snowbreak.companionMode == "standing" ? "✓ 看板娘（站立）" : "看板娘（站立）") { snowbreak.selectVariant(mode:"standing") }
-                                        Button(snowbreak.companionMode == "interaction" ? "✓ 皮肤互动（坐姿）" : "皮肤互动（坐姿）") { snowbreak.selectVariant(mode:"interaction") }
+                                        Button(snowbreak.companionMode == "interaction" ? "✓ "+interactionModeLabel : interactionModeLabel) { snowbreak.selectVariant(mode:"interaction") }
                                     }
-                                    Section("服饰") {
+                                    if snowbreak.characterID != "Fenny" {Section("服饰") {
                                         Button(snowbreak.companionOutfit == "normal" ? "✓ 正常服饰" : "正常服饰") { snowbreak.selectVariant(outfit:"normal") }
                                         Button(snowbreak.companionOutfit == "nude" ? "✓ 果体版" : "果体版") { snowbreak.selectVariant(outfit:"nude") }
-                                    }
+                                    }}
                                 }
                                 ForEach(snowbreak.actions,id:\.self) { id in
-                                    Button(["snowbreak_home_jealous":"芬妮 · 吃醋","snowbreak_home_marry":"芬妮 · 婚礼互动","snowbreak_home_sigh":"芬妮 · 叹气","snowbreak_home_stage":"芬妮 · 主页展示","snowbreak_home_stand":"芬妮 · 站立待机","snowbreak_home_login":"看板娘 · 登录招呼","snowbreak_home_invite":"看板娘 · 邀请","snowbreak_home_shy":"看板娘 · 害羞","snowbreak_home_check":"看板娘 · 检查","snowbreak_home_kiss":"看板娘 · 亲吻","snowbreak_show_02":"互动展示 02","snowbreak_show_03":"互动展示 03","snowbreak_show_04":"互动展示 04","snowbreak_show_05":"互动展示 05","snowbreak_sequence":"完整展示片段","snowbreak_idle_01":"互动待机变化 01","snowbreak_idle_02":"互动待机变化 02","snowbreak_head":"头部原作反应","snowbreak_left":"左手原作反应","snowbreak_right":"右手原作反应","enya_yuki_hello":"学习 Yuki · 挥手","enya_yuki_Yes":"学习 Yuki · 点头","enya_yuki_No":"学习 Yuki · 摇头","enya_yuki_Peace_hand":"学习 Yuki · 比 V","enya_yuki_dance_90bpm":"站立舞蹈 · 90 BPM","enya_yuki_dance_120bpm":"站立舞蹈 · 120 BPM","enya_yuki_f_vibe_dance_60_bpm_002":"站立舞蹈 · 60 BPM"][id] ?? id) { snowbreak.play(id,withVoice:snowbreakVoice) }
+                                    Button(sourceActionLabel(id)) { snowbreak.play(id,withVoice:snowbreakVoice) }
                                 }
                                 Button("精细触碰表面标注") { snowbreak.editTouch() }
                                 Button("显示／隐藏原作触点") {snowbreak.officialTouchPoints()}
@@ -243,7 +246,7 @@ struct CompanionHome: View {
         }
         .onChange(of:store.busy) { value in if value {waitingBodyAction=nil;speech.stop();senses.prepareReply()}else {if store.error != nil {senses.replyFailed()};scheduleTouches()} }
         .onChange(of:store.conversationID) {_ in waitingBodyAction=nil;speech.stop();clearTouches()}
-        .onChange(of:store.archive.settings.speech) {_ in speech.stop()}
+        .onChange(of:store.archive.settings.speech) {_ in speech.stop();snowbreak.setOriginalLanguage(store.archive.settings.speech?.language ?? "zh")}
         .onChange(of:speech.mouthLevel) {value in if isSnowbreak {snowbreak.setSpeechLevel(value)}else{stage.setSpeechLevel(value)}}
         .onChange(of:touchAI) {if !$0 {clearTouches()};snowbreak.setTouchPolicy($0 && !store.archive.settings.endpoint.isEmpty)}
         .onChange(of:store.archive.settings.endpoint) {_ in snowbreak.setTouchPolicy(touchAI && !store.archive.settings.endpoint.isEmpty)}
@@ -270,7 +273,7 @@ struct CompanionHome: View {
         .onChange(of:engine) { _ in clearTouches();pendingMotionRevision = nil;nativeEditing = false;resumeStage() }
         .onChange(of:nativePresentation) { value in stage.setPresentation(value);value.save() }
         .onChange(of:showBackground) { value in snowbreak.sceneVisible(value) }
-        .onChange(of:snowbreak.ready) { ready in if !ready {clearTouches();waitingBodyAction=nil};if ready {store.activateCompanion(modelKey);snowbreak.sceneVisible(showBackground);snowbreak.setVoice(snowbreakVoice);snowbreak.setTouchPolicy(touchAI && !store.archive.settings.endpoint.isEmpty);greetIfReady() } }
+        .onChange(of:snowbreak.ready) { ready in if !ready {clearTouches();waitingBodyAction=nil};if ready {store.activateCompanion(modelKey);snowbreak.sceneVisible(showBackground);snowbreak.setVoice(snowbreakVoice);snowbreak.setOriginalLanguage(store.archive.settings.speech?.language ?? "zh");snowbreak.setTouchPolicy(touchAI && !store.archive.settings.endpoint.isEmpty);greetIfReady() } }
         .onChange(of:snowbreak.characterID){_ in clearTouches();waitingBodyAction=nil;pendingMotionRevision=nil;speech.stop();store.activateCompanion(modelKey)}
         .onChange(of:snowbreakVoice) { value in snowbreak.setVoice(value) }
         .onChange(of:stage.name){_ in greetIfReady()}

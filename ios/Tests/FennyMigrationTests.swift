@@ -49,8 +49,10 @@ final class FennyMigrationTests:XCTestCase {
         try await ready();XCTAssertEqual(stage.characterID,"Fenny")
         stage.selectVariant(outfit:"underwear");try await ready();XCTAssertEqual(stage.companionOutfit,"underwear")
         await stage.refreshBodyState();XCTAssertTrue(stage.bodyState.outfit.contains("不是裸体"))
+        stage.selectVariant(mode:"interaction");try await ready();XCTAssertEqual(stage.companionMode,"interaction");XCTAssertEqual(stage.companionOutfit,"underwear")
         stage.selectCharacter("Enya");try await ready();XCTAssertEqual(stage.characterID,"Enya")
         stage.selectCharacter("Fenny");try await ready();XCTAssertEqual(stage.characterID,"Fenny");XCTAssertEqual(stage.companionOutfit,"underwear")
+        XCTAssertEqual(stage.companionMode,"interaction")
         XCTAssertEqual(stage.savedCharacters,["Enya","Fenny"])
     }
 }

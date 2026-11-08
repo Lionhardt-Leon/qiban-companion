@@ -2,9 +2,12 @@ import * as THREE from 'three';
 
 // Original table units are centimetres. Unknown native defaults never become
 // guessed threshold comparisons. Only the explicitly serialized limits fire.
-export function createSceneInteractions(root,camera,canvas,pick,config,contactSurface){
- const profiles=config?.schema==='enya-official-scenes/1'?config.profiles:[];
- if(!Array.isArray(profiles)||profiles.length>8)throw new Error('Invalid scene profiles');
+export function createSceneInteractions(root,camera,canvas,pick,config,contactSurface,characterId='Enya'){
+ const generic=config?.schema==='snowbreak-official-scenes/1';
+ if(generic&&config.characterId!==characterId)throw new Error('Scene interaction character mismatch');
+ const profiles=generic||config?.schema==='enya-official-scenes/1'?config.profiles:[];
+ if(!Array.isArray(profiles)||profiles.length>16||new Set(profiles.map(p=>p.id)).size!==profiles.length)throw new Error('Invalid scene profiles');
+ if(generic)for(const p of profiles){if(typeof p.id!=='string'||!Array.isArray(p.contacts)||p.contacts.length>16)throw new Error('Invalid source contacts');for(const c of p.contacts){if(typeof c.bone!=='string'||!['ik','unsupported'].includes(c.kind))throw new Error('Unknown source contact');if(c.kind==='ik'&&(!root.getObjectByName(c.ikBone)||!c.drag||!c.sizeCm||![c.sizeCm.X,c.sizeCm.Y,c.sizeCm.Z,...Object.values(c.drag.ScreenPercentToWorld||{}),...Object.values(c.drag.WorldSpaceLimit||{}),...Object.values(c.drag.WorldSpaceLmitLeftUp||{}),c.drag.DragRecoverTime].every(Number.isFinite)))throw new Error('Invalid source IK limits');}}
  let hooks={},active=null,recover=null,saved=[],last=performance.now(),lastEvent=null,showPoints=false,lastPick=null,bedCorrections=[];
  const overlay=document.createElement('div');overlay.style.cssText='position:fixed;inset:0;pointer-events:none;z-index:3';document.body.append(overlay);const pointLayer=document.createElement('div');overlay.append(pointLayer);const handles=new Map();
  function points(){return (profile()?.contacts||[]).map(c=>{const bone=root.getObjectByName(c.bone);if(!bone)return null;const p=pos(bone).project(camera),r=canvas.getBoundingClientRect();return {id:c.id,label:/Foot/.test(c.bone)?(c.bone.includes('-L-')?'左脚':'右脚'):/Hand/.test(c.bone)?(c.bone.includes('-L-')?'左手':'右手'):/Pelvis/.test(c.bone)?'骨盆':'头部',x:r.left+(p.x+1)*r.width/2,y:r.top+(1-p.y)*r.height/2,supportedIK:c.kind==='ik'};}).filter(Boolean);}
@@ -31,7 +34,7 @@ export function createSceneInteractions(root,camera,canvas,pick,config,contactSu
  }
  function release(cancelled=false){
   if(!active)return;const state=active;active=null;
-  recover={...state,weight:1};if(canvas.hasPointerCapture(state.pointerId))canvas.releasePointerCapture(state.pointerId);
+  recover={...state,weight:1,releasedAt:performance.now()};if(canvas.hasPointerCapture(state.pointerId))canvas.releasePointerCapture(state.pointerId);
   if(!cancelled)hooks.event?.({type:'touch',region:'leg',label:state.contact.ikBone.includes('-L-')?'左腿／脚（原作触点）':'右腿／脚（原作触点）',gesture:'stroke',source:'original-scene-collision',confidence:1,completed:true});
  }
  function down(e){
@@ -73,7 +76,7 @@ export function createSceneInteractions(root,camera,canvas,pick,config,contactSu
   updateHandles();
   if(showPoints){pointLayer.replaceChildren();for(const p of points()){const el=document.createElement('span');el.textContent=p.label+(p.supportedIK?' ↕':'');el.style.cssText=`position:absolute;left:${p.x}px;top:${p.y}px;transform:translate(-50%,-50%);border:2px solid ${p.supportedIK?'#5ef0a0':'#ddd'};border-radius:20px;padding:6px;background:#222a;color:white;font-size:11px`;pointLayer.append(el);}}
   bedCorrections=[];
-  if(recover){recover.weight=Math.max(0,recover.weight-dt/Math.max(.1,recover.contact.drag.DragRecoverTime||.25));if(recover.weight===0)recover=null;}
+  if(recover){recover.weight=Math.max(0,1-(now-recover.releasedAt)/(1000*Math.max(.1,recover.contact.drag.DragRecoverTime||.25)));if(recover.weight===0)recover=null;}
   const states=[];
   for(const contact of profile()?.contacts||[]){if(contact.kind!=='ik')continue;const state=active?.contact.id===contact.id?active:recover?.contact.id===contact.id?recover:null;
     if(state)states.push(state);else if(profile()?.id==='show_05'){const foot=root.getObjectByName(contact.ikBone);if(foot?.parent?.parent?.isBone)states.push({contact,foot,calf:foot.parent,thigh:foot.parent.parent,offset:new THREE.Vector3(),weight:0,passive:true});}
