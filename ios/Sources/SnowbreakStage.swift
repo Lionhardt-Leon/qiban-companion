@@ -83,6 +83,8 @@ struct SnowbreakTouchEvent {
     private weak var webView:WKWebView?
     private var pageReady = false
     private var paused = false
+    private var needsRenderRecovery=false
+    private var lastRenderRecovery=Date.distantPast
     private var staged:URL?
     private var nonce = UUID().uuidString
     @Published private(set) var companionMode = "standing"
@@ -137,7 +139,7 @@ struct SnowbreakTouchEvent {
         let view = WKWebView(frame:.zero,configuration:configuration)
         view.navigationDelegate = self;view.isOpaque = false;view.backgroundColor = .clear
         view.scrollView.isScrollEnabled = false
-        webView = view;pageReady = false;ready = false
+        webView = view;pageReady = false;ready = false;needsRenderRecovery=false
         view.load(URLRequest(url:URL(string:"companion-snowbreak://local/index.html")!));return view
     }
     @discardableResult func importFile(_ url:URL) -> Bool {
@@ -193,7 +195,7 @@ struct SnowbreakTouchEvent {
                 if identity == "Fenny" {actions += DialogueMotion.fennyScenes.map(\.id).filter{samples.contains(String($0.dropFirst("snowbreak_".count)))}}
                 let learned = body["learned"] as? [String] ?? []
                 actions += ["yuki_hello","yuki_Yes","yuki_No","yuki_Peace_hand","yuki_dance_90bpm","yuki_dance_120bpm","yuki_f_vibe_dance_60_bpm_002"].filter { learned.contains($0) && (!$0.contains("dance") || body["stance"] as? String == "standing") }.map { "enya_"+$0 }
-                ready = true;error = nil
+                ready = true;error = nil;if notice?.hasPrefix("渲染已中断") == true {notice=nil}
                 bodyActions = (body["bodyActions"] as? [String] ?? []).filter{BodyCommand(rawValue:$0) != nil || BodyGesture.ids.contains($0)}
                 if paused { send(["type":"pause"]) }
             } catch { self.error = "角色保存失败："+error.localizedDescription }
@@ -238,7 +240,7 @@ struct SnowbreakTouchEvent {
     }
     func stop() { interactionRevision += 1;send(["type":"stop"]);activeAction = nil }
     func pause() { paused = true;isEditing=false;interactionRevision += 1;send(["type":"pause"]);activeAction = nil }
-    func resume() { paused = false;applyHardwareBudget();send(["type":"resume"]) }
+    func resume() { paused = false;if needsRenderRecovery {recoverRenderProcess();return};applyHardwareBudget();send(["type":"resume"]) }
     func applyHardwareBudget(){send(["type":"hardwareBudget","thermal":AppleHardwareBudget.thermal,"lowPower":ProcessInfo.processInfo.isLowPowerModeEnabled])}
     func editTouch() { interactionRevision += 1;send(["type":"edit"]) }
     func editModel(){interactionRevision += 1;isEditing=true;send(["type":"modelEdit"])}
@@ -256,7 +258,7 @@ struct SnowbreakTouchEvent {
         view.evaluateJavaScript("window.SnowbreakHost?.receive({type:'dispose'})",completionHandler:nil)
         view.stopLoading();view.navigationDelegate = nil
         view.configuration.userContentController.removeScriptMessageHandler(forName:"snowbreak")
-        if webView === view { webView = nil;pageReady = false;ready = false }
+        if webView === view { webView = nil;pageReady = false;ready = false;needsRenderRecovery=false }
     }
     func setTouchPolicy(_ value:Bool){send(["type":"touchPolicy","aiControlled":value])}
     func setSpeechLevel(_ value:Float){if ready{send(["type":"speechLevel","value":value.isFinite ? min(1,max(0,value)):0])}}
@@ -266,7 +268,18 @@ struct SnowbreakTouchEvent {
         let url = navigationAction.request.url
         decisionHandler(url?.scheme == "companion-snowbreak" && url?.host == "local" ? .allow : .cancel)
     }
-    func webViewWebContentProcessDidTerminate(_ webView:WKWebView) { ready = false;error = "角色渲染已中断，请重新加载当前角色。" }
+    private func recoverRenderProcess(){
+        guard needsRenderRecovery,!paused,let view=webView else{return}
+        needsRenderRecovery=false
+        guard Date().timeIntervalSince(lastRenderRecovery)>60 else {error="角色渲染重复中断，请关闭其他高内存应用后重新加载角色。";return}
+        lastRenderRecovery=Date();pageReady=false;error=nil;notice="渲染已中断，正在恢复当前角色与互动姿势。"
+        view.reload()
+    }
+    func webViewWebContentProcessDidTerminate(_ webView:WKWebView) {
+        guard self.webView === webView else{return}
+        ready=false;isEditing=false;activeAction=nil;interactionRevision+=1;needsRenderRecovery=true
+        recoverRenderProcess()
+    }
 }
 
 struct SnowbreakCharacterView:UIViewRepresentable {

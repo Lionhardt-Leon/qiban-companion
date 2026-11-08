@@ -10,7 +10,7 @@ import {FULL_FRAME,createPresentationEditor} from './presentation-editor.js';
 
 let aiControlledTouch=true;
 const canvas=document.querySelector('#stage'), status=document.querySelector('#status'), editorHost=document.querySelector('#editor');
-let collection=null,pausedScene=null,hardwareBudget={},originalLanguage='Chinese';
+let collection=null,pausedScene=null,loading=Promise.resolve(),hardwareBudget={},originalLanguage='Chinese';
 let generation=0,nonce='',runtime,display,adapter,voices,editor,presentation,modelEditor,lighting,learned,last=0,paused=false,voiceEnabled=true;
 const danceControls=createDanceControls(value=>retimeDance(learned,value.tempo,performance.now()));
 const finishPaint=document.createElement('button');finishPaint.id='finishPaint';finishPaint.hidden=true;
@@ -28,15 +28,16 @@ const emit=message=>{
   window.dispatchEvent(new CustomEvent('snowbreak-event',{detail:value}));
 };
 const text=value=>{status.textContent=value;status.hidden=!value;};
-function cleanup(){modelEditor?.dispose();modelEditor=null;danceControls.close();learned=null;finishPaint.hidden=true;presentation?.dispose();lighting?.dispose();editor?.dispose();adapter?.stop('renderer-close');voices?.dispose();display?.dispose();void runtime?.dispose();lighting=presentation=editor=adapter=voices=display=runtime=null;editorHost.replaceChildren();}
+function cleanup(){window.__snowbreakMigration=null;pausedScene=null;modelEditor?.dispose();modelEditor=null;danceControls.close();learned=null;finishPaint.hidden=true;presentation?.dispose();lighting?.dispose();editor?.dispose();adapter?.stop('renderer-close');voices?.dispose();display?.dispose();void runtime?.dispose();lighting=presentation=editor=adapter=voices=display=runtime=null;editorHost.replaceChildren();}
 
-async function load(url,id,variant){
-  const ticket=++generation;nonce=id;paused=false;canvas.dataset.snowbreakPaused='false';cleanup();text('正在加载本地角色…');
+function load(url,id,variant){const ticket=++generation;const task=loading.catch(()=>{}).then(()=>ticket===generation?performLoad(url,id,variant,ticket):undefined);loading=task;return task;}
+async function performLoad(url,id,variant,ticket){
+  nonce=id;paused=false;canvas.dataset.snowbreakPaused='false';cleanup();text('正在加载本地角色…');
   let opened,nextDisplay,nextVoices;
   try{
     if(variant){if(!collection)throw new Error('请先导入角色整合包');opened=await collection.selectVariant(variant);}else{collection=null;const response=await fetch(url);if(!response.ok)throw new Error('本地角色包读取失败');opened=await openSkinArchive(new Uint8Array(await response.arrayBuffer()));}
     if(!['Enya','Fenny'].includes(opened.manifest.characterId))throw new Error('不支持的本地角色包');
-    nextDisplay=await createSnowbreakRenderer(canvas,opened.runtime);
+    nextDisplay=await createSnowbreakRenderer(canvas,opened.runtime,{isCurrent:()=>ticket===generation});
     nextVoices=opened.runtime.getAsset('voiceCatalog')?await createOriginalVoiceCatalog(opened.runtime):{
       getAudio:()=>null,snapshot:()=>({available:[]}),dispose(){}
     };
@@ -46,9 +47,9 @@ async function load(url,id,variant){
     voices.setLanguage?.(originalLanguage);
     const background=display.sceneState().available?'#201d29':'transparent';document.body.style.background=background;document.documentElement.style.background=background;
     adapter=createSnowbreakSampleAdapter(display,{audioForSample:sample=>voices.getAudio(sample)});
-    display.sceneInteractions.configure({scene:()=>adapter.snapshot().sceneId||display.editingScene,reaction:id=>{void adapter.playSceneReaction(id,{withVoice:voiceEnabled});},voice:id=>{if(voiceEnabled){const audio=voices.getAudio(id);if(audio){audio.currentTime=0;void audio.play().catch(()=>{});}}},event:emit});
+    display.sceneInteractions.configure({beforeDrag:()=>{learned=null;display.embodiment.releaseHands();display.resetSenses();},scene:()=>adapter.snapshot().sceneId||display.editingScene,reaction:id=>{void adapter.playSceneReaction(id,{withVoice:voiceEnabled});},voice:id=>{if(voiceEnabled){const audio=voices.getAudio(id);if(audio){audio.currentTime=0;void audio.play().catch(()=>{});}}},event:emit});
     // The original body/face tracks, morph curves and scene transforms stay in the old renderer.
-    display.showFaceCandidate(true);const initial=display.sampleOptions().find(s=>s.id===display.sampleState().sampleId);if(initial?.persistentState)adapter.enterScene(initial.id);else adapter.enterStandby();display.faceViewer();last=performance.now();
+    display.showFaceCandidate(true);const initial=display.sampleOptions().find(s=>s.id===display.sampleState().sampleId);const sceneKey='resting-scene:'+opened.manifest.characterId+':'+opened.selection?.mode;const remembered=localStorage.getItem(sceneKey);if(initial?.persistentState)adapter.enterScene(display.sampleOptions().some(s=>s.id===remembered&&s.persistentState)?remembered:initial.id);else adapter.enterStandby();display.sceneSelectionKey=sceneKey;display.faceViewer();last=performance.now();
     let editingScene=null;
     const placementEditing=editing=>{emit({type:'editing',active:editing});if(editing){const state=adapter.snapshot();editingScene=state.sceneId?{id:state.sceneId,time:state.sceneTime}:null;display.editingScene=editingScene?.id||null;display.sceneInteractions.cancel();adapter.stop('placement-edit');if(editingScene){display.selectSample(editingScene.id);display.seek(editingScene.time%display.duration);}closeEditor();}else if(!paused){if(editingScene)adapter.enterScene(editingScene.id,editingScene.time);else adapter.enterStandby();editingScene=null;display.editingScene=null;}};
     const setupModelEditor=()=>{modelEditor?.dispose();const prefix=opened.manifest.characterId==='Enya'?'':opened.manifest.characterId.toLowerCase()+':';modelEditor=createPresentationEditor({setFrame:display.setModelFrame,frameState:display.modelFrameState},canvas,'model-placement:'+prefix+opened.selection?.mode+':'+(adapter.snapshot().sceneId||'main'),{initialFrame:{...FULL_FRAME,depth:0},title:'仅移动角色',idPrefix:'model',allowDepth:true,allowStretch:false,verticalSign:-1,dragScale:display.modelDragScale,onEditing:placementEditing});};
@@ -59,7 +60,7 @@ async function load(url,id,variant){
     lighting=createLightingEditor(display,'lighting:'+(opened.selection?opened.manifest.characterId.toLowerCase()+'-'+opened.selection.mode:opened.manifest.skinId));
     let previousStatus='';
     display.setFrameHandler(()=>{
-      const now=performance.now();if(!paused)adapter.tick(Math.min(100,Math.max(0,now-last)));last=now;
+      const now=performance.now();if(!paused){const drag=display.sceneInteractions.snapshot();adapter.tick(drag.active||drag.recovering?0:Math.min(100,Math.max(0,now-last)))};last=now;
       if(!paused&&learned){
         const time=motionTime(learned,now),end=learned.duration,stopFade=learned.stop===undefined?1:Math.max(0,1-(now-learned.stop)/300);
         if(time>=end||stopFade===0){learned=null;}else{
@@ -77,7 +78,7 @@ async function load(url,id,variant){
       load:()=>JSON.parse(localStorage.getItem(labelKey)||'{}'),save:value=>localStorage.setItem(labelKey,JSON.stringify(value)),
       tracker:createTouchTracker({modelId:opened.manifest.skinId,source:'skinned-surface'}),enabled:()=>!paused,
       onEvent:async event=>{
-        emit({type:'touch',region:event.region,label:event.regionLabel,gesture:event.gesture,confidence:event.confidence,source:event.regionSource,durationMs:event.durationMs,frequency:event.frequency,completed:true});
+        if(ticket!==generation||paused)return;emit({type:'touch',region:event.region,label:event.regionLabel,gesture:event.gesture,confidence:event.confidence,source:event.regionSource,durationMs:event.durationMs,frequency:event.frequency,completed:true});
         if(!aiControlledTouch)await adapter.dispatchSurfaceTouch(event,{withVoice:voiceEnabled});
       }
     });
@@ -107,12 +108,12 @@ async function command(value){
   if(!adapter)return;
   if(['body','gesture','sample','learned','stop'].includes(value.type)){
     voices?.stop?.();
-    if(value.automatic&&(modelEditor?.active||presentation?.active)){emit({type:'notice',message:'编辑期间已暂停自动动作，请完成调整后再互动。'});return;}
+    const drag=display.sceneInteractions.snapshot();if(value.automatic&&(modelEditor?.active||presentation?.active||drag.active||drag.recovering)){emit({type:'notice',message:'编辑期间已暂停自动动作，请完成调整后再互动。'});return;}
     modelEditor?.close();presentation?.close();
   }
   if(value.type==='body'){
-    if(paused)throw new Error('模型暂停中');learned=null;if(!adapter.snapshot().sceneId){adapter.stop('body-command');adapter.enterStandby();}display.embodiment.command(value.id);
-    await new Promise(resolve=>setTimeout(resolve,750));emit({type:'selfState',state:inspect(),requestId:value.requestId});return;
+    if(paused)throw new Error('模型暂停中');const requestGeneration=generation;learned=null;if(!adapter.snapshot().sceneId){adapter.stop('body-command');adapter.enterStandby();}display.embodiment.command(value.id);
+    await new Promise(resolve=>setTimeout(resolve,750));if(requestGeneration!==generation)return;emit({type:'selfState',state:inspect(),requestId:value.requestId});return;
   }
   if(value.type==='gesture'){
     if(paused)throw new Error('模型暂停中');learned=null;if(!adapter.snapshot().sceneId){adapter.stop('ai-gesture');adapter.enterStandby();}display.embodiment.playGesture(value.id,value.plan);
@@ -123,8 +124,8 @@ async function command(value){
   if(value.type==='danceEdit'){danceControls.toggle();return;}
   if(value.type==='speechLevel'){display.embodiment.setSpeechLevel(value.value);return;}
   if(value.type==='gaze'){display.setGaze(value.x,value.y);return;}
-  if(value.type==='pause'){voices?.stop?.();modelEditor?.close();danceControls.close();pausedScene=adapter.snapshot().sceneId;display.sceneInteractions.cancel();display.embodiment.reset();display.resetSenses();learned=null;paused=true;lighting?.close();presentation?.close();canvas.dataset.snowbreakPaused='true';adapter.stop('background');closeEditor();return;}
-  if(value.type==='resume'){paused=false;canvas.dataset.snowbreakPaused='false';last=performance.now();if(pausedScene){adapter.enterScene(pausedScene);pausedScene=null;}else adapter.enterStandby();return;}
+  if(value.type==='pause'){if(paused)return;voices?.stop?.();modelEditor?.close();danceControls.close();const suspended=adapter.snapshot();pausedScene=suspended.sceneId?{id:suspended.sceneId,time:suspended.sceneTime}:null;display.sceneInteractions.cancel();display.embodiment.reset();display.resetSenses();learned=null;paused=true;lighting?.close();presentation?.close();canvas.dataset.snowbreakPaused='true';adapter.stop('background');closeEditor();return;}
+  if(value.type==='resume'){if(!paused)return;paused=false;canvas.dataset.snowbreakPaused='false';last=performance.now();if(pausedScene){adapter.enterScene(pausedScene.id,pausedScene.time);pausedScene=null;}else adapter.enterStandby();return;}
   if(value.type==='stop'){display.embodiment.reset();if(learned){learned.stop=performance.now();return;}adapter.stop();adapter.enterStandby();return;}
   if(value.type==='officialTouchPoints'){const count=display.sceneInteractions.togglePoints();if(!count)emit({type:'notice',message:'当前包／场景没有已移植的原作触点；互动4、5需使用新版互动包。'});return;}
   if(value.type==='edit'){learned=null;presentation.close();if(editorHost.classList.contains('open')||!finishPaint.hidden)closeEditor();else editorHost.classList.add('open');return;}
@@ -137,7 +138,7 @@ async function command(value){
   if(value.type==='voice'){voiceEnabled=!!value.enabled;if(!voiceEnabled){voices?.stop?.();const sceneId=adapter.snapshot().sceneId;adapter.stop('voice-disabled');if(sceneId)adapter.enterScene(sceneId);else adapter.enterStandby();}return;}
   if(value.type==='sample'&&display.sampleOptions().some(s=>s.id===value.id)){
     display.sceneInteractions.cancel();
-    if(/^show_0[2345]$/.test(value.id)||display.sampleOptions().find(s=>s.id===value.id)?.persistentState){learned=null;modelEditor.close();display.embodiment.reset();adapter.enterScene(value.id);display.setupModelEditor();emit({type:'selfState',state:inspect()});return;}
+    if(/^show_0[2345]$/.test(value.id)||display.sampleOptions().find(s=>s.id===value.id)?.persistentState){learned=null;modelEditor.close();display.embodiment.reset();adapter.enterScene(value.id);if(display.sampleOptions().find(s=>s.id===value.id)?.persistentState)localStorage.setItem(display.sceneSelectionKey,value.id);display.setupModelEditor();emit({type:'selfState',state:inspect()});return;}
     if(adapter.snapshot().sceneId){const mapped=value.id==='head'?display.sceneInteractions.headReaction():null;await adapter.playSceneReaction(mapped||value.id,{withVoice:!!value.withVoice});return;}
     display.embodiment.releaseHands();
     learned=null;presentation.close();

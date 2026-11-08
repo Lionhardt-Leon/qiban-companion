@@ -23,6 +23,11 @@ final class FennyMigrationTests:XCTestCase {
     func testOnlyLoadedFennySourceActionsEnterTheAIProtocol(){
         XCTAssertEqual(DialogueMotion.allowed(["snowbreak_home_jealous","snowbreak_home_marry","unverified_fenny_action"]),["snowbreak_home_jealous","snowbreak_home_marry"])
     }
+    func testSeatedEntryDoesNotInventAStandingWave(){
+        XCTAssertNil(CompanionBehavior.greeting(actions:["gesture_wave_right"],mode:"interaction"))
+        XCTAssertEqual(CompanionBehavior.greeting(actions:["gesture_wave_right","snowbreak_home_login"],mode:"interaction"),"snowbreak_home_login")
+        XCTAssertEqual(CompanionBehavior.greeting(actions:["gesture_wave_right"],mode:"standing"),"gesture_wave_right")
+    }
     @MainActor func testFirstFennySelectionCreatesIndependentEditableIdentityAndPreservesLegacyHistory() throws {
         let folder=FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString);defer{try? FileManager.default.removeItem(at:folder)}
         let store=LocalStore(directory:folder);try store.saveMemories("旧角色的记忆")
@@ -54,5 +59,8 @@ final class FennyMigrationTests:XCTestCase {
         stage.selectCharacter("Fenny");try await ready();XCTAssertEqual(stage.characterID,"Fenny");XCTAssertEqual(stage.companionOutfit,"underwear")
         XCTAssertEqual(stage.companionMode,"interaction")
         XCTAssertEqual(stage.savedCharacters,["Enya","Fenny"])
+        stage.pause();stage.webViewWebContentProcessDidTerminate(view);XCTAssertFalse(stage.ready);XCTAssertNil(stage.error)
+        stage.resume();try await ready();XCTAssertEqual(stage.companionMode,"interaction");XCTAssertEqual(stage.companionOutfit,"underwear")
+        stage.webViewWebContentProcessDidTerminate(view);XCTAssertNotNil(stage.error);XCTAssertFalse(stage.ready)
     }
 }

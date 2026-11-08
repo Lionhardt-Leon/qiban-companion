@@ -24,6 +24,7 @@ struct CompanionMood:Codable,Equatable {
 }
 
 enum CompanionBehavior {
+    static func greeting(actions:[String],mode:String)->String? {guard let action=resolve("greet",actions:actions),!(mode == "interaction" && action.hasPrefix("gesture_")) else{return nil};return action}
     static let mappings:[String:[String]]=[
         "greet":["snowbreak_home_login","hello","gesture_wave_right"],"farewell":["hello","gesture_wave_right"],
         "shy":["snowbreak_home_shy","gesture_shy"],"kiss":["snowbreak_home_kiss"],"invite":["snowbreak_home_invite","gesture_open_arms"],

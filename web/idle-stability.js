@@ -1,5 +1,12 @@
 import * as THREE from 'three';
 
+// A seated resting state owns its arm pose. Explicit source reactions and AI
+// gestures are separate layers and still use their full authored motion.
+export function stableSeatedTrack(track){
+ if(/UpperArm|Forearm|Hand|Finger/.test(track.bone))return {...track,keys:track.keys.map(()=>track.keys[0])};
+ return quietIdleTrack(track);
+}
+
 // Prepare once at import, never allocate filtering buffers in the frame loop.
 // The final source key duplicates the first key; filter around that closed seam.
 export function quietIdleTrack(track){

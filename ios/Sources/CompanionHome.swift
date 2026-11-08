@@ -61,7 +61,7 @@ struct CompanionHome: View {
     private func stopReading(){waitingBodyAction=nil;touchTicket=UUID();pendingTouches.removeAll();speech.stop();senses.resumeAfterPlayback()}
     private func stopAction() {waitingBodyAction=nil; if isSnowbreak { snowbreak.stop() } else { stage.stopAction() } }
     private func performMotion(_ event:DialogueActionEvent){if isSnowbreak{snowbreak.play(event.action,withVoice:false,automatic:true)}else{stage.performDialogueAction(event.action,motion:event.motion)}}
-    private func greetIfReady(){guard isSnowbreak,sheet==nil,scenePhase == .active,!greetedModels.contains(modelKey),let action=CompanionBehavior.resolve("greet",actions:availableActions) else{return};greetedModels.insert(modelKey);if isSnowbreak{snowbreak.play(action,withVoice:snowbreakVoice,automatic:true)}else{stage.performDialogueAction(action)}}
+    private func greetIfReady(){guard isSnowbreak,sheet==nil,scenePhase == .active,!greetedModels.contains(modelKey),let action=CompanionBehavior.greeting(actions:availableActions,mode:snowbreak.companionMode) else{return};greetedModels.insert(modelKey);if isSnowbreak{snowbreak.play(action,withVoice:snowbreakVoice,automatic:true)}else{stage.performDialogueAction(action)}}
     private func resumeStage() {
         store.activateCompanion(modelKey)
         if isSnowbreak { stage.stop();snowbreak.resume();greetIfReady() }
