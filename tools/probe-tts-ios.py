@@ -45,14 +45,35 @@ def main():
     patcher=runpy.run_path(str(native/'patch_frontend.py'));patcher['patch'](source,deps)
     run(['cmake','--build',str(host),'--config','Release','-j','3'])
     subprocess.run([str(host/'qiban-g2p-probe'),'--bounds-regression'],check=True,env=env)
+    crlf=work/'package-crlf-res';shutil.copytree(source/'res',crlf)
+    for p in crlf.rglob('*'):
+        if not p.is_file():continue
+        raw=p.read_bytes()
+        if b'\0' in raw:continue
+        try:raw.decode('utf-8')
+        except UnicodeDecodeError:continue
+        p.write_bytes(raw.replace(b'\r\n',b'\n').replace(b'\n',b'\r\n'))
+    # These hashes come from the text resources in the existing local qvoice,
+    # not from a voice weight or a recording. No private package is uploaded.
+    package_hashes={'dict/mandarin/word.txt':'1f0e586c389d671fab2ecdb7ee974b50abfb26730b28de4c397776344b0400d5','dict/mandarin/user_dict.txt':'ab7e5f5b378afe673c9dc0b0b90867df60ba26bfec3c1389e6c4a8e73f583d80'}
+    for name,digest in package_hashes.items():assert hashlib.sha256((crlf/name).read_bytes()).hexdigest()==digest,name
+    before=subprocess.run([str(host/'qiban-g2p-probe'),str(crlf),str(config),'zh','下午好，我在这里陪着你。'],capture_output=True,text=True,env=env)
+    assert before.returncode==0,before.stderr[-5000:]
+    failure=json.loads(before.stdout.strip().splitlines()[-1]);assert 'error' in failure,failure
+    print('Package CRLF failure reproduced: '+json.dumps(failure),flush=True)
+    patcher['patch_package_text'](source)
+    run(['cmake','--build',str(host),'--config','Release','-j','3'])
     result=[]
     for lang,text in [('zh','下午好，我在这里陪着你。'),('ja','こんにちは。今日は何を話しましょうか。')]:
         process=subprocess.run([str(host/'qiban-g2p-probe'),str(source/'res'),str(config),lang,text],capture_output=True,text=True,env=env)
         assert process.returncode==0,(lang,process.stdout[-1500:],process.stderr[-6500:])
         parsed=json.loads(process.stdout.strip().splitlines()[-1]);assert 'error' not in parsed and len(parsed['ids'])>5
         assert all(0<=x<len(symbols) for x in parsed['ids']);result.append({'language':lang,**parsed})
+        windows=subprocess.run([str(host/'qiban-g2p-probe'),str(crlf),str(config),lang,text],capture_output=True,text=True,env=env)
+        assert windows.returncode==0,windows.stderr[-5000:]
+        assert json.loads(windows.stdout.strip().splitlines()[-1])==parsed,('LF/CRLF phoneme mismatch',lang)
     corpus=[('zh',text) for text in ['下午好，我在这里陪着你。','你好，小姑娘。','这位好姑娘很温柔。','嗯，嗯嗯，好的呀。','慢慢来，别着急。','你想我了吗？','奶奶和姥姥聊了一会儿。','一个人也可以好好生活。','麻烦你照顾一下孩子。','你累不累呀？','我们一起看看风景吧。','喝点水，早点休息。','请把右手抬起来。','今天是星期六，心情很好。']]+[('ja',t) for t in ['こんにちは。今日は何を話しましょうか。','おかえりなさい。','ゆっくり休んでください。']]
-    rows=corpus*100
+    rows=corpus*50
     process=subprocess.run([str(host/'qiban-g2p-probe'),str(source/'res'),str(config),'--stress'],input=''.join(lang+'\t'+text+'\n' for lang,text in rows),capture_output=True,text=True,env=env)
     assert process.returncode==0,process.stderr[-5000:]
     parsed=[json.loads(s[7:]) for s in process.stdout.splitlines() if s.startswith('RESULT ')]
@@ -61,7 +82,11 @@ def main():
         assert 'error' not in r,(rows[i],r)
         assert r['ids'] and len(r['ids'])==len(r['phones']) and all(0<=p<len(symbols) for p in r['ids'])
         if i>=len(corpus):assert r==parsed[i%len(corpus)],('Unstable repeated phonemes',rows[i])
-    stress={'calls':len(rows),'uniqueSentences':len(corpus),'orderedZHAndJA':True,'repeatDeterministic':True,'addressSanitizer':True,'undefinedBehaviorSanitizer':True,'exitCode':process.returncode,'unsafeBoundsReproduced':True}
+    windows=subprocess.run([str(host/'qiban-g2p-probe'),str(crlf),str(config),'--stress'],input=''.join(lang+'\t'+text+'\n' for lang,text in rows),capture_output=True,text=True,env=env)
+    assert windows.returncode==0,windows.stderr[-5000:]
+    win_rows=[json.loads(s[7:]) for s in windows.stdout.splitlines() if s.startswith('RESULT ')]
+    assert win_rows==parsed,'LF/CRLF repeated phonemes must match exactly'
+    stress={'calls':len(rows)*2,'callsPerResourceVariant':len(rows),'resourceVariants':['LF','CRLF'],'packageTextHashes':package_hashes,'packageCRLFFailureReproduced':True,'lineEndingResultsEqual':True,'uniqueSentences':len(corpus),'orderedZHAndJA':True,'repeatDeterministic':True,'addressSanitizer':True,'undefinedBehaviorSanitizer':True,'exitCode':process.returncode,'unsafeBoundsReproduced':True}
     print('Sanitized native stress passed: '+json.dumps(stress),flush=True)
     libraries=[]
     for name,sdk in [('device','iphoneos'),('simulator','iphonesimulator')]:
@@ -79,9 +104,9 @@ def main():
             p=directory/name
             if p.is_file():notices.append('=== '+directory.name+'/'+name+' ===\n'+p.read_text(encoding='utf-8',errors='replace'))
     (output/'QibanG2P.xcframework/THIRD-PARTY-NOTICES.txt').write_text('\n\n'.join(notices),encoding='utf-8')
-    metadata={'source':GSV,'safetyRevision':2,'dependencies':DEPS,'nativeTextTests':result,'nativeStressTests':stress,'iOSDevice':'arm64 compiled','iOSSimulator':'arm64 compiled','iPhoneAudioSynthesisVerified':False}
+    metadata={'source':GSV,'safetyRevision':3,'dependencies':DEPS,'nativeTextTests':result,'nativeStressTests':stress,'iOSDevice':'arm64 compiled','iOSSimulator':'arm64 compiled','iPhoneAudioSynthesisVerified':False}
     (output/'portability.json').write_text(json.dumps(metadata,ensure_ascii=False,indent=2),encoding='utf-8')
-    (output/'QibanG2P.xcframework/BUILD-INFO.json').write_text(json.dumps({'source':GSV,'safetyRevision':2}),encoding='utf-8')
+    (output/'QibanG2P.xcframework/BUILD-INFO.json').write_text(json.dumps({'source':GSV,'safetyRevision':3}),encoding='utf-8')
     shutil.make_archive(str(output/'QibanG2P-xcframework'),'zip',output,'QibanG2P.xcframework')
 
 if __name__=='__main__':main()

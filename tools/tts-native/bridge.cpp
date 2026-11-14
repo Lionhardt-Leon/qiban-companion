@@ -11,7 +11,7 @@
 namespace GPTSoVITS {std::filesystem::path g_globalResourcesPath;}
 namespace {std::mutex lock;bool ready=false;
 char *copy(const nlohmann::json &value){auto s=value.dump();auto *p=(char*)std::malloc(s.size()+1);if(p)std::memcpy(p,s.c_str(),s.size()+1);return p;}}
-int qiban_g2p_safety_revision(void){return 2;}
+int qiban_g2p_safety_revision(void){return 3;}
 int qiban_g2p_initialize(const char *resources,const char *config){
   std::lock_guard<std::mutex> guard(lock);
   try {

@@ -1,7 +1,7 @@
 """Apply bounded fixes to the pinned Apache-2.0 G2P source before compilation."""
 from pathlib import Path
 
-REVISION = 2
+REVISION = 3
 
 
 def patch(source, deps=None):
@@ -103,3 +103,18 @@ def patch(source, deps=None):
 if __name__ == '__main__':
     import sys
     patch(sys.argv[1], sys.argv[2] if len(sys.argv)>2 else None)
+
+
+def patch_package_text(source):
+    """Windows-exported dictionaries must produce the same phonemes as LF."""
+    source = Path(source)
+    for relative, old, new in [
+        ('src/g2p/polyphonic.cpp', '    std::string line(it->begin(), it->end());',
+         '    std::string line(it->begin(), it->end());\n    if (!line.empty() && line.back() == \'\\r\') line.pop_back();'),
+        ('src/g2p/g2p_zh.cpp', '    for (auto &[word, pos]: seg_cut) {',
+         '    for (auto &[word, pos]: seg_cut) {\n      pos.erase(pos.find_last_not_of(" \\t\\r\\n") + 1);'),
+    ]:
+        path=source/relative;text=path.read_text(encoding='utf-8')
+        if '// Qiban package text revision 3' in text:continue
+        assert text.count(old)==1,(relative,text.count(old))
+        path.write_text('// Qiban package text revision 3\n'+text.replace(old,new),encoding='utf-8')
