@@ -26,6 +26,7 @@ struct CompanionMood:Codable,Equatable {
 enum CompanionBehavior {
     static func greeting(actions:[String],mode:String)->String? {guard let action=resolve("greet",actions:actions),!(mode == "interaction" && action.hasPrefix("gesture_")) else{return nil};return action}
     static let mappings:[String:[String]]=[
+        "raise_left_leg":["raise_left_leg"],"raise_right_leg":["raise_right_leg"],"spread_legs":["spread_legs"],"lower_legs":["lower_legs"],"lift_left_leg":["raise_left_leg"],"lift_right_leg":["raise_right_leg"],"抬左腿":["raise_left_leg"],"抬右腿":["raise_right_leg"],"把腿分开":["spread_legs"],
         "greet":["snowbreak_home_login","hello","gesture_wave_right"],"farewell":["hello","gesture_wave_right"],
         "shy":["snowbreak_home_shy","gesture_shy"],"kiss":["snowbreak_home_kiss"],"invite":["snowbreak_home_invite","gesture_open_arms"],
         "comfort":["gesture_nod","Yes"],"nod":["gesture_nod","Yes"],"shake_head":["gesture_shake","No"],

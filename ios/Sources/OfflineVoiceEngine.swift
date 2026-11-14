@@ -73,8 +73,8 @@ final class OfflineVoiceEngine {
     let computeMode:VoiceComputeMode
     private(set) var diagnostics=""
     private let env:ORTEnv
-    private let encoder:AcceleratedVoiceSession,step:AcceleratedVoiceSession,vocoder:AcceleratedVoiceSession
-    private let bert:AcceleratedVoiceSession?
+    private let modelRoot:URL,cacheRoot:URL
+    private var stageMetrics:[String]=[]
     private let tokenizer:VoiceWordPiece?
     private let condition:VoiceConditioning
     private let referenceBert:[Float]
@@ -82,8 +82,8 @@ final class OfflineVoiceEngine {
     private let vocabularySize=732
     init(root:URL,voice:VoiceManifest.Voice,computeMode:VoiceComputeMode = .automatic) throws {
         self.voice=voice;self.computeMode=computeMode
-        let path=root.appendingPathComponent(voice.directory)
-        let data=try Data(contentsOf:path.appendingPathComponent("conditioning.json"));guard data.count<=128*1024 else {throw CompanionError.message("语音参考索引过大。")}
+        let path=root.appendingPathComponent(voice.directory);modelRoot=path
+        guard (try path.appendingPathComponent("conditioning.json").resourceValues(forKeys:[.fileSizeKey]).fileSize ?? Int.max)<=128*1024 else{throw CompanionError.message("语音参考索引过大。")};let data=try Data(contentsOf:path.appendingPathComponent("conditioning.json"));guard data.count<=128*1024 else {throw CompanionError.message("语音参考索引过大。")}
         condition=try JSONDecoder().decode(VoiceConditioning.self,from:data);try condition.validate()
         referenceBert=try Self.floats(Self.feature(path.appendingPathComponent("reference_bert.bin"),bytes:1024*condition.referencePhones.count*4))
         prompt=try Self.tensor(Self.feature(path.appendingPathComponent("prompt_semantic.bin"),bytes:condition.promptShape[1]*8),.int64,condition.promptShape)
@@ -91,14 +91,18 @@ final class OfflineVoiceEngine {
         let resources=root.appendingPathComponent("resources").path,config=path.appendingPathComponent("config.json").path
         guard resources.withCString({resource in config.withCString{qiban_g2p_initialize(resource,$0)}})==1 else {throw CompanionError.message("中／日语音字典未就绪，请重新导入完整语音包。")}
         env=try ORTEnv(loggingLevel:.warning)
-        let cache=try AcceleratedVoiceSession.cacheDirectory(root:root)
-        encoder=try AcceleratedVoiceSession(env:env,model:path.appendingPathComponent("gpt_encoder.onnx"),module:"encoder",mode:computeMode,cache:cache.appendingPathComponent(voice.language+"-encoder"))
-        step=try AcceleratedVoiceSession(env:env,model:path.appendingPathComponent("gpt_step.onnx"),module:"step",mode:computeMode,cache:cache.appendingPathComponent(voice.language+"-step"))
-        vocoder=try AcceleratedVoiceSession(env:env,model:path.appendingPathComponent("sovits.onnx"),module:"sovits",mode:computeMode,cache:cache.appendingPathComponent(voice.language+"-sovits"))
-        if voice.language=="zh" {
-            bert=try AcceleratedVoiceSession(env:env,model:root.appendingPathComponent("shared/bert.onnx"),module:"bert",mode:computeMode,cache:cache.appendingPathComponent("bert"))
-            tokenizer=try VoiceWordPiece(url:root.appendingPathComponent("shared/tokenizer.json"))
-        }else {bert=nil;tokenizer=nil}
+        cacheRoot=try AcceleratedVoiceSession.cacheDirectory(root:root)
+        if voice.language=="zh" {tokenizer=try VoiceWordPiece(url:root.appendingPathComponent("shared/tokenizer.json"))}else{tokenizer=nil}
+    }
+    private func stage<T>(_ module:String,cancellation:SpeechCancellation,_ operation:(AcceleratedVoiceSession)throws->T)throws->T {
+        try autoreleasepool {
+            try cancellation.check();VoiceBreadcrumb.record(voice:voice.id,stage:module+"-load",state:"running")
+            let model=module=="bert" ? modelRoot.deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("shared/bert.onnx"):modelRoot.appendingPathComponent(module=="encoder" ? "gpt_encoder.onnx":module=="step" ? "gpt_step.onnx":"sovits.onnx")
+            let session=try AcceleratedVoiceSession(env:env,model:model,module:module,mode:computeMode,cache:cacheRoot.appendingPathComponent(voice.language+"-"+module))
+            defer{stageMetrics.append(module+"："+session.summary)}
+            try cancellation.check();VoiceBreadcrumb.record(voice:voice.id,stage:module+"-run",state:"running");return try operation(session)
+        }
+
     }
     private static func feature(_ url:URL,bytes:Int) throws -> Data {
         guard bytes>0,bytes<=16*1024*1024,(try url.resourceValues(forKeys:[.fileSizeKey]).fileSize)==bytes else {throw CompanionError.message("语音参考特征长度错误。")};return try Data(contentsOf:url)
@@ -119,15 +123,16 @@ final class OfflineVoiceEngine {
     private func run(_ session:AcceleratedVoiceSession,_ inputs:[String:ORTValue],_ outputs:[String]) throws -> [String:ORTValue] {
         try session.run(inputs,outputs)
     }
-    private func phones(_ text:String) throws -> (ids:[Int64],features:[Float]) {
+    private func phones(_ text:String,cancellation:SpeechCancellation) throws -> (ids:[Int64],features:[Float]) {
         let data=try text.withCString {textPointer in try voice.language.withCString {languagePointer -> Data in
             guard let result=qiban_g2p_process(textPointer,languagePointer) else {throw CompanionError.message("文字转音素失败。")};defer{qiban_g2p_free(result)};return Data(String(cString:result).utf8)
         }}
         let parsed=try JSONDecoder().decode(VoicePhones.self,from:data)
         guard parsed.error==nil,let ids=parsed.ids,!ids.isEmpty,ids.count<=400,ids.allSatisfy({$0>=0 && $0<Int64(vocabularySize)}),let normalized=parsed.text else {throw CompanionError.message("这句台词无法转换为有效音素，请缩短后重试。")}
-        guard voice.language=="zh",let bert=bert,let tokenizer=tokenizer else {return(ids,Array(repeating:0,count:1024*ids.count))}
+        guard voice.language=="zh",let tokenizer=tokenizer else {return(ids,Array(repeating:0,count:1024*ids.count))}
         let encoded=tokenizer.encode(normalized),count=encoded.ids.count
         guard count<=512,let counts=parsed.word2ph,counts.count==encoded.characterTokens.count,counts.allSatisfy({(0...12).contains($0)}),counts.reduce(0,+)==ids.count else {throw CompanionError.message("文字与音素无法对齐，请换一种表述。")}
+        return try stage("bert",cancellation:cancellation) {bert in
         let output=try run(bert,["input_ids":Self.tensor(encoded.ids,[1,count]),"attention_mask":Self.tensor(Array(repeating:Int64(1),count:count),[1,count]),"token_type_ids":Self.tensor(Array(repeating:Int64(0),count:count),[1,count])],["hidden_states"])
         guard let hidden=output["hidden_states"] else {throw CompanionError.message("文字语义模型没有输出。")}
         let values=try Self.floats(hidden.tensorData() as Data);guard values.count==count*1024 else {throw CompanionError.message("文字语义特征维度不兼容。")}
@@ -138,35 +143,54 @@ final class OfflineVoiceEngine {
             position+=repeats
         }
         return(ids,result)
+        }
+    }
+    private struct Seed {let k:Data,kShape:[Int],v:Data,vShape:[Int],x:[Int64],y:[Int64],first:Int64}
+    private final class DecoderState {var k:ORTValue,v:ORTValue;let x:ORTValue,y:ORTValue;init(k:ORTValue,v:ORTValue,x:ORTValue,y:ORTValue){self.k=k;self.v=v;self.x=x;self.y=y}}
+    private static func ownedFloat(_ value:ORTValue)throws->(Data,[Int]) {let copy=try VoiceTensorSnapshot(value);return(copy.data,copy.shape)}
+    private static func state(_ seed:inout Seed?)throws->DecoderState {
+        guard let initial=seed else{throw CompanionError.message("语义缓存未就绪。")};defer{seed=nil}
+        return try DecoderState(k:tensor(initial.k,.float,initial.kShape),v:tensor(initial.v,.float,initial.vShape),x:tensor(initial.x,[1]),y:tensor(initial.y,[1]))
     }
     func synthesize(_ text:String,speed:Float,cancellation:SpeechCancellation) throws -> [Float] {
-        let started=ProcessInfo.processInfo.systemUptime
-        for session in [bert,encoder,step,vocoder].compactMap({$0}) {session.resetMetrics()}
-        try cancellation.check();let target=try phones(text);try cancellation.check()
+        let started=ProcessInfo.processInfo.systemUptime;stageMetrics=[]
+        try cancellation.check();let target=try phones(text,cancellation:cancellation);try cancellation.check()
         let referenceCount=condition.referencePhones.count,n=target.ids.count,allCount=referenceCount+n
-        var feature:[Float]=[];feature.reserveCapacity(1024*allCount)
-        for channel in 0..<1024 {feature.append(contentsOf:referenceBert[channel*referenceCount..<(channel+1)*referenceCount]);feature.append(contentsOf:target.features[channel*n..<(channel+1)*n])}
-        let output=try run(encoder,["phoneme_ids":Self.tensor(condition.referencePhones+target.ids,[1,allCount]),"prompts":prompt,"bert_feature":Self.tensor(feature,[1,1024,allCount])],["topk_values","topk_indices","k_cache","v_cache","x_len","y_len"])
-        guard var k=output["k_cache"],var v=output["v_cache"],let x=output["x_len"],let y=output["y_len"] else {throw CompanionError.message("语义生成器输出不完整。")}
-        guard let xCount=try Self.integers(x).first,let yCount=try Self.integers(y).first,(0...768).contains(xCount),(0...768).contains(yCount) else {throw CompanionError.message("语义长度输出无效。")}
-        let used=xCount+yCount;let maxSteps=min(375,condition.cacheLimit-Int(used)-2)
-        guard maxSteps>=25 else {throw CompanionError.message("这句台词过长，请拆成短句。")}
-        var tokens:[Int64]=[],current=try sample(output,history:[],allowEnd:false),ended=false
-        for index in 0..<maxSteps {
-            try cancellation.check()
-            if current==1024 {ended=true;break};tokens.append(current)
-            let next=try run(step,["samples":Self.tensor([current],[1,1]),"k_cache":k,"v_cache":v,"idx":Self.tensor([Int64(index)],[1]),"x_len":x,"y_len":y],["topk_values","topk_indices","k_cache_new","v_cache_new"])
-            guard let nk=next["k_cache_new"],let nv=next["v_cache_new"] else {throw CompanionError.message("语义缓存输出不完整。")};k=nk;v=nv
-            current=try sample(next,history:tokens,allowEnd:tokens.count>=5)
+        var seed:Seed?=try stage("encoder",cancellation:cancellation) {encoder in
+            var feature:[Float]=[];feature.reserveCapacity(1024*allCount)
+            for channel in 0..<1024 {feature.append(contentsOf:referenceBert[channel*referenceCount..<(channel+1)*referenceCount]);feature.append(contentsOf:target.features[channel*n..<(channel+1)*n])}
+            let out=try run(encoder,["phoneme_ids":Self.tensor(condition.referencePhones+target.ids,[1,allCount]),"prompts":prompt,"bert_feature":Self.tensor(feature,[1,1024,allCount])],["topk_values","topk_indices","k_cache","v_cache","x_len","y_len"])
+            guard let k=out["k_cache"],let v=out["v_cache"],let x=out["x_len"],let y=out["y_len"] else{throw CompanionError.message("语义生成器输出不完整。")}
+            let ownedK=try Self.ownedFloat(k),ownedV=try Self.ownedFloat(v)
+            return try Seed(k:ownedK.0,kShape:ownedK.1,v:ownedV.0,vShape:ownedV.1,x:Self.integers(x),y:Self.integers(y),first:sample(out,history:[],allowEnd:false))
         }
-        guard ended,tokens.count>=5 else {throw CompanionError.message("这一句的语音生成未正常结束，请缩短后重试。")}
-        try cancellation.check()
-        let pcm=try run(vocoder,["pred_semantic":Self.tensor(tokens,[1,1,tokens.count]),"text_seq":Self.tensor(target.ids,[1,n]),"refer_spec":spectrogram,"speed":Self.tensor([speed],[1])],["audio"])
-        guard let value=pcm["audio"] else {throw CompanionError.message("声码器没有输出声音。")}
-        let samples=try Self.floats(value.tensorData() as Data)
-        guard !samples.isEmpty,samples.count<=32000*20,samples.allSatisfy(\.isFinite),samples.contains(where:{abs($0)>0.0001}) else {throw CompanionError.message("生成的音频无效。")}
-        let elapsed=ProcessInfo.processInfo.systemUptime-started,duration=Double(samples.count)/32000
-        diagnostics="本段合成 "+String(format:"%.2fs / 音频 %.2fs · RTF %.2f",elapsed,duration,elapsed/max(duration,0.001))+"\n"+[bert.map{"BERT："+$0.summary},"编码："+encoder.summary,"逐步生成："+step.summary,"声码器："+vocoder.summary].compactMap{$0}.joined(separator:"\n")
+        guard let xCount=seed?.x.first,let yCount=seed?.y.first,seed?.x.count==1,seed?.y.count==1,(0...768).contains(xCount),(0...768).contains(yCount) else{throw CompanionError.message("语义长度输出无效。")}
+        let maxSteps=min(375,condition.cacheLimit-Int(xCount+yCount)-2)
+        guard maxSteps>=25 else{throw CompanionError.message("这句台词过长，请拆成短句。")}
+        let first=seed!.first
+        let tokens:[Int64]=try stage("step",cancellation:cancellation) {step in
+            let state=try Self.state(&seed);var tokens:[Int64]=[],current=first,ended=false
+            for index in 0..<maxSteps {
+                try cancellation.check()
+                if current==1024{ended=true;break};tokens.append(current)
+                // Release each NSDictionary/ORTValue generation before the next.
+                try autoreleasepool {
+                    let next=try run(step,["samples":Self.tensor([current],[1,1]),"k_cache":state.k,"v_cache":state.v,"idx":Self.tensor([Int64(index)],[1]),"x_len":state.x,"y_len":state.y],["topk_values","topk_indices","k_cache_new","v_cache_new"])
+                    guard let k=next["k_cache_new"],let v=next["v_cache_new"] else{throw CompanionError.message("语义缓存输出不完整。")}
+                    state.k=k;state.v=v;current=try sample(next,history:tokens,allowEnd:tokens.count>=5)
+                }
+            }
+            if current==1024{ended=true}
+            guard ended,tokens.count>=5 else{throw CompanionError.message("这一句的语音生成未正常结束，请缩短后重试。")};return tokens
+        }
+        let samples:[Float]=try stage("sovits",cancellation:cancellation) {vocoder in
+            let pcm=try run(vocoder,["pred_semantic":Self.tensor(tokens,[1,1,tokens.count]),"text_seq":Self.tensor(target.ids,[1,n]),"refer_spec":spectrogram,"speed":Self.tensor([speed],[1])],["audio"])
+            guard let value=pcm["audio"] else{throw CompanionError.message("声码器没有输出声音。")}
+            let audio=try Self.floats(value.tensorData() as Data)
+            guard !audio.isEmpty,audio.count<=32000*20,audio.allSatisfy(\.isFinite),audio.contains(where:{abs($0)>0.0001}) else{throw CompanionError.message("生成的音频无效。")};return audio
+        }
+        try cancellation.check();let elapsed=ProcessInfo.processInfo.systemUptime-started,duration=Double(samples.count)/32000
+        diagnostics="分阶段合成 · 大模型不同时常驻\n本段合成 "+String(format:"%.2fs / 音频 %.2fs · RTF %.2f",elapsed,duration,elapsed/max(duration,0.001))+"\n"+stageMetrics.joined(separator:"\n")
         return samples
     }
     private func sample(_ output:[String:ORTValue],history:[Int64],allowEnd:Bool) throws -> Int64 {

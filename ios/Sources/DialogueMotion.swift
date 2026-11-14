@@ -96,6 +96,7 @@ enum DialogueMotion {
         先理解整句话的意图，再按人设和上下文决定是否愿意执行。举起右手、抬起右手、右手抬起来、把右手举高等可以表达同一意图，不按关键词命中执行。否定、引用、假设、询问能力、第三人称叙述不是要求立即执行。
         同意并准备执行时 decision=accept，action 给真实可用动作；拒绝时 decision=refuse、action=none，用 reply 自然解释，例如“我不想抬起来”。无动作时 decision=none。拒绝时禁止附带 motion。不要在同一轮一边拒绝一边选择执行；拒绝不会强制结束已有姿态。缺少明确 accept 的回复不会驱动新动作。
         用户可以表达情绪而不说动作名称，例如“恩雅羞一下”“能害羞一点吗”表示害羞表情；你同意时使用原作 snowbreak_home_shy（若可用），否则 gesture_shy。不要因用户没有说标准名称就只回复文字。也可在 accept 的 JSON 中返回 intent:"shy"／"nod"／"wave_left"／"wave_right"／"open_arms"，App 会将这些语义映射为当前可用动作；仍不从用户文本直接执行。
+        抬左腿、把左腿抬起来等意图对应 raise_left_leg，右腿对应 raise_right_leg；分开双腿为 spread_legs，放下或还原腿部为 lower_legs。仅当当前动作列表包含该指令并且你明确接受时执行；腿部指令达到关节范围后保持，并非无限制运动。
         reply 不要提及动作ID、JSON或此协议；需要的动作由播放器执行，不要仅用文字声称已执行。
         动作可选列表：
         \(entries.isEmpty ? "当前角色没有可用动作。" : entries)

@@ -4,10 +4,12 @@ enum BodyCommand:String,CaseIterable {
     case raiseLeft = "raise_left_hand",raiseRight = "raise_right_hand",raiseBoth = "raise_both_hands",lower = "lower_hands"
     case turnLeft = "turn_left",turnRight = "turn_right",turnBack = "turn_back",front = "face_front"
     case closeEyes = "close_eyes",openEyes = "open_eyes"
+    case raiseLeftLeg = "raise_left_leg",raiseRightLeg = "raise_right_leg",spreadLegs = "spread_legs",lowerLegs = "lower_legs"
     var label:String {
         switch self {case .raiseLeft:return "举起左手";case .raiseRight:return "举起右手";case .raiseBoth:return "举起双手";case .lower:return "放下双手"
         case .turnLeft:return "向左转身";case .turnRight:return "向右转身";case .turnBack:return "转过身展示背面";case .front:return "转回正面"
-        case .closeEyes:return "闭上眼睛";case .openEyes:return "睁开眼睛"}
+        case .closeEyes:return "闭上眼睛";case .openEyes:return "睁开眼睛"
+        case .raiseLeftLeg:return "抬起左腿";case .raiseRightLeg:return "抬起右腿";case .spreadLegs:return "分开双腿";case .lowerLegs:return "放下腿，恢复原姿态"}
     }
     static func resolve(_ input:String)->BodyCommand? {
         guard input.count <= 80,!input.contains("["),!input.contains("“"),!input.contains("「"),!input.contains("\"") else {return nil}
@@ -23,7 +25,9 @@ enum BodyCommand:String,CaseIterable {
             "举起双手":.raiseBoth,"双手举起来":.raiseBoth,"举双手":.raiseBoth,"放下手":.lower,"放下双手":.lower,"把手放下":.lower,
             "向左转":.turnLeft,"向左转身":.turnLeft,"左转":.turnLeft,"向右转":.turnRight,"向右转身":.turnRight,"右转":.turnRight,
             "转过身":.turnBack,"转身":.turnBack,"转过去":.turnBack,"转回来":.front,"转回正面":.front,"面向我":.front,
-            "闭眼":.closeEyes,"闭上眼":.closeEyes,"闭上眼睛":.closeEyes,"睁眼":.openEyes,"睁开眼":.openEyes,"睁开眼睛":.openEyes]
+            "闭眼":.closeEyes,"闭上眼":.closeEyes,"闭上眼睛":.closeEyes,"睁眼":.openEyes,"睁开眼":.openEyes,"睁开眼睛":.openEyes,
+            "抬腿":.raiseRightLeg,"抬起左腿":.raiseLeftLeg,"抬左腿":.raiseLeftLeg,"把左腿抬起来":.raiseLeftLeg,"左腿抬起来":.raiseLeftLeg,
+            "抬起右腿":.raiseRightLeg,"抬右腿":.raiseRightLeg,"右腿抬起来":.raiseRightLeg,"把右腿抬起来":.raiseRightLeg,"分开双腿":.spreadLegs,"把腿分开":.spreadLegs,"双腿分开":.spreadLegs,"张开双腿":.spreadLegs,"放下腿":.lowerLegs,"放下双腿":.lowerLegs,"把腿放下":.lowerLegs]
         return map[text]
     }
     static func asksAppearance(_ text:String)->Bool {
@@ -36,6 +40,7 @@ struct BodyState {
     var eyes = "未确认"
     var hands = "未确认"
     var facing = "未确认"
+    var legs = "未确认"
     var lastResult = "尚无动作回执"
-    var summary:String {"服饰：\(outfit)；眼睛：\(eyes)；双手：\(hands)；朝向：\(facing)；执行回执：\(lastResult)"}
+    var summary:String {"服饰：\(outfit)；眼睛：\(eyes)；双手：\(hands)；朝向：\(facing)；腿部：\(legs)；执行回执：\(lastResult)"}
 }

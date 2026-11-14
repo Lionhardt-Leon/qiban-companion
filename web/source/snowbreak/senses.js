@@ -25,7 +25,7 @@ gl_Position=projectionMatrix*mvPosition;`);};material.customProgramCacheKey=()=>
   if(previous){contact=previous;contact.hit=hit;}else {if(channels.length===4)channels.shift();contact={hit,region:id,spring:new ContactSpring(id),direction:camera.getWorldDirection(new THREE.Vector3())};channels.push(contact);}
   contact.spring.press();pressed=active=true;return true;
  }
- const down=e=>{held=true;pointer(e);};const release=()=>{pressed=false;held=false;contact?.spring.release();contact=null;touchUntil=performance.now()+1000;};canvas.addEventListener('pointerdown',down);canvas.addEventListener('pointermove',pointer);canvas.addEventListener('pointerup',release);canvas.addEventListener('pointercancel',release);
+ const down=e=>{held=true;pointer(e);};const release=()=>{pressed=false;held=false;contact?.spring.release();contact=null;touchUntil=performance.now()+1000;};canvas.addEventListener('pointerdown',down);canvas.addEventListener('pointermove',pointer);canvas.addEventListener('pointerup',release);canvas.addEventListener('pointercancel',release);canvas.addEventListener('lostpointercapture',release);
  function tick(now=performance.now()){
   const dt=Math.min(.04,Math.max(0,(now-last)/1000));last=now;if(now>until)target.set(0,0);current.lerp(target,1-Math.exp(-dt*12));
   const up=new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld,1),right=new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld,0);
@@ -36,5 +36,5 @@ gl_Position=projectionMatrix*mvPosition;`);};material.customProgramCacheKey=()=>
   if(eyes.length)for(const skeleton of skinSkeletons)skeleton.update();
  }
  function restore(){for(const [eye,q] of bases)if(eye.quaternion.angleTo(q.applied)<.000001)eye.quaternion.copy(q.base);bases.clear();}
- return {gaze,touch,tick,restore,reset(){restore();pressed=active=held=false;touchUntil=0;offset=velocity=0;channels.length=0;contact=null;for(const value of offsets.value)value.set(0,0,0);target.set(0,0);current.set(0,0);},snapshot:()=>({eyes:eyes.length,gaze:current.toArray(),offset,pressed,active,contacts:channels.map(c=>({region:c.region,offset:c.spring.offset,velocity:c.spring.velocity,pressed:c.spring.pressed,center:anchor(c).toArray()}))}),dispose(){for(const [name,fn] of [['pointerdown',down],['pointermove',pointer],['pointerup',release],['pointercancel',release]])canvas.removeEventListener(name,fn);}};
+ return {gaze,touch,tick,restore,reset(){restore();pressed=active=held=false;touchUntil=0;offset=velocity=0;channels.length=0;contact=null;for(const value of offsets.value)value.set(0,0,0);target.set(0,0);current.set(0,0);},snapshot:()=>({eyes:eyes.length,gaze:current.toArray(),offset,pressed,active,contacts:channels.map(c=>({region:c.region,offset:c.spring.offset,velocity:c.spring.velocity,pressed:c.spring.pressed,center:anchor(c).toArray()}))}),dispose(){for(const [name,fn] of [['pointerdown',down],['pointermove',pointer],['pointerup',release],['pointercancel',release],['lostpointercapture',release]])canvas.removeEventListener(name,fn);}};
 }

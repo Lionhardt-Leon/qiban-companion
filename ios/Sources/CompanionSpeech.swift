@@ -1,9 +1,10 @@
 import Foundation
 import AVFoundation
+import UIKit
 
 enum SpeechWAV {
     static func encode(_ samples:[Float],rate:Int=32000)->Data {
-        let pcm=samples.map{Int16(max(-1,min(1,$0))*32767).littleEndian}
+        let pcm=samples.map{Int16(max(-1,min(1,$0.isFinite ? $0:0))*32767).littleEndian}
         let bytes=pcm.withUnsafeBufferPointer{Data(buffer:$0)};var data=Data()
         func number<T:FixedWidthInteger>(_ value:T){var little=value.littleEndian;withUnsafeBytes(of:&little){data.append(contentsOf:$0)}}
         data.append(Data("RIFF".utf8));number(UInt32(36+bytes.count));data.append(Data("WAVEfmt ".utf8));number(UInt32(16));number(UInt16(1));number(UInt16(1));number(UInt32(rate));number(UInt32(rate*2));number(UInt16(2));number(UInt16(16));data.append(Data("data".utf8));number(UInt32(bytes.count));data.append(bytes);return data
@@ -26,8 +27,8 @@ private final class SpeechEngineWorker:@unchecked Sendable {
                     let audio=try autoreleasepool {SpeechWAV.encode(try engine.synthesize(text,speed:speed,cancellation:cancellation))}
                     try cancellation.check();chunk(audio,(partIndex==0 ? String(format:"首段可播耗时 %.2fs（含加载／编译）\n",ProcessInfo.processInfo.systemUptime-renderStarted):"")+engine.diagnostics)
                 }
-                finish(nil)
-            }catch {finish(error)}
+                VoiceBreadcrumb.record(voice:voice.id,stage:"finished",state:"complete");finish(nil)
+            }catch {VoiceBreadcrumb.record(voice:voice.id,stage:"finished",state:error is CancellationError ? "cancelled":"failed");finish(error)}
         }
     }
     func unload() async {await withCheckedContinuation {continuation in queue.async{self.engine=nil;continuation.resume()}}}
@@ -40,6 +41,7 @@ private final class SpeechEngineWorker:@unchecked Sendable {
     @Published private(set) var mouthLevel:Float=0
     @Published private(set) var playbackStarted:SpeechPlaybackStart?
     private var speakingMessageID:UUID?,startedGeneration:UUID?
+    private var memoryObserver:NSObjectProtocol?
     private var meter:Timer?
     @Published private(set) var status=""
     @Published private(set) var diagnostics="尚无本机合成记录"
@@ -58,7 +60,12 @@ private final class SpeechEngineWorker:@unchecked Sendable {
     private var volume:Float=1
     private var completion:((Bool)->Void)?
     override convenience init(){self.init(library:VoicePackageLibrary())}
-    init(library:VoicePackageLibrary){self.library=library;super.init();reload()}
+    init(library:VoicePackageLibrary){self.library=library;super.init();reload();if let previous=VoiceBreadcrumb.previousStatus {diagnostics=previous}
+        memoryObserver=NotificationCenter.default.addObserver(forName:UIApplication.didReceiveMemoryWarningNotification,object:nil,queue:.main){[weak self] _ in
+            Task{@MainActor [weak self] in guard let self=self else{return};self.stop();self.status="系统内存紧张，已停止本机合成并释放语音资源。";await self.worker.unload()}
+        }
+    }
+    deinit{if let observer=memoryObserver{NotificationCenter.default.removeObserver(observer)}}
     func reload(){if let manifest=try? library.manifest(){voices=manifest.voices;packageName=manifest.title}else{voices=[];packageName=""}}
     func stop() {
         meter?.invalidate();meter=nil;mouthLevel=0;speakingMessageID=nil;startedGeneration=nil
@@ -86,7 +93,7 @@ private final class SpeechEngineWorker:@unchecked Sendable {
         do {
             guard !importing else {throw CompanionError.message("正在导入语音包，请稍候。")}
             try preferences.validate();let text=try preferences.text(for:message)
-            guard !text.isEmpty else {completion?(true);return}
+            guard !text.isEmpty else {completion?(true);return};guard text.count<=6000 else{throw CompanionError.message("朗读文本过长，请分段朗读；聊天内容已保留。") }
             let audio=AVAudioSession.sharedInstance()
             if inCall {try audio.setCategory(.playAndRecord,mode:.voiceChat,options:[.defaultToSpeaker,.allowBluetooth])}
             else {try audio.setCategory(.playback,mode:.spokenAudio,options:[])}

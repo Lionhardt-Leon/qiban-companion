@@ -60,7 +60,7 @@ async function performLoad(url,id,variant,ticket){
     lighting=createLightingEditor(display,'lighting:'+(opened.selection?opened.manifest.characterId.toLowerCase()+'-'+opened.selection.mode:opened.manifest.skinId));
     let previousStatus='';
     display.setFrameHandler(()=>{
-      const now=performance.now();if(!paused){const drag=display.sceneInteractions.snapshot();adapter.tick(drag.active||drag.recovering?0:Math.min(100,Math.max(0,now-last)))};last=now;
+      const now=performance.now();if(!paused){const drag=display.sceneInteractions.snapshot();adapter.tick(Math.min(100,Math.max(0,now-last)))};last=now;
       if(!paused&&learned){
         const time=motionTime(learned,now),end=learned.duration,stopFade=learned.stop===undefined?1:Math.max(0,1-(now-learned.stop)/300);
         if(time>=end||stopFade===0){learned=null;}else{
@@ -85,7 +85,7 @@ async function performLoad(url,id,variant,ticket){
     const close=document.createElement('button');close.textContent='关闭工具';close.onclick=closeEditor;editorHost.prepend(close);
     const select=editorHost.querySelector('#snowSurfaceRegion'),edit=editorHost.querySelector('#snowSurfaceEdit');
     edit.addEventListener('change',()=>{if(edit.checked){editorHost.classList.remove('open');finishPaint.textContent='完成'+select.selectedOptions[0].textContent+'标注';finishPaint.hidden=false;}});
-    text('');emit({type:'ready',bodyActions:display.embodiment.snapshot().available,selection:opened.selection,variants:opened.variants,characterId:opened.manifest.characterId,skinId:opened.manifest.skinId,
+    text('');emit({type:'ready',bodyActions:[...display.embodiment.snapshot().available,...display.sceneInteractions.available()],selection:opened.selection,variants:opened.variants,characterId:opened.manifest.characterId,skinId:opened.manifest.skinId,
       stance:opened.runtime.getAsset('stateTransition')?.data.stance||'seated',samples:display.sampleOptions().map(x=>x.id),voices:voices.snapshot().available,learned:display.learnedOptions().map(x=>x.id)});
     window.__snowbreakMigration={display,adapter,voices,editor,presentation,manifest:opened.manifest};
   }catch(error){
@@ -112,7 +112,7 @@ async function command(value){
     modelEditor?.close();presentation?.close();
   }
   if(value.type==='body'){
-    if(paused)throw new Error('模型暂停中');const requestGeneration=generation;learned=null;if(!adapter.snapshot().sceneId){adapter.stop('body-command');adapter.enterStandby();}display.embodiment.command(value.id);
+    if(paused)throw new Error('模型暂停中');if(display.sceneInteractions.available().includes(value.id)){display.sceneInteractions.command(value.id);emit({type:'selfState',state:inspect(),requestId:value.requestId});return;}const requestGeneration=generation;learned=null;if(!adapter.snapshot().sceneId){adapter.stop('body-command');adapter.enterStandby();}display.embodiment.command(value.id);
     await new Promise(resolve=>setTimeout(resolve,750));if(requestGeneration!==generation)return;emit({type:'selfState',state:inspect(),requestId:value.requestId});return;
   }
   if(value.type==='gesture'){
@@ -124,7 +124,7 @@ async function command(value){
   if(value.type==='danceEdit'){danceControls.toggle();return;}
   if(value.type==='speechLevel'){display.embodiment.setSpeechLevel(value.value);return;}
   if(value.type==='gaze'){display.setGaze(value.x,value.y);return;}
-  if(value.type==='pause'){if(paused)return;voices?.stop?.();modelEditor?.close();danceControls.close();const suspended=adapter.snapshot();pausedScene=suspended.sceneId?{id:suspended.sceneId,time:suspended.sceneTime}:null;display.sceneInteractions.cancel();display.embodiment.reset();display.resetSenses();learned=null;paused=true;lighting?.close();presentation?.close();canvas.dataset.snowbreakPaused='true';adapter.stop('background');closeEditor();return;}
+  if(value.type==='pause'){if(paused)return;voices?.stop?.();modelEditor?.close();danceControls.close();const suspended=adapter.snapshot();pausedScene=suspended.sceneId?{id:suspended.sceneId,time:suspended.sceneTime}:null;display.sceneInteractions.suspend();display.embodiment.reset();display.resetSenses();learned=null;paused=true;lighting?.close();presentation?.close();canvas.dataset.snowbreakPaused='true';adapter.stop('background');closeEditor();return;}
   if(value.type==='resume'){if(!paused)return;paused=false;canvas.dataset.snowbreakPaused='false';last=performance.now();if(pausedScene){adapter.enterScene(pausedScene.id,pausedScene.time);pausedScene=null;}else adapter.enterStandby();return;}
   if(value.type==='stop'){display.embodiment.reset();if(learned){learned.stop=performance.now();return;}adapter.stop();adapter.enterStandby();return;}
   if(value.type==='officialTouchPoints'){const count=display.sceneInteractions.togglePoints();if(!count)emit({type:'notice',message:'当前包／场景没有已移植的原作触点；互动4、5需使用新版互动包。'});return;}
@@ -153,7 +153,7 @@ async function command(value){
     learned={id:clip.id,kind:clip.kind,duration:clip.duration,start:performance.now(),offset:0,rate:clip.kind==='standing-dance'?danceControls.get().tempo:1};
   }
 }
-function inspect(){if(!display)return null;const body=display.embodiment.snapshot(),state=adapter?.snapshot(),sample=display.sampleOptions().find(s=>s.id===display.sampleState().sampleId);return {...body,lastResult:state?.status==='playing'&&sample?'正在播放原作动作：'+sample.label:body.lastResult,sourceAction:state?.status==='playing'?sample?.id:null,learnedMotion:learned?{id:learned.id,time:motionTime(learned,performance.now()),rate:learned.rate,amplitude:danceControls.get().amplitude}:null,interactionScene:state?.sceneId||null,outfit:collection?.selection?.outfit||'unknown',mode:collection?.selection?.mode||'unknown'};}
+function inspect(){if(!display)return null;const body=display.embodiment.snapshot(),state=adapter?.snapshot(),sample=display.sampleOptions().find(s=>s.id===display.sampleState().sampleId);const leg=display.sceneInteractions.legState();return {...body,legs:leg.legs,available:[...body.available,...leg.available],lastResult:state?.status==='playing'&&sample?'正在播放原作动作：'+sample.label:body.lastResult,legResult:leg.lastResult,sourceAction:state?.status==='playing'?sample?.id:null,learnedMotion:learned?{id:learned.id,time:motionTime(learned,performance.now()),rate:learned.rate,amplitude:danceControls.get().amplitude}:null,interactionScene:state?.sceneId||null,outfit:collection?.selection?.outfit||'unknown',mode:collection?.selection?.mode||'unknown'};}
 function portrait(){if(!display||paused)throw new Error('模型尚未就绪');const c=document.createElement('canvas'),ratio=1024/Math.max(canvas.width,canvas.height);c.width=Math.round(canvas.width*ratio);c.height=Math.round(canvas.height*ratio);const ctx=c.getContext('2d');ctx.fillStyle='#22202a';ctx.fillRect(0,0,c.width,c.height);display.drawSnapshot(ctx,c.width,c.height);return c.toDataURL('image/jpeg',.65);}
 window.SnowbreakHost={inspect,portrait,performance:()=>display?.performanceState(),receive:value=>{void command(value).catch(error=>emit({type:'notice',message:String(error.message||error)}));}};
 addEventListener('pagehide',()=>{generation++;cleanup();});

@@ -108,8 +108,9 @@ struct SnowbreakTouchEvent {
         updateBody(value)
     }
     private func updateBody(_ value:[String:Any]) {
+        if let available=value["available"] as? [String] {bodyActions=available.filter{BodyCommand(rawValue:$0) != nil || BodyGesture.ids.contains($0)}}
         bodyState = BodyState(outfit:companionOutfit == "nude" ? "当前已加载果体版模型，没有穿衣":companionOutfit == "underwear" ? "当前加载芬妮婚纱内衣版，穿有胸衣、手套、袜饰，保留头纱与装饰，不是裸体":companionOutfit == "normal" ? "当前已加载"+(characterID == "Fenny" ? "芬妮原婚纱":"恩雅护士正常服饰")+"模型":"服饰未确认",
-            eyes:value["eyes"] as? String ?? "未确认",hands:value["hands"] as? String ?? "未确认",facing:value["facing"] as? String ?? "未确认",lastResult:(value["lastResult"] as? String ?? "无回执")+((value["interactionScene"] as? String).map{"；保持互动场景："+$0} ?? ""))
+            eyes:value["eyes"] as? String ?? "未确认",hands:value["hands"] as? String ?? "未确认",facing:value["facing"] as? String ?? "未确认",legs:value["legs"] as? String ?? "未确认",lastResult:(value["lastResult"] as? String ?? "无回执")+(value["legResult"] as? String ?? "")+((value["interactionScene"] as? String).map{"；保持互动场景："+$0} ?? ""))
     }
     func executeBody(_ command:BodyCommand,automatic:Bool = false) async -> Bool {
         guard ready,!paused,!(automatic && isEditing),bodyActions.contains(command.rawValue) else {return false}

@@ -5,8 +5,8 @@ import OnnxRuntimeBindings
 enum VoiceComputeMode:String,CaseIterable,Identifiable {
     case automatic,cpu,neural,gpu
     var id:String {rawValue}
-    var title:String {switch self {case .automatic:return "自动分工";case .cpu:return "CPU 兼容";case .neural:return "CPU＋神经引擎";case .gpu:return "CPU＋GPU"}}
-    func accelerates(_ module:String)->Bool {self != .cpu && (module == "bert" || module == "sovits")}
+    var title:String {switch self {case .automatic:return "自动（稳定优先）";case .cpu:return "CPU 兼容";case .neural:return "CPU＋神经引擎";case .gpu:return "CPU＋GPU"}}
+    func accelerates(_ module:String)->Bool {(self == .neural || self == .gpu) && (module == "bert" || module == "sovits")}
     var units:String {self == .neural || self == .automatic ? "CPUAndNeuralEngine":"CPUAndGPU"}
 }
 
@@ -14,7 +14,7 @@ enum VoiceComputeMode:String,CaseIterable,Identifiable {
 // Selecting ANE is permission to schedule there, not proof every node used it.
 final class AcceleratedVoiceSession {
     private let env:ORTEnv,model:URL
-    private var session:ORTSession
+    private var session:ORTSession?
     private(set) var backend="CPU",fallback=false,calls=0,milliseconds=0.0
     init(env:ORTEnv,model:URL,module:String,mode:VoiceComputeMode,cache:URL) throws {
         self.env=env;self.model=model
@@ -32,16 +32,16 @@ final class AcceleratedVoiceSession {
         }else {session=try cpu()}
         #endif
     }
-    private static func options() throws -> ORTSessionOptions {let options=try ORTSessionOptions();try options.setIntraOpNumThreads(2);try options.setGraphOptimizationLevel(.all);return options}
+    private static func options() throws -> ORTSessionOptions {let options=try ORTSessionOptions();try options.setIntraOpNumThreads(1);try options.setGraphOptimizationLevel(.all);try options.addConfigEntry(withKey:"session.intra_op.allow_spinning",value:"0");return options}
     private static func makeCPU(env:ORTEnv,model:URL) throws -> ORTSession {try ORTSession(env:env,modelPath:model.path,sessionOptions:options())}
     func run(_ inputs:[String:ORTValue],_ outputs:[String]) throws -> [String:ORTValue] {
         let start=ProcessInfo.processInfo.systemUptime
         defer {calls+=1;milliseconds+=(ProcessInfo.processInfo.systemUptime-start)*1000}
-        do {return try session.run(withInputs:inputs,outputNames:Set(outputs),runOptions:nil)}
+        do {guard let active=session else{throw CompanionError.message("语音计算会话已释放。")};return try active.run(withInputs:inputs,outputNames:Set(outputs),runOptions:nil)}
         catch {
             guard backend != "CPU" else{throw error}
-            session=try Self.makeCPU(env:env,model:model);backend="CPU";fallback=true
-            return try session.run(withInputs:inputs,outputNames:Set(outputs),runOptions:nil)
+            session=nil;session=try autoreleasepool{try Self.makeCPU(env:env,model:model)};backend="CPU";fallback=true
+            return try session!.run(withInputs:inputs,outputNames:Set(outputs),runOptions:nil)
         }
     }
     func resetMetrics(){calls=0;milliseconds=0}

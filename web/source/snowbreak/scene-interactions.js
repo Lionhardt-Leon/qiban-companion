@@ -9,10 +9,35 @@ export function createSceneInteractions(root,camera,canvas,pick,config,contactSu
  const profiles=generic||config?.schema==='enya-official-scenes/1'?config.profiles:[];
  if(!Array.isArray(profiles)||profiles.length>16||new Set(profiles.map(p=>p.id)).size!==profiles.length)throw new Error('Invalid scene profiles');
  if(generic)for(const p of profiles){if(typeof p.id!=='string'||!Array.isArray(p.contacts)||p.contacts.length>16)throw new Error('Invalid source contacts');for(const c of p.contacts){if(typeof c.bone!=='string'||!['ik','unsupported'].includes(c.kind))throw new Error('Unknown source contact');if(c.kind==='ik'&&(!root.getObjectByName(c.ikBone)||!c.drag||!c.sizeCm||![c.sizeCm.X,c.sizeCm.Y,c.sizeCm.Z,...Object.values(c.drag.ScreenPercentToWorld||{}),...Object.values(c.drag.WorldSpaceLimit||{}),...Object.values(c.drag.WorldSpaceLmitLeftUp||{}),c.drag.DragRecoverTime].every(Number.isFinite)))throw new Error('Invalid source IK limits');}}
- let hooks={},active=null,recover=null,saved=[],last=performance.now(),lastEvent=null,showPoints=false,lastPick=null,bedCorrections=[],legSolve=null;
- const overlay=document.createElement('div');overlay.style.cssText='position:fixed;inset:0;pointer-events:none;z-index:3';document.body.append(overlay);const pointLayer=document.createElement('div');overlay.append(pointLayer);const handles=new Map();
- function points(){return (profile()?.contacts||[]).map(c=>{const bone=root.getObjectByName(c.bone);if(!bone)return null;const p=pos(bone).project(camera),r=canvas.getBoundingClientRect();return {id:c.id,label:/Foot/.test(c.bone)?(c.bone.includes('-L-')?'左脚':'右脚'):/Hand/.test(c.bone)?(c.bone.includes('-L-')?'左手':'右手'):/Pelvis/.test(c.bone)?'骨盆':'头部',x:r.left+(p.x+1)*r.width/2,y:r.top+(1-p.y)*r.height/2,supportedIK:c.kind==='ik'};}).filter(Boolean);}
- const pos=b=>b.getWorldPosition(new THREE.Vector3());
+
+ let hooks={},saved=[],lastEvent=null,showPoints=false,lastPick=null,bedCorrections=[],legSolve=null,solves={},lastResult='';
+ const active=new Map(),held=new Map(),recover=new Map(),handles=new Map(),solutionCache=new Map(),pos=b=>b.getWorldPosition(new THREE.Vector3());
+ const profile=()=>profiles.find(p=>p.id===(hooks.scene?.()||'main'));
+ const free=()=>characterId==='Enya'&&['show_04','show_05'].includes(profile()?.id);
+ const contacts=()=> (profile()?.contacts||[]).filter(c=>c.kind==='ik');
+ const overlay=document.createElement('div');overlay.style.cssText='position:fixed;inset:0;pointer-events:none;z-index:3';document.body.append(overlay);const pointLayer=document.createElement('div');overlay.append(pointLayer);
+ const resetButton=document.createElement('button');resetButton.textContent='还原腿部';resetButton.style.cssText='position:fixed;right:5%;top:24%;pointer-events:auto;border:1px solid #8fc9ab;border-radius:18px;background:#203b32dd;color:white;padding:8px';resetButton.onclick=()=>command('lower_legs');overlay.append(resetButton);
+ function restore(){for(const s of saved)s.bone.quaternion.copy(s.base);saved=[];}
+ function points(){return (profile()?.contacts||[]).map(c=>{const bone=root.getObjectByName(c.bone);if(!bone)return null;const p=pos(bone).project(camera),r=canvas.getBoundingClientRect();return {id:c.id,label:/Foot/.test(c.bone)?(c.bone.includes('-L-')?'左脚':'右脚'):/Hand/.test(c.bone)?'手部':'头部',x:r.left+(p.x+1)*r.width/2,y:r.top+(1-p.y)*r.height/2,supportedIK:c.kind==='ik'};}).filter(Boolean);}
+ function makeState(contact){const foot=root.getObjectByName(contact.ikBone),calf=foot?.parent,thigh=calf?.parent;if(!thigh?.isBone||!calf?.isBone)throw Error('腿部骨骼层级不完整');root.updateWorldMatrix(true,true);return {contact,foot,calf,thigh,base:[thigh,calf,foot].map(b=>b.quaternion.clone()),anchor:root.worldToLocal(pos(foot)),offset:new THREE.Vector3(),dx:0,dy:0};}
+ function pickContact(hit){if(!hit?.alphaVerified)return null;for(const c of contacts()){const b=root.getObjectByName(c.ikBone),p=b?.worldToLocal(new THREE.Vector3().fromArray(hit.point)),size=c.sizeCm;if(p&&Math.abs(p.x)<size.X*.01&&Math.abs(p.y)<size.Z*.01&&Math.abs(p.z)<size.Y*.01)return c;}for(const c of contacts()){const side=c.ikBone.includes('-L-')?'L':'R';if((hit.skinBones||[]).some(n=>n?.startsWith('Bip001-'+side+'-')&&/Thigh|Calf|Foot/.test(n)))return c;}return null;}
+ function start(e,c){if(!c||canvas.dataset.snowbreakPaused==='true'||canvas.dataset.snowbreakFrameEdit==='true'||document.querySelector('#snowSurfaceEdit')?.checked)return;for(const [id,s] of active)if(s.contact.ikBone===c.ikBone)release(id,true);e.preventDefault();e.stopImmediatePropagation();hooks.beforeDrag?.();const previous=held.get(c.ikBone);const anchor=previous?root.worldToLocal(pos(previous.foot)):null;restore();const state=makeState(c);if(previous){state.base=previous.base;state.anchor=anchor;held.delete(c.ikBone);}recover.delete(c.ikBone);Object.assign(state,{pointerId:e.pointerId,x:e.clientX,y:e.clientY,dragging:false,triggered:false});active.set(e.pointerId,state);canvas.setPointerCapture(e.pointerId);lastPick={contact:c.id,handle:e.target?.dataset?.legHandle||null};if(c.voiceId)hooks.voice?.(c.voiceId);}
+ function down(e){start(e,pickContact(pick(e.clientX,e.clientY)));}
+ function release(id,cancelled=false){const s=active.get(id);if(!s)return;active.delete(id);if(canvas.hasPointerCapture(id))canvas.releasePointerCapture(id);if(s.dragging){if(!cancelled&&free()){held.set(s.contact.ikBone,s);lastResult='已保持腿部调整；可选择还原腿部或要求放下腿。';}else recover.set(s.contact.ikBone,{...s,releasedAt:performance.now()});}if(!cancelled)hooks.event?.({type:'touch',region:'leg',label:s.contact.ikBone.includes('-L-')?'左腿／脚':'右腿／脚',gesture:s.dragging?'drag':'tap',source:'bounded-leg-control',confidence:1,completed:true});}
+ function compare(value,limit,type){if(type?.endsWith('::Less'))return value<limit;if(type?.endsWith('::Greater'))return value>limit;return null;}
+ function move(e){const s=active.get(e.pointerId);if(!s)return;e.stopImmediatePropagation();if(!s.dragging&&Math.hypot(e.clientX-s.x,e.clientY-s.y)<5)return;s.dragging=true;const r=canvas.getBoundingClientRect(),d=s.contact.drag,reach=free()?55:0;
+  const dx=(e.clientX-s.x)/Math.max(1,r.width)*(free()?100:d.ScreenPercentToWorld?.X||0),dy=(e.clientY-s.y)/Math.max(1,r.height)*(free()?100:d.ScreenPercentToWorld?.Y||0);
+  s.dx=THREE.MathUtils.clamp(dx,-Math.max(reach,d.WorldSpaceLmitLeftUp?.X||0),Math.max(reach,d.WorldSpaceLimit?.X||0));s.dy=THREE.MathUtils.clamp(dy,-Math.max(reach,d.WorldSpaceLmitLeftUp?.Y||0),Math.max(reach,d.WorldSpaceLimit?.Y||0));
+  const right=new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld,0),up=new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld,1),world=right.multiplyScalar(s.dx*.01).addScaledVector(up,-s.dy*.01);s.offset.copy(root.worldToLocal(root.getWorldPosition(new THREE.Vector3()).add(world)));
+  if(!free())for(const trigger of s.contact.thresholds||[]){const results=[compare(s.dx,trigger.limit.X,trigger.xCompare),compare(s.dy,trigger.limit.Y,trigger.yCompare)].filter(v=>v!==null);if(!s.triggered&&results.length&&results.every(Boolean)){s.triggered=true;lastEvent={sampleId:trigger.sampleId,dx:s.dx,dy:s.dy,source:'serialized-drag-threshold'};release(e.pointerId);hooks.reaction?.(trigger.sampleId);break;}}
+ }
+ function up(e){if(active.has(e.pointerId)){e.stopImmediatePropagation();release(e.pointerId);}}
+ function lost(e){release(e.pointerId,true);}
+ function suspend(){for(const id of [...active.keys()])release(id,true);restore();}
+ function cancel(){suspend();held.clear();recover.clear();solutionCache.clear();lastResult='';}
+ function available(){const sides=contacts().map(c=>c.ikBone.includes('-L-')?'left':'right');return [...new Set(sides.map(s=>'raise_'+s+'_leg')),...(sides.includes('left')&&sides.includes('right')?['spread_legs']:[]),...(sides.length?['lower_legs']:[])];}
+ function command(id){if(!available().includes(id))throw Error('当前姿势未绑定该腿部动作');suspend();if(id==='lower_legs'){for(const [bone,s] of held)recover.set(bone,{...s,releasedAt:performance.now()});held.clear();lastResult='正在放下双腿，恢复当前原作姿态。';return;}
+  restore();const all=contacts(),selected=all.filter(c=>id==='spread_legs'||id.includes(c.ikBone.includes('-L-')?'left':'right'));for(const c of selected){const state=makeState(c),other=root.getObjectByName(c.ikBone.includes('-L-')?'Bip001-R-Thigh':'Bip001-L-Thigh'),out=pos(state.thigh).sub(other?pos(other):pos(state.thigh.parent));if(out.lengthSq()<1e-8)continue;out.normalize();const up=new THREE.Vector3(0,1,0).transformDirection(root.matrixWorld),length=pos(state.thigh).distanceTo(pos(state.calf))+pos(state.calf).distanceTo(pos(state.foot)),delta=id==='spread_legs'?out.multiplyScalar(length*(free()?.48:.18)).addScaledVector(up,length*.08):up.multiplyScalar(length*(free()?.36:.18)).addScaledVector(pos(state.thigh).sub(pos(state.foot)).normalize(),length*(free()?.2:0));state.offset.copy(root.worldToLocal(root.getWorldPosition(new THREE.Vector3()).add(delta)));state.startedAt=performance.now();held.set(c.ikBone,state);recover.delete(c.ikBone);}lastResult=id==='spread_legs'?'正在按关节范围分开双腿。':id.includes('left')?'正在抬起左腿。':'正在抬起右腿。';}
  const footVertices=new Map();
  function footPoints(foot,full=false){
   if(!footVertices.has(foot.name)){const matches=[];root.traverse(mesh=>{if(!mesh.isSkinnedMesh)return;const skin=mesh.geometry.getAttribute('skinIndex'),weights=mesh.geometry.getAttribute('skinWeight');if(!skin||!weights)return;const ids=new Set(mesh.skeleton.bones.map((b,i)=>b.name===foot.name||b.name===foot.name.replace('-Foot','-Toe0')?i:-1).filter(i=>i>=0));const vertices=[];for(let i=0;i<skin.count;i++){let influence=0;for(let k=0;k<4;k++)if(ids.has(skin.getComponent(i,k)))influence+=weights.getComponent(i,k);if(influence>.45)vertices.push(i);}if(vertices.length){const positions=mesh.geometry.getAttribute('position'),probes=new Set();for(const x of [-1,0,1])for(const y of [-1,0,1])for(const z of [-1,0,1]){if(x===0&&y===0&&z===0)continue;let best=-Infinity,index=vertices[0];for(const i of vertices){const value=positions.getX(i)*x+positions.getY(i)*y+positions.getZ(i)*z;if(value>best){best=value;index=i;}}probes.add(index);}matches.push({mesh,vertices,probes:[...probes]});}});footVertices.set(foot.name,matches);}
@@ -20,84 +45,17 @@ export function createSceneInteractions(root,camera,canvas,pick,config,contactSu
  }
  function footRadius(foot,normal){const origin=pos(foot).dot(normal);return THREE.MathUtils.clamp(Math.max(.04,...footPoints(foot).map(p=>origin-p.dot(normal)))+.015,.055,.16);}
 
- const profile=()=>profiles.find(p=>p.id===(hooks.scene?.()||'main'));
- function restore(){for(const s of saved)if(s.bone.quaternion.angleTo(s.applied)<1e-6)s.bone.quaternion.copy(s.base);saved=[];}
- function pickContact(hit){
-  if(!hit?.alphaVerified)return null;
-  for(const contact of profile()?.contacts||[]){
-   if(contact.kind!=='ik')continue;const bone=root.getObjectByName(contact.ikBone||contact.bone);if(!bone)continue;
-   const point=bone.worldToLocal(new THREE.Vector3().fromArray(hit.point)),size=contact.sizeCm;
-   if(Math.abs(point.x)<size.X*.01&&Math.abs(point.y)<size.Z*.01&&Math.abs(point.z)<size.Y*.01)return {contact,bone};
-  }
-  const names=hit.skinBones||[];
-  for(const contact of profile()?.contacts||[]){if(contact.kind!=='ik')continue;const side=contact.ikBone.includes('-L-')?'L':'R';if(names.some(n=>n?.startsWith('Bip001-'+side+'-')&&/Thigh|Calf|Foot/.test(n)))return {contact,bone:root.getObjectByName(contact.ikBone)};}
-  return null;
- }
- function release(cancelled=false){
-  if(!active)return;const state=active;active=null;
-  recover={...state,weight:1,releasedAt:performance.now()};if(canvas.hasPointerCapture(state.pointerId))canvas.releasePointerCapture(state.pointerId);
-  if(!cancelled)hooks.event?.({type:'touch',region:'leg',label:state.contact.ikBone.includes('-L-')?'左腿／脚（原作触点）':'右腿／脚（原作触点）',gesture:'stroke',source:'original-scene-collision',confidence:1,completed:true});
- }
- function down(e){
-  if(active||canvas.dataset.snowbreakPaused==='true'||canvas.dataset.snowbreakFrameEdit==='true'||document.querySelector('#snowSurfaceEdit')?.checked)return;
-  const found=pickContact(pick(e.clientX,e.clientY));start(e,found);
- }
- function start(e,found){
-  if(canvas.dataset.snowbreakPaused==='true'||canvas.dataset.snowbreakFrameEdit==='true'||document.querySelector('#snowSurfaceEdit')?.checked)return;
-  lastPick={contact:found?.contact.id,handle:e.target?.dataset?.legHandle||null};if(!found||active)return;
-  const foot=found.bone,calf=foot.parent,thigh=calf?.parent;lastPick.chain=[foot,calf,thigh].map(b=>({name:b?.name,isBone:b?.isBone}));if(!thigh?.isBone||!calf?.isBone)return;
-  e.preventDefault();e.stopImmediatePropagation();hooks.beforeDrag?.();recover=null;
-  active={...found,foot,calf,thigh,pointerId:e.pointerId,x:e.clientX,y:e.clientY,dx:0,dy:0,offset:new THREE.Vector3(),triggered:false};canvas.setPointerCapture(e.pointerId);
-  if(found.contact.voiceId)hooks.voice?.(found.contact.voiceId);
- }
- function updateHandles(){
-  const contacts=(profile()?.contacts||[]).filter(c=>c.kind==='ik'),editing=canvas.dataset.snowbreakFrameEdit==='true'||canvas.dataset.snowbreakPaused==='true'||document.querySelector('#snowSurfaceEdit')?.checked;
-  for(const [id,b] of handles)if(!contacts.some(c=>c.id===id)){b.remove();handles.delete(id);}
-  for(const c of contacts){const bone=root.getObjectByName(c.ikBone||c.bone);if(!bone)continue;let b=handles.get(c.id);
-   if(!b){b=document.createElement('button');b.dataset.legHandle=String(c.id);b.textContent=c.ikBone.includes('-L-')?'↕ 拖动左腿':'↕ 拖动右腿';b.style.cssText='position:fixed;pointer-events:auto;touch-action:none;border:1px solid #8fffc5;border-radius:22px;background:#203b32dd;color:white;font-size:12px;padding:9px;transform:translate(-50%,-50%);margin:0';b.addEventListener('pointerdown',e=>{if(!editing)start(e,{contact:c,bone});});handles.set(c.id,b);overlay.append(b);}
-   const r=canvas.getBoundingClientRect(),p=pos(bone).lerp(pos(bone.parent),.5).project(camera);b.hidden=!!editing;b.style.left=THREE.MathUtils.clamp(r.left+(p.x+1)*r.width/2,55,r.right-55)+'px';b.style.top=THREE.MathUtils.clamp(r.top+(1-p.y)*r.height/2,100,r.bottom-150)+'px';
-  }
- }
-
- function compare(value,limit,type){if(type?.endsWith('::Less'))return value<limit;if(type?.endsWith('::Greater'))return value>limit;return null;}
- function move(e){
-  if(active?.pointerId!==e.pointerId)return;e.stopImmediatePropagation();const s=active,r=canvas.getBoundingClientRect(),d=s.contact.drag;
-  const dx=(e.clientX-s.x)/Math.max(1,r.width)*(d.ScreenPercentToWorld?.X||0),dy=(e.clientY-s.y)/Math.max(1,r.height)*(d.ScreenPercentToWorld?.Y||0);
-  s.dx=THREE.MathUtils.clamp(dx,-(d.WorldSpaceLmitLeftUp?.X||0),d.WorldSpaceLimit?.X||0);s.dy=THREE.MathUtils.clamp(dy,-(d.WorldSpaceLmitLeftUp?.Y||0),d.WorldSpaceLimit?.Y||0);
-  const right=new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld,0),up=new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld,1);s.offset.copy(right).multiplyScalar(s.dx*.01).addScaledVector(up,-s.dy*.01);
-  for(const trigger of s.contact.thresholds||[]){
-   const results=[compare(s.dx,trigger.limit.X,trigger.xCompare),compare(s.dy,trigger.limit.Y,trigger.yCompare)].filter(v=>v!==null);
-   if(!s.triggered&&results.length&&results.every(Boolean)){s.triggered=true;lastEvent={sampleId:trigger.sampleId,dx:s.dx,dy:s.dy,source:'serialized-drag-threshold'};release();hooks.reaction?.(trigger.sampleId);break;}
-  }
- }
- function up(e){if(active?.pointerId===e.pointerId){e.stopImmediatePropagation();release();}}
- function cancel(){release(true);recover=null;restore();}
- function tick(){
-  const now=performance.now(),dt=Math.min(.05,(now-last)/1000);last=now;
-  updateHandles();
-  if(showPoints){pointLayer.replaceChildren();for(const p of points()){const el=document.createElement('span');el.textContent=p.label+(p.supportedIK?' ↕':'');el.style.cssText=`position:absolute;left:${p.x}px;top:${p.y}px;transform:translate(-50%,-50%);border:2px solid ${p.supportedIK?'#5ef0a0':'#ddd'};border-radius:20px;padding:6px;background:#222a;color:white;font-size:11px`;pointLayer.append(el);}}
-  bedCorrections=[];
-  if(recover){recover.weight=Math.max(0,1-(now-recover.releasedAt)/(1000*Math.max(.1,recover.contact.drag.DragRecoverTime||.25)));if(recover.weight===0)recover=null;}
-  const states=[];
-  for(const contact of profile()?.contacts||[]){if(contact.kind!=='ik')continue;const state=active?.contact.id===contact.id?active:recover?.contact.id===contact.id?recover:null;
-    if(state)states.push(state);else if(profile()?.id==='show_05'){const foot=root.getObjectByName(contact.ikBone);if(foot?.parent?.parent?.isBone)states.push({contact,foot,calf:foot.parent,thigh:foot.parent.parent,offset:new THREE.Vector3(),weight:0,passive:true});}
-  }
-  for(const s of states){
-  root.updateWorldMatrix(true,true);const a=pos(s.thigh),b=pos(s.calf),c=pos(s.foot),axis=c.clone().sub(a).normalize();
-  const pole=b.clone().sub(a).addScaledVector(axis,-b.clone().sub(a).dot(axis));if(pole.length()<1e-5)return;
-  const target=c.clone().addScaledVector(s.offset,s===active?1:s.weight);let correction=0,radius=.055;
-  if(profile()?.id==='show_05'&&contactSurface){const base=contactSurface(c);if(base&&base.clearance>-.2&&base.clearance<.4){radius=footRadius(s.foot,base.normal);for(let pass=0;pass<2;pass++){let push=0,normal=base.normal;for(const t of [.5,.75,1]){const probe=b.clone().lerp(target,t),surface=contactSurface(probe);if(surface){push=Math.max(push,(radius-surface.clearance)/t);normal=surface.normal;}}push=THREE.MathUtils.clamp(push,0,.6-correction);if(push<.0005)break;target.addScaledVector(normal,push);correction+=push;}}}
-  if(correction>0)bedCorrections.push({bone:s.foot.name,correction,radius});if(s.passive&&correction<.0005)continue;
-  const footWorld=s.foot.getWorldQuaternion(new THREE.Quaternion()),bases=[s.thigh,s.calf,s.foot].map(bone=>({bone,base:bone.quaternion.clone()}));
-  try{
-   // The source leg animation has non-uniform scale. Solve in each parent
-   // frame instead of applying a uniform-scale analytical arm solver.
-   const rotate=(bone,reference,limit)=>{const parent=bone.parent;parent.updateWorldMatrix(true,false);const origin=bone.position,from=parent.worldToLocal(pos(s.foot)).sub(origin),to=parent.worldToLocal(target.clone()).sub(origin);if(Math.min(from.length(),to.length())<1e-6)return;const desired=bone.quaternion.clone().premultiply(new THREE.Quaternion().setFromUnitVectors(from.normalize(),to.normalize())).normalize(),angle=reference.angleTo(desired);bone.quaternion.copy(reference).slerp(desired,Math.min(1,limit/Math.max(angle,1e-8)));root.updateWorldMatrix(true,true);};
-   if(characterId==='Fenny')legSolve=solveSeatedLeg(s.thigh,s.calf,s.foot,target);
-   else {for(let i=0;i<12;i++){rotate(s.calf,bases[1].base,Math.PI/3);rotate(s.thigh,bases[0].base,Math.PI/4);if(pos(s.foot).distanceTo(target)<.001)break;}s.foot.quaternion.copy(s.foot.parent.getWorldQuaternion(new THREE.Quaternion()).invert().multiply(footWorld));}
-   for(const state of bases)saved.push({...state,applied:state.bone.quaternion.clone()});root.updateWorldMatrix(true,true);const seen=new Set();root.traverse(m=>{if(m.isSkinnedMesh&&!seen.has(m.skeleton)){m.skeleton.update();seen.add(m.skeleton);}});}catch(error){lastPick={...lastPick,error:error.message};for(const state of bases)state.bone.quaternion.copy(state.base);cancel();}
-  }
- }
- for(const [name,fn] of [['pointerdown',down],['pointermove',move],['pointerup',up],['pointercancel',cancel]])canvas.addEventListener(name,fn);
- return {footMeshContacts:()=>Object.fromEntries((profile()?.contacts||[]).filter(c=>c.kind==='ik').map(c=>{const foot=root.getObjectByName(c.ikBone),values=foot?footPoints(foot,true).map(p=>contactSurface?.(p)?.clearance).filter(Number.isFinite):[];return [c.ikBone,{samples:values.length,minClearance:values.length?Math.min(...values):null}]})),configure:value=>hooks=value,hitTest:(x,y)=>pickContact(pick(x,y))?.contact.id,restore,tick,cancel,profile,points,togglePoints(){showPoints=!showPoints;if(!showPoints)pointLayer.replaceChildren();return points().length;},headReaction:()=>profile()?.contacts.find(c=>/hari|Head/.test(c.bone))?.thresholds?.[0]?.sampleId,snapshot:()=>({scene:profile()?.id,legSolve,bedCorrections,lastPick,active:!!active,offset:active?[active.dx,active.dy]:null,recovering:!!recover,lastEvent}),dispose(){cancel();overlay.remove();for(const [name,fn] of [['pointerdown',down],['pointermove',move],['pointerup',up],['pointercancel',cancel]])canvas.removeEventListener(name,fn);}};
+ function updateHandles(){const list=contacts(),editing=canvas.dataset.snowbreakFrameEdit==='true'||canvas.dataset.snowbreakPaused==='true'||document.querySelector('#snowSurfaceEdit')?.checked;for(const [id,b] of handles)if(!list.some(c=>c.id===id)){b.remove();handles.delete(id);}for(const c of list){const bone=root.getObjectByName(c.ikBone);if(!bone)continue;let b=handles.get(c.id);if(!b){b=document.createElement('button');b.dataset.legHandle=String(c.id);b.textContent=c.ikBone.includes('-L-')?'↕ 拖动左腿':'↕ 拖动右腿';b.style.cssText='position:fixed;pointer-events:auto;touch-action:none;border:1px solid #8fffc5;border-radius:22px;background:#203b32dd;color:white;font-size:12px;padding:9px;transform:translate(-50%,-50%);margin:0';b.addEventListener('pointerdown',e=>start(e,c));handles.set(c.id,b);overlay.append(b);}const r=canvas.getBoundingClientRect(),p=pos(bone).lerp(pos(bone.parent),.5).project(camera);b.hidden=!!editing;b.style.left=THREE.MathUtils.clamp(r.left+(p.x+1)*r.width/2,55,r.right-55)+'px';b.style.top=THREE.MathUtils.clamp(r.top+(1-p.y)*r.height/2,100,r.bottom-150)+'px';}resetButton.hidden=editing||!held.size;}
+ function tick(){const now=performance.now();for(const [id] of active)if(!canvas.hasPointerCapture(id))release(id,true);updateHandles();if(showPoints){pointLayer.replaceChildren();for(const p of points()){const el=document.createElement('span');el.textContent=p.label;el.style.cssText=`position:absolute;left:${p.x}px;top:${p.y}px;color:white;background:#222a;border-radius:14px;padding:5px`;pointLayer.append(el);}}
+  const states=new Map(held);for(const s of active.values())if(s.dragging)states.set(s.contact.ikBone,s);for(const [bone,s] of recover){s.weight=Math.max(0,1-(now-s.releasedAt)/(1000*Math.max(.15,s.contact.drag.DragRecoverTime||.35)));if(s.weight===0)recover.delete(bone);else if(!states.has(bone))states.set(bone,s);}if(free())for(const c of contacts())if(!states.has(c.ikBone)){const s=makeState(c);s.passive=true;states.set(c.ikBone,s);}
+  bedCorrections=[];solves={};for(const s of states.values()){const bones=[s.thigh,s.calf,s.foot],live=bones.map(b=>b.quaternion.clone()),weight=s.weight??(s.startedAt?THREE.MathUtils.smoothstep(Math.min(1,(now-s.startedAt)/450),0,1):1);bones.forEach((b,i)=>b.quaternion.copy(s.base[i]));root.updateWorldMatrix(true,true);const b=pos(s.calf),c=pos(s.foot),target=root.localToWorld(s.anchor.clone().add(s.offset));let correction=0,radius=.055;
+   const key=[...s.thigh.parent.matrixWorld.elements,...s.base.flatMap(q=>q.toArray()),...target.toArray(),...bones.flatMap(b=>[...b.position.toArray(),...b.scale.toArray()])],cache=solutionCache.get(s.contact.ikBone);
+   if(cache&&cache.key.length===key.length&&key.every((v,i)=>Math.abs(v-cache.key[i])<.0001)){bones.forEach((bone,i)=>{bone.quaternion.copy(live[i]).slerp(cache.quaternions[i],weight).normalize();saved.push({bone,base:live[i],applied:bone.quaternion.clone()});});legSolve={...cache.report,cached:true};solves[s.contact.ikBone]=legSolve;continue;}
+   if(free()&&contactSurface){const base=contactSurface(c);if(base&&base.clearance>-.5&&base.clearance<.5){radius=footRadius(s.foot,base.normal);for(let pass=0;pass<3;pass++){let push=0,normal=base.normal;for(const t of [.7,.85,1]){const surface=contactSurface(b.clone().lerp(target,t));if(surface){push=Math.max(push,(radius-surface.clearance)/t);normal=surface.normal;}}push=THREE.MathUtils.clamp(push,0,.65-correction);if(push<.0005)break;target.addScaledVector(normal,push);correction+=push;}}}if(correction>0)bedCorrections.push({bone:s.foot.name,correction,radius});
+   try{const options=free()?{maxOffset:.6,maxFraction:.8,hipLimits:[75,65],kneeLimit:95,hipTwist:45,iterations:36}:undefined;
+   for(let pass=0;pass<4;pass++){bones.forEach((bone,i)=>bone.quaternion.copy(s.base[i]));legSolve=solveSeatedLeg(s.thigh,s.calf,s.foot,target,options);root.updateWorldMatrix(true,true);if(!free()||!contactSurface)break;let clearance=Infinity,normal=new THREE.Vector3(0,1,0);for(const point of footPoints(s.foot)){const surface=contactSurface(point);if(surface&&surface.clearance<clearance){clearance=surface.clearance;normal=surface.normal;}}legSolve.footClearance=Number.isFinite(clearance)?clearance:null;if(clearance>=.012)break;target.addScaledVector(normal,Math.min(.2,.018-clearance));}
+   solutionCache.set(s.contact.ikBone,{key,quaternions:bones.map(b=>b.quaternion.clone()),report:{...legSolve}});solves[s.contact.ikBone]={...legSolve,target:target.toArray(),actual:pos(s.foot).toArray()};bones.forEach((bone,i)=>{const solved=bone.quaternion.clone();bone.quaternion.copy(live[i]).slerp(solved,weight).normalize();saved.push({bone,base:live[i],applied:bone.quaternion.clone()});});}catch(error){bones.forEach((bone,i)=>bone.quaternion.copy(live[i]));lastResult='腿部调整受限：'+error.message;}
+  }if(states.size){root.updateWorldMatrix(true,true);const seen=new Set();root.traverse(m=>{if(m.isSkinnedMesh&&!seen.has(m.skeleton)){m.skeleton.update();seen.add(m.skeleton);}});}}
+ const events=[['pointerdown',down],['pointermove',move],['pointerup',up],['pointercancel',lost],['lostpointercapture',lost]];for(const [name,fn] of events)canvas.addEventListener(name,fn);const blur=()=>suspend();window.addEventListener('blur',blur);
+ return {configure:value=>hooks=value,hitTest:(x,y)=>pickContact(pick(x,y))?.id,restore,tick,cancel,suspend,command,available,profile,points,togglePoints(){showPoints=!showPoints;if(!showPoints)pointLayer.replaceChildren();return points().length;},headReaction:()=>profile()?.contacts.find(c=>/hari|Head/.test(c.bone))?.thresholds?.[0]?.sampleId,legState:()=>({legs:held.size?'保持腿部姿态：'+[...held.keys()].map(n=>n.includes('-L-')?'左腿':'右腿').join('、'):recover.size?'正在恢复腿部姿态':'原作腿部姿态',lastResult,available:available()}),footMeshContacts:()=>Object.fromEntries(contacts().map(c=>{const foot=root.getObjectByName(c.ikBone),values=foot?footPoints(foot,true).map(p=>contactSurface?.(p)?.clearance).filter(Number.isFinite):[];return [c.ikBone,{samples:values.length,minClearance:values.length?Math.min(...values):null}]})),snapshot:()=>({scene:profile()?.id,legSolve,solves,bedCorrections,lastPick,active:active.size>0,offset:active.size?[active.values().next().value.dx,active.values().next().value.dy]:null,recovering:recover.size>0,held:[...held.keys()],lastEvent}),dispose(){cancel();overlay.remove();for(const [name,fn] of events)canvas.removeEventListener(name,fn);window.removeEventListener('blur',blur);}};
 }

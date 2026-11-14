@@ -32,7 +32,7 @@ struct SpeechPreferences:Codable,Equatable {
         var result:[String]=[],part=""
         for c in input {
             part.append(c)
-            if "。！？!?\n".contains(c) || part.count>=48 || part.count>=22 && "，、,；;".contains(c) {
+            if "。！？!?\n".contains(c) || part.count>=32 || part.count>=18 && "，、,；;".contains(c) {
                 if !part.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty {result.append(part)};part=""
             }
         }

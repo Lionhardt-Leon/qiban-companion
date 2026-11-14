@@ -63,6 +63,7 @@ import simd
         case .turnRight:targetBodyYaw -= 90
         case .turnBack:targetBodyYaw = 180-presentation.yaw
         case .front:targetBodyYaw = -presentation.yaw
+        case .raiseLeftLeg,.raiseRightLeg,.spreadLegs,.lowerLegs:return false
         }
         if [.raiseLeft,.raiseRight,.raiseBoth,.lower].contains(command) {bodyToken += 1;procedural.cancel(now:ProcessInfo.processInfo.systemUptime);director.cancel(now:ProcessInfo.processInfo.systemUptime)}
         lastBodyResult = "播放器已应用："+command.label;return true

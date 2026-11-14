@@ -9,7 +9,7 @@ final class AppleAccelerationTests:XCTestCase {
         try old.validate();XCTAssertEqual(old.acceleration,.automatic)
         var value=old;value.computeMode="gpu";XCTAssertEqual(try JSONDecoder().decode(SpeechPreferences.self,from:JSONEncoder().encode(value)).acceleration,.gpu)
         value.computeMode="unknown";XCTAssertThrowsError(try value.validate())
-        XCTAssertTrue(VoiceComputeMode.automatic.accelerates("bert"));XCTAssertTrue(VoiceComputeMode.neural.accelerates("sovits"));XCTAssertFalse(VoiceComputeMode.automatic.accelerates("step"));XCTAssertFalse(VoiceComputeMode.gpu.accelerates("encoder"))
+        XCTAssertFalse(VoiceComputeMode.automatic.accelerates("bert"));XCTAssertTrue(VoiceComputeMode.neural.accelerates("sovits"));XCTAssertFalse(VoiceComputeMode.automatic.accelerates("step"));XCTAssertFalse(VoiceComputeMode.gpu.accelerates("encoder"))
     }
     func testThermalPolicyKeepsANormalBudgetAndReducesPressure(){
         XCTAssertEqual(AppleHardwareBudget.frameRate(thermal:"nominal",lowPower:false),60)

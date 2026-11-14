@@ -43,7 +43,7 @@ struct SpeechSettingsView:View {
                 }
                 Section("苹果硬件加速") {
                     Picker("本机合成后端",selection:Binding(get:{draft.acceleration.rawValue},set:{draft.computeMode=$0})) {ForEach(VoiceComputeMode.allCases){Text($0.title).tag($0.rawValue)}}
-                    Text("自动分工将 BERT／声码器交给 Core ML，允许神经引擎参与；逐步生成保留 CPU。首次编译可能较慢，结果会缓存。实际执行可包含 CPU 分图，不能据此认定全程使用 NPU；不兼容时回退 CPU。切换后保存，再试听同一句比较。")
+                    Text("自动模式优先使用 CPU 并分阶段加载模型，以降低合成时的内存峰值。神经引擎／GPU 可手动选择；首次编译可能较慢，部分计算仍会回退 CPU。每段结束释放大模型，首次出声可能变慢。切换后保存，再试听同一句比较。")
                         .font(.caption).foregroundStyle(.secondary)
                     Text(speech.diagnostics).font(.caption.monospaced()).textSelection(.enabled).accessibilityIdentifier("speechComputeMetrics")
                 }

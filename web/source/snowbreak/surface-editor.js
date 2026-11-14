@@ -36,7 +36,7 @@ export function mountSurfaceEditor(display,canvas,host,{load,save,tracker,onEven
     else tracker.cancel();if(canvas.hasPointerCapture(e.pointerId))canvas.releasePointerCapture(e.pointerId);
   }
   function cancel(e){if(active?.id===e.pointerId)cancelActive();}
-  for(const [type,fn] of [['pointerdown',down],['pointermove',move],['pointerup',up],['pointercancel',cancel]])canvas.addEventListener(type,fn);
+  for(const [type,fn] of [['pointerdown',down],['pointermove',move],['pointerup',up],['pointercancel',cancel],['lostpointercapture',cancel]])canvas.addEventListener(type,fn);
   function applyReviewed(entries){
     if(!Array.isArray(entries)||entries.length>80)throw new Error('候选数量无效');cancelActive();labels.begin();let added=0;
     try{for(const entry of entries){const key=surfaceKey(entry.hit);if(!key||!entry.hit.alphaVerified||labels.has(key)||labels.state().count>=30000)continue;
@@ -46,5 +46,5 @@ export function mountSurfaceEditor(display,canvas,host,{load,save,tracker,onEven
     status.textContent=`已采用 ${added} 个经确认的视觉候选；保留所有已有标注，可整批撤销。`;return added;
   }
   sync();
-  return {applyReviewed,classify,state:labels.state,dispose(){cancelActive();disposed=true;if(scheduled)cancelAnimationFrame(scheduled);for(const [type,fn] of [['pointerdown',down],['pointermove',move],['pointerup',up],['pointercancel',cancel]])canvas.removeEventListener(type,fn);}};
+  return {applyReviewed,classify,state:labels.state,dispose(){cancelActive();disposed=true;if(scheduled)cancelAnimationFrame(scheduled);for(const [type,fn] of [['pointerdown',down],['pointermove',move],['pointerup',up],['pointercancel',cancel],['lostpointercapture',cancel]])canvas.removeEventListener(type,fn);}};
 }
