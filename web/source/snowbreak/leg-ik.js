@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 
-// Fit three joint angles, never a free 3D knee quaternion. Evaluate the actual
-// hierarchy so inherited non-uniform source scales are preserved.
+// Fit bounded hip angles and one knee hinge, never a free 3D knee quaternion.
+// Evaluate the hierarchy so inherited non-uniform source scales are preserved.
 export function solveSeatedLeg(thigh,calf,foot,requested,{maxOffset=.16,maxFraction=.2,hipLimits=[22,15],kneeLimit=30,hipTwist=0,iterations=14}={}){
  if(calf.parent!==thigh||foot.parent!==calf)throw new Error('Invalid leg chain');
  const pos=b=>b.getWorldPosition(new THREE.Vector3()),bases=[thigh,calf,foot].map(b=>b.quaternion.clone());thigh.updateWorldMatrix(true,true);

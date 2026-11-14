@@ -60,7 +60,7 @@ async function performLoad(url,id,variant,ticket){
     lighting=createLightingEditor(display,'lighting:'+(opened.selection?opened.manifest.characterId.toLowerCase()+'-'+opened.selection.mode:opened.manifest.skinId));
     let previousStatus='';
     display.setFrameHandler(()=>{
-      const now=performance.now();if(!paused){const drag=display.sceneInteractions.snapshot();adapter.tick(Math.min(100,Math.max(0,now-last)))};last=now;
+      const now=performance.now();if(!paused)adapter.tick(Math.min(100,Math.max(0,now-last)));last=now;
       if(!paused&&learned){
         const time=motionTime(learned,now),end=learned.duration,stopFade=learned.stop===undefined?1:Math.max(0,1-(now-learned.stop)/300);
         if(time>=end||stopFade===0){learned=null;}else{
