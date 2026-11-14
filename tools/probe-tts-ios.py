@@ -42,7 +42,7 @@ def main():
     old=subprocess.run([str(host/'qiban-g2p-probe'),'--bounds-regression'],capture_output=True,text=True,env=env)
     assert old.returncode!=0 and any(s in old.stderr for s in ['AddressSanitizer','runtime error:','UndefinedBehaviorSanitizer']),old.stderr[-4000:]
     print('Pinned unsafe tone bounds reproduced under sanitizers',flush=True)
-    patcher=runpy.run_path(str(native/'patch_frontend.py'));patcher['patch'](source)
+    patcher=runpy.run_path(str(native/'patch_frontend.py'));patcher['patch'](source,deps)
     run(['cmake','--build',str(host),'--config','Release','-j','3'])
     subprocess.run([str(host/'qiban-g2p-probe'),'--bounds-regression'],check=True,env=env)
     result=[]

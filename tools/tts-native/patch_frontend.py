@@ -4,15 +4,15 @@ from pathlib import Path
 REVISION = 2
 
 
-def patch(source):
+def patch(source, deps=None):
     source = Path(source)
-    def edit(relative, replacements):
-        path = source / relative
+    def edit(relative, replacements, base=source):
+        path = base / relative
         text = path.read_text(encoding='utf-8')
         if '// Qiban frontend safety revision 2' in text:
             return
-        for old, new in replacements:
-            assert text.count(old) == 1, (relative, old[:100], text.count(old))
+        for old, new, *counts in replacements:
+            assert text.count(old) == (counts[0] if counts else 1), (relative, old[:100], text.count(old))
             text = text.replace(old, new)
         path.write_text('// Qiban frontend safety revision 2\n' + text, encoding='utf-8')
 
@@ -75,8 +75,31 @@ def patch(source):
       Text::StringToU32String(norm_text).size() != word2ph.size())
     throw std::runtime_error("Mandarin output alignment is invalid");'''),
     ])
+    if deps is not None:
+        # SRELL constructs references into empty arrays solely to copy zero
+        # bytes. Keep those empty operations from forming invalid references.
+        replacements = [
+            ('void join(const range_pair &right)\n\t{', 'void join(const range_pair &right)\n\t{\n\t\tif (!this->size()) { this->push_back(right); return; }'),
+            ('std::memset(&char_class_pos_el_[0], 0, char_class_pos_el_.size() * sizeof (range_pairs::array_type::value_type));', 'if (char_class_pos_el_.size()) std::memset(&char_class_pos_el_[0], 0, char_class_pos_el_.size() * sizeof (range_pairs::array_type::value_type));'),
+        ]
+        for statement, count in [
+            ('std::memcpy(static_cast<void *>(buffer_), right.buffer_, right.size_ * sizeof (ElemT));', 'right.size_'),
+            ('std::memcpy(buffer_, v.data_, v.size_ * sizeof (ElemT));', 'v.size_'),
+            ('std::memcpy(buffer_, p, len * sizeof (ElemT));', 'len'),
+            ('std::memcpy(buffer_ + size_ - size, p, size * sizeof (value_type));', 'size'),
+            ('std::memcpy(buffer_ + oldsize, right.buffer_, rightsize * sizeof (ElemT));', 'rightsize'),
+            ('std::memcpy(buffer_ + oldsize, right.buffer_ + pos, len * sizeof (ElemT));', 'len'),
+            ('std::memcpy(buffer_ + pos, right.buffer_, right.size_ * sizeof (ElemT));', 'right.size_'),
+            ('std::memcpy(buffer_ + destpos, right.buffer_ + srcpos, srclen * sizeof (ElemT));', 'srclen'),
+            ('std::memcpy(buffer_, right.buffer_, size_in_byte_);', 'size_in_byte_'),
+        ]:
+            # The last statement exists in two small-buffer copy operators.
+            if count == 'size_in_byte_':
+                continue
+            replacements.append((statement, 'if (' + count + ') ' + statement, 2 if statement == 'std::memcpy(buffer_ + pos, right.buffer_, right.size_ * sizeof (ElemT));' else 1))
+        edit('srell.hpp', replacements, Path(deps) / 'SRELL')
 
 
 if __name__ == '__main__':
     import sys
-    patch(sys.argv[1])
+    patch(sys.argv[1], sys.argv[2] if len(sys.argv)>2 else None)
