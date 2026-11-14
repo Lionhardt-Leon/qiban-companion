@@ -1,6 +1,6 @@
 """Fetch the verified code-only iOS SDK, or rebuild it from pinned public source."""
 from pathlib import Path
-import hashlib,io,os,shutil,subprocess,sys,tempfile,urllib.request,urllib.error,urllib.parse,zipfile
+import hashlib,io,json,os,shutil,subprocess,sys,tempfile,urllib.request,urllib.error,urllib.parse,zipfile,uuid
 
 root=Path(__file__).resolve().parents[1];generated=root/'ios/Generated';target=generated/'QibanG2P.xcframework'
 def notices():
@@ -11,7 +11,12 @@ def notices():
             parts.append('\nMicrosoft ONNX Runtime 1.24.2 / '+name+'\n'+response.read().decode('utf-8'))
     (generated/'SPEECH-LICENSES.txt').write_text('\n\n'.join(parts),encoding='utf-8')
 if target.exists():
-    notices();print('Using existing QibanG2P SDK');raise SystemExit(0)
+    metadata=target/'BUILD-INFO.json'
+    if metadata.exists() and json.loads(metadata.read_text(encoding='utf-8')).get('safetyRevision')==2:
+        notices();print('Using verified safety-revision-2 QibanG2P SDK');raise SystemExit(0)
+    stale=generated/('QibanG2P-obsolete-'+uuid.uuid4().hex+'.xcframework')
+    assert target.resolve().parent==generated.resolve() and stale.resolve().parent==generated.resolve()
+    target.rename(stale)
 generated.mkdir(exist_ok=True,parents=True)
 class SafeRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self,req,fp,code,msg,headers,newurl):
@@ -30,7 +35,8 @@ try:
             destination=(generated/item.filename).resolve();assert generated.resolve() in destination.parents
             if item.is_dir():destination.mkdir(exist_ok=True,parents=True)
             else:destination.parent.mkdir(exist_ok=True,parents=True);destination.write_bytes(archive.read(item))
-    assert (target/'Info.plist').exists();print('Verified QibanG2P SDK downloaded; no speaker models included')
+    assert (target/'Info.plist').exists() and json.loads((target/'BUILD-INFO.json').read_text(encoding='utf-8'))['safetyRevision']==2
+    print('Verified safety-revision-2 QibanG2P SDK downloaded; no speaker models included')
 except (urllib.error.URLError,AssertionError,zipfile.BadZipFile):
     # A fork or local checkout cannot read the author's draft release.
     # Building from the same pinned public code requires no account or voice data.

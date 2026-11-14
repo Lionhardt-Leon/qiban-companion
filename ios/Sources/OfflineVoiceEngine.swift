@@ -69,6 +69,7 @@ final class VoiceWordPiece {
 
 // One instance lives on the synthesis queue. The UI never runs neural inference.
 final class OfflineVoiceEngine {
+    static var frontendSafetyRevision:Int {Int(qiban_g2p_safety_revision())}
     let voice:VoiceManifest.Voice
     let computeMode:VoiceComputeMode
     private(set) var diagnostics=""
@@ -81,7 +82,7 @@ final class OfflineVoiceEngine {
     private let prompt:ORTValue,spectrogram:ORTValue
     private let vocabularySize=732
     init(root:URL,voice:VoiceManifest.Voice,computeMode:VoiceComputeMode = .automatic) throws {
-        guard qiban_g2p_safety_revision() >= 2 else {throw CompanionError.message("本机文字前端版本过旧，请更新 App。语音包可以保留。")}
+        guard Self.frontendSafetyRevision >= 2 else {throw CompanionError.message("本机文字前端版本过旧，请更新 App。语音包可以保留。")}
         self.voice=voice;self.computeMode=computeMode
         let path=root.appendingPathComponent(voice.directory);modelRoot=path
         guard (try path.appendingPathComponent("conditioning.json").resourceValues(forKeys:[.fileSizeKey]).fileSize ?? Int.max)<=128*1024 else{throw CompanionError.message("语音参考索引过大。")};let data=try Data(contentsOf:path.appendingPathComponent("conditioning.json"));guard data.count<=128*1024 else {throw CompanionError.message("语音参考索引过大。")}

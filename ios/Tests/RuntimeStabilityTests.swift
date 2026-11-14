@@ -3,6 +3,9 @@ import OnnxRuntimeBindings
 @testable import QibanCompanion
 
 final class RuntimeStabilityTests:XCTestCase {
+    func testLinkedFrontendContainsNativeMemorySafetyFixes() {
+        XCTAssertGreaterThanOrEqual(OfflineVoiceEngine.frontendSafetyRevision,2)
+    }
     func testAcceptedLegSemanticsRespectCapabilitiesAndRefusal()throws {
         let actions=["raise_left_leg","raise_right_leg","spread_legs","lower_legs"]
         for (phrase,id) in [("把左腿抬起来","raise_left_leg"),("抬起右腿","raise_right_leg"),("分开双腿","spread_legs"),("放下腿","lower_legs")] {

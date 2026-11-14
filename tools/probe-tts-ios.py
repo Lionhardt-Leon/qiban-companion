@@ -47,7 +47,8 @@ def main():
     subprocess.run([str(host/'qiban-g2p-probe'),'--bounds-regression'],check=True,env=env)
     result=[]
     for lang,text in [('zh','下午好，我在这里陪着你。'),('ja','こんにちは。今日は何を話しましょうか。')]:
-        process=subprocess.run([str(host/'qiban-g2p-probe'),str(source/'res'),str(config),lang,text],check=True,capture_output=True,text=True,env=env)
+        process=subprocess.run([str(host/'qiban-g2p-probe'),str(source/'res'),str(config),lang,text],capture_output=True,text=True,env=env)
+        assert process.returncode==0,(lang,process.stdout[-1500:],process.stderr[-6500:])
         parsed=json.loads(process.stdout.strip().splitlines()[-1]);assert 'error' not in parsed and len(parsed['ids'])>5
         assert all(0<=x<len(symbols) for x in parsed['ids']);result.append({'language':lang,**parsed})
     corpus=[('zh',text) for text in ['下午好，我在这里陪着你。','你好，小姑娘。','这位好姑娘很温柔。','嗯，嗯嗯，好的呀。','慢慢来，别着急。','你想我了吗？','奶奶和姥姥聊了一会儿。','一个人也可以好好生活。','麻烦你照顾一下孩子。','你累不累呀？','我们一起看看风景吧。','喝点水，早点休息。','请把右手抬起来。','今天是星期六，心情很好。']]+[('ja',t) for t in ['こんにちは。今日は何を話しましょうか。','おかえりなさい。','ゆっくり休んでください。']]
