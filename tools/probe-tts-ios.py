@@ -36,12 +36,32 @@ def main():
     symbols=runpy.run_path(str(symbol_file))['symbols'];config=work/'config.json';config.write_text(json.dumps({'symbol_to_id':dict(zip(symbols,range(len(symbols))))}),encoding='utf-8')
     native=Path(__file__).resolve().parent/'tts-native';common=['-DCMAKE_BUILD_TYPE=Release','-DCMAKE_POLICY_VERSION_MINIMUM=3.5','-DGSV='+str(source),'-DDEPS='+str(deps),'-DBOOST_HEADERS='+str(boost)]
     def run(cmd):print('Run:',cmd,flush=True);subprocess.run(cmd,check=True)
-    host=work/'host';run(['cmake','-S',str(native),'-B',str(host),*common]);run(['cmake','--build',str(host),'--config','Release','-j','3'])
+    host=work/'host';sanitize='-fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=all'
+    run(['cmake','-S',str(native),'-B',str(host),*common,'-DCMAKE_CXX_FLAGS='+sanitize,'-DCMAKE_C_FLAGS='+sanitize,'-DCMAKE_EXE_LINKER_FLAGS=-fsanitize=address,undefined']);run(['cmake','--build',str(host),'--config','Release','-j','3'])
+    env={**os.environ,'ASAN_OPTIONS':'detect_leaks=0:detect_stack_use_after_return=1','UBSAN_OPTIONS':'halt_on_error=1'}
+    old=subprocess.run([str(host/'qiban-g2p-probe'),'--bounds-regression'],capture_output=True,text=True,env=env)
+    assert old.returncode!=0 and any(s in old.stderr for s in ['AddressSanitizer','runtime error:','UndefinedBehaviorSanitizer']),old.stderr[-4000:]
+    print('Pinned unsafe tone bounds reproduced under sanitizers',flush=True)
+    patcher=runpy.run_path(str(native/'patch_frontend.py'));patcher['patch'](source)
+    run(['cmake','--build',str(host),'--config','Release','-j','3'])
+    subprocess.run([str(host/'qiban-g2p-probe'),'--bounds-regression'],check=True,env=env)
     result=[]
     for lang,text in [('zh','下午好，我在这里陪着你。'),('ja','こんにちは。今日は何を話しましょうか。')]:
-        process=subprocess.run([str(host/'qiban-g2p-probe'),str(source/'res'),str(config),lang,text],check=True,capture_output=True,text=True)
+        process=subprocess.run([str(host/'qiban-g2p-probe'),str(source/'res'),str(config),lang,text],check=True,capture_output=True,text=True,env=env)
         parsed=json.loads(process.stdout.strip().splitlines()[-1]);assert 'error' not in parsed and len(parsed['ids'])>5
         assert all(0<=x<len(symbols) for x in parsed['ids']);result.append({'language':lang,**parsed})
+    corpus=[('zh',text) for text in ['下午好，我在这里陪着你。','你好，小姑娘。','这位好姑娘很温柔。','嗯，嗯嗯，好的呀。','慢慢来，别着急。','你想我了吗？','奶奶和姥姥聊了一会儿。','一个人也可以好好生活。','麻烦你照顾一下孩子。','你累不累呀？','我们一起看看风景吧。','喝点水，早点休息。','请把右手抬起来。','今天是星期六，心情很好。']]+[('ja',t) for t in ['こんにちは。今日は何を話しましょうか。','おかえりなさい。','ゆっくり休んでください。']]
+    rows=corpus*100
+    process=subprocess.run([str(host/'qiban-g2p-probe'),str(source/'res'),str(config),'--stress'],input=''.join(lang+'\t'+text+'\n' for lang,text in rows),capture_output=True,text=True,env=env)
+    assert process.returncode==0,process.stderr[-5000:]
+    parsed=[json.loads(s[7:]) for s in process.stdout.splitlines() if s.startswith('RESULT ')]
+    assert len(parsed)==len(rows),(len(parsed),len(rows))
+    for i,r in enumerate(parsed):
+        assert 'error' not in r,(rows[i],r)
+        assert r['ids'] and len(r['ids'])==len(r['phones']) and all(0<=p<len(symbols) for p in r['ids'])
+        if i>=len(corpus):assert r==parsed[i%len(corpus)],('Unstable repeated phonemes',rows[i])
+    stress={'calls':len(rows),'uniqueSentences':len(corpus),'orderedZHAndJA':True,'repeatDeterministic':True,'addressSanitizer':True,'undefinedBehaviorSanitizer':True,'exitCode':process.returncode,'unsafeBoundsReproduced':True}
+    print('Sanitized native stress passed: '+json.dumps(stress),flush=True)
     libraries=[]
     for name,sdk in [('device','iphoneos'),('simulator','iphonesimulator')]:
         build=work/name
@@ -58,7 +78,9 @@ def main():
             p=directory/name
             if p.is_file():notices.append('=== '+directory.name+'/'+name+' ===\n'+p.read_text(encoding='utf-8',errors='replace'))
     (output/'QibanG2P.xcframework/THIRD-PARTY-NOTICES.txt').write_text('\n\n'.join(notices),encoding='utf-8')
-    (output/'portability.json').write_text(json.dumps({'source':GSV,'dependencies':DEPS,'nativeTextTests':result,'iOSDevice':'arm64 compiled','iOSSimulator':'arm64 compiled','iPhoneAudioSynthesisVerified':False},ensure_ascii=False,indent=2),encoding='utf-8')
+    metadata={'source':GSV,'safetyRevision':2,'dependencies':DEPS,'nativeTextTests':result,'nativeStressTests':stress,'iOSDevice':'arm64 compiled','iOSSimulator':'arm64 compiled','iPhoneAudioSynthesisVerified':False}
+    (output/'portability.json').write_text(json.dumps(metadata,ensure_ascii=False,indent=2),encoding='utf-8')
+    (output/'QibanG2P.xcframework/BUILD-INFO.json').write_text(json.dumps({'source':GSV,'safetyRevision':2}),encoding='utf-8')
     shutil.make_archive(str(output/'QibanG2P-xcframework'),'zip',output,'QibanG2P.xcframework')
 
 if __name__=='__main__':main()

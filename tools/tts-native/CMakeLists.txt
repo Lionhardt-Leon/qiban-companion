@@ -24,5 +24,6 @@ target_include_directories(QibanG2P PUBLIC ${CMAKE_CURRENT_SOURCE_DIR} PRIVATE
 target_link_libraries(QibanG2P PRIVATE cpp-pinyin openjtalk hts_engine_API)
 if(NOT CMAKE_SYSTEM_NAME STREQUAL "iOS")
  add_executable(qiban-g2p-probe probe.cpp)
+ target_include_directories(qiban-g2p-probe PRIVATE ${GSV}/include)
  target_link_libraries(qiban-g2p-probe PRIVATE QibanG2P)
 endif()

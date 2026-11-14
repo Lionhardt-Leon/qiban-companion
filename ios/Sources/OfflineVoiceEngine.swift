@@ -81,6 +81,7 @@ final class OfflineVoiceEngine {
     private let prompt:ORTValue,spectrogram:ORTValue
     private let vocabularySize=732
     init(root:URL,voice:VoiceManifest.Voice,computeMode:VoiceComputeMode = .automatic) throws {
+        guard qiban_g2p_safety_revision() >= 2 else {throw CompanionError.message("本机文字前端版本过旧，请更新 App。语音包可以保留。")}
         self.voice=voice;self.computeMode=computeMode
         let path=root.appendingPathComponent(voice.directory);modelRoot=path
         guard (try path.appendingPathComponent("conditioning.json").resourceValues(forKeys:[.fileSizeKey]).fileSize ?? Int.max)<=128*1024 else{throw CompanionError.message("语音参考索引过大。")};let data=try Data(contentsOf:path.appendingPathComponent("conditioning.json"));guard data.count<=128*1024 else {throw CompanionError.message("语音参考索引过大。")}
@@ -124,10 +125,12 @@ final class OfflineVoiceEngine {
         try session.run(inputs,outputs)
     }
     private func phones(_ text:String,cancellation:SpeechCancellation) throws -> (ids:[Int64],features:[Float]) {
+        try cancellation.check();VoiceBreadcrumb.record(voice:voice.id,stage:"g2p-text",state:"running")
         let data=try text.withCString {textPointer in try voice.language.withCString {languagePointer -> Data in
             guard let result=qiban_g2p_process(textPointer,languagePointer) else {throw CompanionError.message("文字转音素失败。")};defer{qiban_g2p_free(result)};return Data(String(cString:result).utf8)
         }}
         let parsed=try JSONDecoder().decode(VoicePhones.self,from:data)
+        try cancellation.check()
         guard parsed.error==nil,let ids=parsed.ids,!ids.isEmpty,ids.count<=400,ids.allSatisfy({$0>=0 && $0<Int64(vocabularySize)}),let normalized=parsed.text else {throw CompanionError.message("这句台词无法转换为有效音素，请缩短后重试。")}
         guard voice.language=="zh",let tokenizer=tokenizer else {return(ids,Array(repeating:0,count:1024*ids.count))}
         let encoded=tokenizer.encode(normalized),count=encoded.ids.count
