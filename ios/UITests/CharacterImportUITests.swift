@@ -57,9 +57,9 @@ final class CharacterImportUITests: XCTestCase {
         // Fixture head + local forehead offset projected through the orthographic stage camera.
         let surface = app.otherElements["companionScene"]
         surface.coordinate(withNormalizedOffset:CGVector(dx:0.5,dy:0.285)).tap()
-        let touchStatus = app.staticTexts["characterTouchStatus"]
-        XCTAssertTrue(touchStatus.waitForExistence(timeout:3))
-        XCTAssertTrue(touchStatus.label.contains("额头"),touchStatus.label)
+        // Match identifier and content in one snapshot: this receipt expires after 3s.
+        let touchStatus = app.staticTexts.matching(NSPredicate(format:"identifier == %@ AND label CONTAINS %@","characterTouchStatus","额头")).firstMatch
+        XCTAssertTrue(touchStatus.waitForExistence(timeout:5))
         XCTAssertTrue(app.buttons["latestCompanionReply"].waitForExistence(timeout:5))
         XCTAssertTrue(active.waitForExistence(timeout:5))
         active.tap()
