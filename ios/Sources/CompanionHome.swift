@@ -342,7 +342,7 @@ struct CompanionHome: View {
             }
             if let reply = store.archive.messages.last, reply.role == "assistant" {
                 Button { sheet = .history } label: {
-                    Text(reply.content).font(.system(size: 16)).lineLimit(5)
+                    Text(reply.displayContent).font(.system(size: 16)).lineLimit(5)
                         .foregroundStyle(.white).padding(14)
                         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18))
                 }.accessibilityIdentifier("latestCompanionReply").padding(.horizontal, 24)

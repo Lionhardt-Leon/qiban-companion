@@ -12,8 +12,8 @@ def notices():
     (generated/'SPEECH-LICENSES.txt').write_text('\n\n'.join(parts),encoding='utf-8')
 if target.exists():
     metadata=target/'BUILD-INFO.json'
-    if metadata.exists() and json.loads(metadata.read_text(encoding='utf-8')).get('safetyRevision')==2:
-        notices();print('Using verified safety-revision-2 QibanG2P SDK');raise SystemExit(0)
+    if metadata.exists() and json.loads(metadata.read_text(encoding='utf-8')).get('safetyRevision')==3:
+        notices();print('Using verified safety-revision-3 QibanG2P SDK');raise SystemExit(0)
     stale=generated/('QibanG2P-obsolete-'+uuid.uuid4().hex+'.xcframework')
     assert target.resolve().parent==generated.resolve() and stale.resolve().parent==generated.resolve()
     target.rename(stale)
@@ -26,20 +26,20 @@ class SafeRedirect(urllib.request.HTTPRedirectHandler):
 try:
     token=os.environ.get('GH_TOKEN','');headers={'Accept':'application/octet-stream','User-Agent':'Qiban-native-speech-build'}
     if token:headers['Authorization']='Bearer '+token
-    request=urllib.request.Request('https://api.github.com/repos/Lionhardt-Leon/qiban-companion/releases/assets/746478333',headers=headers)
+    request=urllib.request.Request('https://api.github.com/repos/Lionhardt-Leon/qiban-companion/releases/assets/747179675',headers=headers)
     with urllib.request.build_opener(SafeRedirect).open(request,timeout=60) as response:raw=response.read(20*1024*1024+1)
-    assert len(raw)<=20*1024*1024 and hashlib.sha256(raw).hexdigest()=='30486c17775a03967c2290a736eadf7b541b2048110d3e75badf21f242a5911a'
+    assert len(raw)<=20*1024*1024 and hashlib.sha256(raw).hexdigest()=='b53d31eb2853b9c40b8f0fcdea70514a00d396f19be4ddf38be8820dd9a26d1c'
     with zipfile.ZipFile(io.BytesIO(raw)) as archive:
         assert archive.testzip() is None and sum(x.file_size for x in archive.infolist())<100*1024*1024
         assert 'QibanG2P.xcframework/BUILD-INFO.json' in archive.namelist()
         metadata=json.loads(archive.read('QibanG2P.xcframework/BUILD-INFO.json'))
-        assert metadata.get('safetyRevision')==2 and metadata.get('source')=='384a2f995c48ef1903373ac8814569a8925779ba'
+        assert metadata.get('safetyRevision')==3 and metadata.get('source')=='384a2f995c48ef1903373ac8814569a8925779ba'
         for item in archive.infolist():
             destination=(generated/item.filename).resolve();assert generated.resolve() in destination.parents
             if item.is_dir():destination.mkdir(exist_ok=True,parents=True)
             else:destination.parent.mkdir(exist_ok=True,parents=True);destination.write_bytes(archive.read(item))
-    assert (target/'Info.plist').exists() and json.loads((target/'BUILD-INFO.json').read_text(encoding='utf-8'))['safetyRevision']==2
-    print('Verified safety-revision-2 QibanG2P SDK downloaded; no speaker models included')
+    assert (target/'Info.plist').exists() and json.loads((target/'BUILD-INFO.json').read_text(encoding='utf-8'))['safetyRevision']==3
+    print('Verified safety-revision-3 QibanG2P SDK downloaded; no speaker models included')
 except (urllib.error.URLError,AssertionError,zipfile.BadZipFile):
     # A fork or local checkout cannot read the author's draft release.
     # Building from the same pinned public code requires no account or voice data.

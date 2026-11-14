@@ -100,11 +100,6 @@ def patch(source, deps=None):
         edit('srell.hpp', replacements, Path(deps) / 'SRELL')
 
 
-if __name__ == '__main__':
-    import sys
-    patch(sys.argv[1], sys.argv[2] if len(sys.argv)>2 else None)
-
-
 def patch_package_text(source):
     """Windows-exported dictionaries must produce the same phonemes as LF."""
     source = Path(source)
@@ -118,3 +113,9 @@ def patch_package_text(source):
         if '// Qiban package text revision 3' in text:continue
         assert text.count(old)==1,(relative,text.count(old))
         path.write_text('// Qiban package text revision 3\n'+text.replace(old,new),encoding='utf-8')
+
+
+if __name__ == '__main__':
+    import sys
+    patch(sys.argv[1], sys.argv[2] if len(sys.argv)>2 else None)
+    patch_package_text(sys.argv[1])

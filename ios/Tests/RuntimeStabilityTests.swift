@@ -4,7 +4,7 @@ import OnnxRuntimeBindings
 
 final class RuntimeStabilityTests:XCTestCase {
     func testLinkedFrontendContainsNativeMemorySafetyFixes() {
-        XCTAssertGreaterThanOrEqual(OfflineVoiceEngine.frontendSafetyRevision,2)
+        XCTAssertGreaterThanOrEqual(OfflineVoiceEngine.frontendSafetyRevision,3)
     }
     func testAcceptedLegSemanticsRespectCapabilitiesAndRefusal()throws {
         let actions=["raise_left_leg","raise_right_leg","spread_legs","lower_legs"]

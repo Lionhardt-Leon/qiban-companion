@@ -115,8 +115,8 @@ struct ConversationView: View {
                             ForEach(store.archive.messages) { message in
                                 VStack(alignment: .leading, spacing: 5) {
                                     Text(message.role == "user" ? "你" : "伴侣").font(.caption).foregroundStyle(.secondary)
-                                    Text(message.content).textSelection(.enabled)
-                                    if let japanese=message.spokenJapanese {
+                                    Text(message.displayContent).textSelection(.enabled)
+                                    if let japanese=message.resolvedSpokenJapanese {
                                         Text(japanese).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
                                     }
                                     if message.role=="assistant" {

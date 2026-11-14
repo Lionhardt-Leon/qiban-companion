@@ -50,6 +50,80 @@ final class CompanionBehaviorTests:XCTestCase {
         let result=try await APIClient.reply(settings:settings,key:"",history:[Message(role:"user",content:"亲吻")],memories:"",actions:["snowbreak_home_kiss"],session:session)
         XCTAssertEqual(calls,1);XCTAssertNil(result.action)
     }
+
+    func testMissingJapaneseGetsOneTranslationAndKeepsAcceptedBodyDecision() async throws {
+        let config=URLSessionConfiguration.ephemeral;config.protocolClasses=[BehaviorURLProtocol.self];let session=URLSession(configuration:config);defer{session.invalidateAndCancel();BehaviorURLProtocol.handler=nil}
+        var calls=0;BehaviorURLProtocol.handler={request in
+            calls+=1
+            let body=try XCTUnwrap(JSONSerialization.jsonObject(with:request.httpBody!) as? [String:Any])
+            let turns=try XCTUnwrap(body["messages"] as? [[String:Any]])
+            if calls==1 {XCTAssertEqual(body["max_tokens"] as? Int,3072)}
+            if calls==2 {
+                XCTAssertEqual(turns.count,2);XCTAssertEqual(body["max_tokens"] as? Int,2048)
+                XCTAssertEqual(request.timeoutInterval,15);XCTAssertFalse(String(describing:turns).contains("older-private-turn"))
+                XCTAssertTrue((turns[0]["content"] as? String)?.contains("speech_ja") == true)
+            }
+            let reply=calls==1 ? #"{"reply":"好，我抬起右手。","decision":"accept","action":"raise_right_hand"}"# : #"{"reply":"补全已生成","speech_ja":"いいわ、右手を上げるわね。","decision":"accept","action":"stop"}"#
+            return try JSONSerialization.data(withJSONObject:["choices":[["message":["content":reply]]]])
+        }
+        var settings=APISettings();settings.endpoint="https://example.invalid";settings.model="test"
+        var context=CompanionContext();context.speechLanguage="ja";settings.runtimeContext=context
+        let result=try await APIClient.reply(settings:settings,key:"",history:[Message(role:"assistant",content:"older-private-turn"),Message(role:"user",content:"抬起右手")],memories:"",actions:["raise_right_hand"],session:session)
+        XCTAssertEqual(calls,2);XCTAssertEqual(result.text,"好，我抬起右手。");XCTAssertEqual(result.action,"raise_right_hand")
+        XCTAssertEqual(result.spokenJapanese,"いいわ、右手を上げるわね。");XCTAssertTrue(result.hasBodyDecision)
+    }
+
+    func testJapaneseSupplementCannotOverrideRefusalOrRequestAgain() async throws {
+        let config=URLSessionConfiguration.ephemeral;config.protocolClasses=[BehaviorURLProtocol.self];let session=URLSession(configuration:config);defer{session.invalidateAndCancel();BehaviorURLProtocol.handler=nil}
+        var calls=0;BehaviorURLProtocol.handler={_ in
+            calls+=1
+            let reply=calls==1 ? #"{"reply":"我现在不想。","decision":"refuse","action":"none"}"# : #"{"reply":"补全已生成","speech_ja":"今はしたくないの。","decision":"accept","action":"hello"}"#
+            return try JSONSerialization.data(withJSONObject:["choices":[["message":["content":reply]]]])
+        }
+        var settings=APISettings();settings.endpoint="https://example.invalid";settings.model="test"
+        var context=CompanionContext();context.speechLanguage="ja";settings.runtimeContext=context
+        let result=try await APIClient.reply(settings:settings,key:"",history:[Message(role:"user",content:"挥手")],memories:"",actions:["hello"],session:session)
+        XCTAssertEqual(calls,2);XCTAssertEqual(result.text,"我现在不想。");XCTAssertNil(result.action)
+        XCTAssertEqual(result.spokenJapanese,"今はしたくないの。");XCTAssertTrue(result.hasBodyDecision)
+    }
+
+    func testPlainJapaneseModeReplyRepairsSpeechAndBodyTogether() async throws {
+        let config=URLSessionConfiguration.ephemeral;config.protocolClasses=[BehaviorURLProtocol.self];let session=URLSession(configuration:config);defer{session.invalidateAndCancel();BehaviorURLProtocol.handler=nil}
+        var calls=0;BehaviorURLProtocol.handler={_ in
+            calls+=1
+            let reply=calls==1 ? "（有点害羞）别逗我呀。" : #"{"reply":"补全已生成","speech_ja":"からかわないで。","decision":"accept","intent":"shy"}"#
+            return try JSONSerialization.data(withJSONObject:["choices":[["message":["content":reply]]]])
+        }
+        var settings=APISettings();settings.endpoint="https://example.invalid";settings.model="test"
+        var context=CompanionContext();context.speechLanguage="ja";settings.runtimeContext=context
+        let result=try await APIClient.reply(settings:settings,key:"",history:[Message(role:"user",content:"你好")],memories:"",actions:["gesture_shy"],session:session)
+        XCTAssertEqual(calls,2);XCTAssertEqual(result.text,"（有点害羞）别逗我呀。");XCTAssertEqual(result.action,"gesture_shy")
+        XCTAssertEqual(result.spokenJapanese,"からかわないで。")
+    }
+
+    func testMissingJapaneseWithoutBodyActionsStillRepairsAndFailureKeepsText() async throws {
+        let config=URLSessionConfiguration.ephemeral;config.protocolClasses=[BehaviorURLProtocol.self];let session=URLSession(configuration:config);defer{session.invalidateAndCancel();BehaviorURLProtocol.handler=nil}
+        var calls=0;BehaviorURLProtocol.handler={_ in
+            calls+=1
+            if calls==2 {throw URLError(.timedOut)}
+            return try JSONSerialization.data(withJSONObject:["choices":[["message":["content":"欢迎回来。"]]]])
+        }
+        var settings=APISettings();settings.endpoint="https://example.invalid";settings.model="test"
+        var context=CompanionContext();context.speechLanguage="ja";settings.runtimeContext=context
+        let result=try await APIClient.reply(settings:settings,key:"",history:[Message(role:"user",content:"你好")],memories:"",actions:[],session:session)
+        XCTAssertEqual(calls,2);XCTAssertEqual(result.text,"欢迎回来。");XCTAssertNil(result.action);XCTAssertNil(result.spokenJapanese)
+    }
+
+    func testCompleteOrNarrationOnlyJapaneseReplyDoesNotTranslateAgain() async throws {
+        let config=URLSessionConfiguration.ephemeral;config.protocolClasses=[BehaviorURLProtocol.self];let session=URLSession(configuration:config);defer{session.invalidateAndCancel();BehaviorURLProtocol.handler=nil}
+        for reply in [#"{"reply":"欢迎。","speech_ja":"おかえり。","decision":"none","action":"none"}"#,#"{"reply":"（轻轻点头）……","decision":"none","action":"none"}"#] {
+            var calls=0;BehaviorURLProtocol.handler={_ in calls+=1;return try JSONSerialization.data(withJSONObject:["choices":[["message":["content":reply]]]])}
+            var settings=APISettings();settings.endpoint="https://example.invalid";settings.model="test"
+            var context=CompanionContext();context.speechLanguage="ja";settings.runtimeContext=context
+            _=try await APIClient.reply(settings:settings,key:"",history:[Message(role:"user",content:"你好")],memories:"",actions:["hello"],session:session)
+            XCTAssertEqual(calls,1)
+        }
+    }
 }
 private final class BehaviorURLProtocol:URLProtocol {
     static var handler:((URLRequest)throws->Data)?

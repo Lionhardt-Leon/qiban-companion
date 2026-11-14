@@ -18,6 +18,18 @@ struct Message: Codable, Identifiable {
     var content: String
     var spokenJapanese:String? = nil
     var createdAt = Date()
+
+    // Recover older messages saved before prose + JSON replies were decoded.
+    // This is presentation only and never dispatches the recovered action.
+    private var recoveredReply:DialogueReply? {
+        guard role=="assistant",content.contains("\"reply\"") else{return nil}
+        return try? DialogueMotion.parse(content,actions:[])
+    }
+    var displayContent:String {recoveredReply?.text ?? content}
+    var resolvedSpokenJapanese:String? {
+        if let value=spokenJapanese,!value.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty {return value}
+        return recoveredReply?.spokenJapanese
+    }
 }
 
 struct JournalEntry: Codable, Identifiable {

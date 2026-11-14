@@ -50,6 +50,33 @@ final class SpeechTests:XCTestCase {
         let parts=SpeechPreferences.sentences(String(repeating:"好",count:150))
         XCTAssertEqual(parts.joined(),String(repeating:"好",count:150));XCTAssertTrue(parts.allSatisfy{$0.count<=48})
     }
+    func testNestedNarrationAndPunctuationNeverBecomeEmptyPhonemeRequests() throws {
+        XCTAssertEqual(SpeechPreferences.clean("（她想（别着急），轻轻挥手）**你好。** (smiles (softly))"),"你好。")
+        XCTAssertEqual(SpeechPreferences.clean("（她笑了一下）……！？"),"")
+        XCTAssertEqual(SpeechPreferences.sentences("……！？\n你好。\n！！"),["你好。"])
+        XCTAssertTrue(SpeechPreferences.sentences("……"+String(repeating:"。",count:70)).isEmpty)
+        XCTAssertEqual(SpeechPreferences.clean("ふふ……おかえり。"),"ふふ……おかえり。")
+        var preferences=SpeechPreferences();preferences.language="ja"
+        XCTAssertEqual(try preferences.text(for:Message(role:"assistant",content:"（轻轻点头）……")),"")
+    }
+
+    func testLegacyBilingualEnvelopeCanBeDisplayedAndReadWithoutEditingArchive() throws {
+        let json = #"{"reply":"欢迎回来。","speech_ja":"おかえりなさい。","decision":"accept","action":"hello"}"#
+        let content="欢迎回来。\n\n"+json
+        let message=Message(role:"assistant",content:content)
+        var preferences=SpeechPreferences();preferences.language="ja"
+        XCTAssertEqual(message.displayContent,"欢迎回来。");XCTAssertEqual(try preferences.text(for:message),"おかえりなさい。")
+        preferences.language="zh";XCTAssertEqual(try preferences.text(for:message),"欢迎回来。")
+        XCTAssertEqual(message.content,content)
+        XCTAssertEqual(Message(role:"user",content:content).displayContent,content)
+        var settings=APISettings();settings.endpoint="https://example.invalid";settings.model="fixture"
+        let request=try APIClient.makeRequest(settings:settings,key:"",history:[message,Message(role:"user",content:"你好")],memories:"",actions:[])
+        let body=try XCTUnwrap(JSONSerialization.jsonObject(with:request.httpBody!) as? [String:Any])
+        let turns=try XCTUnwrap(body["messages"] as? [[String:String]])
+        XCTAssertEqual(turns[1]["content"],"欢迎回来。")
+        let restored=try JSONDecoder().decode(Message.self,from:JSONEncoder().encode(message))
+        XCTAssertEqual(restored.content,content);XCTAssertEqual(restored.resolvedSpokenJapanese,"おかえりなさい。")
+    }
     func testManifestRejectsTraversalAndIncompleteVoices() throws {
         let digest=SHA256.hash(data:Data()).map{String(format:"%02x",$0)}.joined()
         var files:[String:VoiceManifest.File]=[:]

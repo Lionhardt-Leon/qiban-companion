@@ -82,7 +82,7 @@ final class OfflineVoiceEngine {
     private let prompt:ORTValue,spectrogram:ORTValue
     private let vocabularySize=732
     init(root:URL,voice:VoiceManifest.Voice,computeMode:VoiceComputeMode = .automatic) throws {
-        guard Self.frontendSafetyRevision >= 2 else {throw CompanionError.message("本机文字前端版本过旧，请更新 App。语音包可以保留。")}
+        guard Self.frontendSafetyRevision >= 3 else {throw CompanionError.message("本机文字前端版本过旧，请更新 App。语音包可以保留。")}
         self.voice=voice;self.computeMode=computeMode
         let path=root.appendingPathComponent(voice.directory);modelRoot=path
         guard (try path.appendingPathComponent("conditioning.json").resourceValues(forKeys:[.fileSizeKey]).fileSize ?? Int.max)<=128*1024 else{throw CompanionError.message("语音参考索引过大。")};let data=try Data(contentsOf:path.appendingPathComponent("conditioning.json"));guard data.count<=128*1024 else {throw CompanionError.message("语音参考索引过大。")}
@@ -132,7 +132,11 @@ final class OfflineVoiceEngine {
         }}
         let parsed=try JSONDecoder().decode(VoicePhones.self,from:data)
         try cancellation.check()
-        guard parsed.error==nil,let ids=parsed.ids,!ids.isEmpty,ids.count<=400,ids.allSatisfy({$0>=0 && $0<Int64(vocabularySize)}),let normalized=parsed.text else {throw CompanionError.message("这句台词无法转换为有效音素，请缩短后重试。")}
+        if let error=parsed.error {
+            let detail:[String:String]=["Invalid Mandarin tone":"中文词典的声调格式无效。","Unsupported Mandarin syllable":"中文台词含有未支持的读音。","No valid phonemes":"台词中没有可朗读的文字。","Text front end is not ready":"本机文字前端尚未就绪。","Text exceeds limit":"台词超过本机转换上限。"]
+            throw CompanionError.message((detail[error] ?? "文字转音素失败。")+"请重试；若固定试听句也失败，请保留语音包并更新 App。")
+        }
+        guard let ids=parsed.ids,!ids.isEmpty,ids.count<=400,ids.allSatisfy({$0>=0 && $0<Int64(vocabularySize)}),let normalized=parsed.text else {throw CompanionError.message("本机音素结果为空或超出范围，请重试。")}
         guard voice.language=="zh",let tokenizer=tokenizer else {return(ids,Array(repeating:0,count:1024*ids.count))}
         let encoded=tokenizer.encode(normalized),count=encoded.ids.count
         guard count<=512,let counts=parsed.word2ph,counts.count==encoded.characterTokens.count,counts.allSatisfy({(0...12).contains($0)}),counts.reduce(0,+)==ids.count else {throw CompanionError.message("文字与音素无法对齐，请换一种表述。")}

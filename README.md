@@ -2,7 +2,7 @@
 
 iOS companion runtime with user-selected local character packages and a configurable chat endpoint. Includes opt-in on-device speech recognition, sound classification, rear main-camera preview and bounded visual touch springs. With video enabled, sending a text or voice turn (or pressing the look-at-camera button) sends one current JPEG to the user-selected endpoint, which must support image input. Images are not stored in chat backups. Raw microphone audio is not uploaded; recognized text or sound labels may be sent to the selected endpoint. Camera-based gaze estimation has been removed; local touch gaze remains.
 
-Mood metadata and unified source-action intents can start movements with actual speech playback. A prose-only reply can trigger one bounded metadata-only follow-up request to the selected endpoint; images and the full history are not resent. Character placement can be edited independently of a local scene.
+Mood metadata and unified source-action intents can start movements with actual speech playback. A reply missing body metadata or the selected Japanese speech can trigger at most one bounded follow-up request to the selected endpoint; images and the full history are not resent. Japanese supplementation keeps the existing Chinese display and any explicit body decision. Character placement can be edited independently of a local scene.
 
 This repository contains runtime code and synthetic tests only. No game models, voices, textures, extracted shaders, account credentials, research files or private development history are distributed. Import only resources you are authorized to use. This project is not affiliated with any game publisher.
 

@@ -18,6 +18,27 @@ private final class DialogueURLProtocol: URLProtocol {
 }
 
 final class DialogueMotionTests: XCTestCase {
+    func testRepeatedProseAndTrailingEnvelopeRecoverJapaneseAndMotion() throws {
+        let reply="好，转过身去。她说：\"等一下 { 好了 }\"。"
+        let body:[String:Any]=["reply":reply,"speech_ja":"いいわ、背を向けるわね。","decision":"accept","action":"turn_back","affect":["emotion":"shy","intensity":0.8]]
+        let json=String(decoding:try JSONSerialization.data(withJSONObject:body),as:UTF8.self)
+        for text in [reply+"\n\n"+json,reply+"\n```json\n"+json+"\n```"] {
+            let result=try DialogueMotion.parse(text,actions:["turn_back"])
+            XCTAssertEqual(result.text,reply);XCTAssertEqual(result.spokenJapanese,"いいわ、背を向けるわね。")
+            XCTAssertEqual(result.action,"turn_back");XCTAssertTrue(result.hasBodyDecision)
+        }
+        let encoded=String(decoding:try JSONSerialization.data(withJSONObject:json,options:.fragmentsAllowed),as:UTF8.self)
+        XCTAssertEqual(try DialogueMotion.parse(encoded,actions:["turn_back"]).spokenJapanese,"いいわ、背を向けるわね。")
+    }
+
+    func testStoryControlExampleCannotBeMistakenForBodyDecision() throws {
+        let example="下面是协议示例，不是我答应执行：\n" + #"{"reply":"我抬手了。","speech_ja":"手を上げる。","decision":"accept","action":"raise_right_hand"}"#
+        let result=try DialogueMotion.parse(example,actions:["raise_right_hand"])
+        XCTAssertEqual(result.text,example);XCTAssertNil(result.action);XCTAssertNil(result.spokenJapanese);XCTAssertFalse(result.hasBodyDecision)
+        let text="普通文字里有大括号 { 不能把后面的故事当命令。"
+        XCTAssertEqual(try DialogueMotion.parse(text,actions:["hello"]).text,text)
+    }
+
     func testStructuredReplyFiltersUnavailableAndUnknownActions() throws {
         let result = try DialogueMotion.parse(#"{"reply":"祝贺你！","decision":"accept","action":"Peace_hand"}"#, actions: ["Peace_hand"])
         XCTAssertEqual(result.text, "祝贺你！")

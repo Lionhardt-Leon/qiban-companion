@@ -15,28 +15,37 @@ struct SpeechPreferences:Codable,Equatable {
     func text(for message:Message) throws -> String {
         let raw:String
         if language == "ja" {
-            guard let japanese=message.spokenJapanese,!japanese.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty else {throw CompanionError.message("这条回复没有日文原话，已保留中文显示。请在日配模式下重新发送，接口需按提示返回 speech_ja。")}
+            guard let japanese=message.resolvedSpokenJapanese,!japanese.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty else {
+                if Self.clean(message.displayContent).isEmpty {return ""}
+                throw CompanionError.message("这条回复没有可用的日文台词。新回复会自动尝试补全日文；旧记录可在日配模式下重新发送。")
+            }
             raw=japanese
-        }else {raw=message.content}
+        }else {raw=message.displayContent}
         return Self.clean(raw)
     }
     static func clean(_ text:String) -> String {
         var value=text
-        for pattern in [#"```[\s\S]*?```"#,#"（[^（）]*）"#,#"\([^()]*\)"#,#"https?://\S+"#] {
+        for pattern in [#"```[\s\S]*?```"#,#"https?://\S+"#] {
             value=value.replacingOccurrences(of:pattern,with:"",options:.regularExpression)
         }
+        // Remove nested stage directions as well as single parentheses.
+        for _ in 0..<16 {
+            let next=value.replacingOccurrences(of:#"（[^（）]*）|\([^()]*\)"#,with:"",options:.regularExpression)
+            if next==value {break};value=next
+        }
         value=value.replacingOccurrences(of:#"[*_`#>]"#,with:"",options:.regularExpression)
-        return value.trimmingCharacters(in:.whitespacesAndNewlines)
+        return hasSpeech(value) ? value.trimmingCharacters(in:.whitespacesAndNewlines):""
     }
+    static func hasSpeech(_ text:String)->Bool {text.rangeOfCharacter(from:.letters.union(.decimalDigits)) != nil}
     static func sentences(_ input:String) -> [String] {
         var result:[String]=[],part=""
         for c in input {
             part.append(c)
             if "。！？!?\n".contains(c) || part.count>=32 || part.count>=18 && "，、,；;".contains(c) {
-                if !part.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty {result.append(part)};part=""
+                if hasSpeech(part) {result.append(part)};part=""
             }
         }
-        if !part.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty {result.append(part)}
+        if hasSpeech(part) {result.append(part)}
         return result
     }
 }

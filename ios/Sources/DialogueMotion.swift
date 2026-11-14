@@ -113,13 +113,8 @@ enum DialogueMotion {
 
     static func parse(_ content: String, actions: [String]) throws -> DialogueReply {
         let original = content.trimmingCharacters(in: .whitespacesAndNewlines)
-        var payload = original
-        if payload.hasPrefix("```"), payload.hasSuffix("```"), let line = payload.firstIndex(of: "\n") {
-            payload = String(payload[payload.index(after: line)..<payload.index(payload.endIndex, offsetBy: -3)])
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-        }
-        if let object = try? JSONSerialization.jsonObject(with: Data(payload.utf8)),
-           let envelope = object as? [String: Any], envelope["reply"] != nil || envelope["action"] != nil {
+        let payload = unfenced(original)
+        if let envelope = replyEnvelope(in: payload) {
             guard let reply = envelope["reply"] as? String,
                   !reply.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
                 throw CompanionError.message("模型返回的回复格式不完整，请重试。")
@@ -155,6 +150,51 @@ enum DialogueMotion {
             throw CompanionError.message("模型返回的动作格式不完整，请重试。")
         }
         return DialogueReply(text: original, action: nil)
+    }
+
+    private static func unfenced(_ text:String) -> String {
+        guard text.hasPrefix("```"),text.hasSuffix("```"),let line=text.firstIndex(of:"\n") else{return text}
+        return String(text[text.index(after:line)..<text.index(text.endIndex,offsetBy:-3)])
+            .trimmingCharacters(in:.whitespacesAndNewlines)
+    }
+
+    private static func replyEnvelope(in text:String) -> [String:Any]? {
+        guard text.count<=250_000 else{return nil}
+        func decode(_ input:String) -> [String:Any]? {
+            let object=try? JSONSerialization.jsonObject(with:Data(input.utf8),options:.fragmentsAllowed)
+            let dictionary:[String:Any]?
+            if let encoded=object as? String {
+                dictionary=(try? JSONSerialization.jsonObject(with:Data(encoded.utf8))) as? [String:Any]
+            }else {dictionary=object as? [String:Any]}
+            guard let value=dictionary,value["reply"] != nil || value["action"] != nil else{return nil}
+            return value
+        }
+        if let whole=decode(text){return whole}
+        // Some providers repeat the visible reply before the JSON. Only accept
+        // a trailing envelope whose prefix is that same reply, never a quoted
+        // example or an unrelated object inside a story.
+        var start:String.Index?,depth=0,inString=false,escaped=false,candidates=0
+        for index in text.indices {
+            let c=text[index]
+            if start==nil {if c=="{" {start=index;depth=1};continue}
+            if inString {
+                if escaped {escaped=false}else if c=="\\" {escaped=true}else if c=="\"" {inString=false}
+                continue
+            }
+            if c=="\"" {inString=true}else if c=="{" {depth+=1}else if c=="}" {depth-=1}
+            guard depth==0,let begin=start else{continue}
+            start=nil;candidates+=1
+            guard candidates<=8 else{return nil}
+            let end=text.index(after:index),suffix=text[end...].trimmingCharacters(in:.whitespacesAndNewlines)
+            guard suffix.isEmpty || suffix=="```",let value=decode(String(text[begin..<end])),let reply=value["reply"] as? String else{continue}
+            var prefix=text[..<begin].trimmingCharacters(in:.whitespacesAndNewlines)
+            if let fence=prefix.range(of:"```",options:.backwards),["```","```json"].contains(String(prefix[fence.lowerBound...])) {
+                prefix=String(prefix[..<fence.lowerBound]).trimmingCharacters(in:.whitespacesAndNewlines)
+            }
+            func compact(_ value:String)->String {value.components(separatedBy:.whitespacesAndNewlines).joined()}
+            if prefix.isEmpty || compact(prefix)==compact(reply) {return value}
+        }
+        return nil
     }
 
     static func isStopRequest(_ text: String) -> Bool {
