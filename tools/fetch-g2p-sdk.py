@@ -26,11 +26,14 @@ class SafeRedirect(urllib.request.HTTPRedirectHandler):
 try:
     token=os.environ.get('GH_TOKEN','');headers={'Accept':'application/octet-stream','User-Agent':'Qiban-native-speech-build'}
     if token:headers['Authorization']='Bearer '+token
-    request=urllib.request.Request('https://api.github.com/repos/Lionhardt-Leon/qiban-companion/releases/assets/713163445',headers=headers)
+    request=urllib.request.Request('https://api.github.com/repos/Lionhardt-Leon/qiban-companion/releases/assets/746478333',headers=headers)
     with urllib.request.build_opener(SafeRedirect).open(request,timeout=60) as response:raw=response.read(20*1024*1024+1)
-    assert len(raw)<=20*1024*1024 and hashlib.sha256(raw).hexdigest()=='d0ae54cc9008e53c28709ba42cffa2033823730c8857d4fd302fb8ff4f7c658d'
+    assert len(raw)<=20*1024*1024 and hashlib.sha256(raw).hexdigest()=='30486c17775a03967c2290a736eadf7b541b2048110d3e75badf21f242a5911a'
     with zipfile.ZipFile(io.BytesIO(raw)) as archive:
         assert archive.testzip() is None and sum(x.file_size for x in archive.infolist())<100*1024*1024
+        assert 'QibanG2P.xcframework/BUILD-INFO.json' in archive.namelist()
+        metadata=json.loads(archive.read('QibanG2P.xcframework/BUILD-INFO.json'))
+        assert metadata.get('safetyRevision')==2 and metadata.get('source')=='384a2f995c48ef1903373ac8814569a8925779ba'
         for item in archive.infolist():
             destination=(generated/item.filename).resolve();assert generated.resolve() in destination.parents
             if item.is_dir():destination.mkdir(exist_ok=True,parents=True)
