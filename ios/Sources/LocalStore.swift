@@ -36,6 +36,26 @@ enum APIKeyStore {
         }
         guard status == errSecSuccess else { throw CompanionError.message("密钥保存失败（\(status)）。") }
     }
+    static func serviceSecret(_ kind:ServiceKind) throws -> ServiceSecret? {
+        var query=base;query[kSecAttrAccount as String]="feature-api-"+kind.rawValue
+        query[kSecReturnData as String]=true;query[kSecMatchLimit as String]=kSecMatchLimitOne
+        var item:CFTypeRef?;let status=SecItemCopyMatching(query as CFDictionary,&item)
+        if status==errSecItemNotFound{return nil}
+        guard status==errSecSuccess,let data=item as? Data,let record=try? JSONDecoder().decode(ServiceSecret.self,from:data) else {throw CompanionError.message("无法读取独立接口密钥，请解锁设备后重试。")}
+        return record
+    }
+    static func read(kind:ServiceKind,profile:ServiceEndpoint) throws -> String {try serviceSecret(kind)?.key(for:profile) ?? ""}
+    static func write(kind:ServiceKind,secret:ServiceSecret?) throws {
+        var query=base;query[kSecAttrAccount as String]="feature-api-"+kind.rawValue
+        let status:OSStatus
+        if let secret=secret {
+            guard secret.value.count<=8192,!secret.value.contains("\n"),!secret.value.contains("\r") else {throw CompanionError.message("独立接口密钥格式无效。")}
+            let attributes:[String:Any]=[kSecValueData as String:try JSONEncoder().encode(secret),kSecAttrAccessible as String:kSecAttrAccessibleWhenUnlockedThisDeviceOnly]
+            let updated=SecItemUpdate(query as CFDictionary,attributes as CFDictionary)
+            status=updated==errSecItemNotFound ? SecItemAdd(query.merging(attributes){_,new in new} as CFDictionary,nil):updated
+        }else {status=SecItemDelete(query as CFDictionary)}
+        guard status==errSecSuccess || status==errSecItemNotFound else {throw CompanionError.message("独立接口密钥保存失败。")}
+    }
 }
 
 @MainActor final class LocalStore: ObservableObject {
@@ -58,6 +78,7 @@ enum APIKeyStore {
     private let visionReplyProvider: VisionReplyProvider
     private var pendingImage: CameraFrame?
     private var pendingExtraImages:[CameraFrame] = []
+    private var pendingSearch=false
     private var context = CompanionContext()
     private let readKey: () throws -> String
 
@@ -157,13 +178,24 @@ enum APIKeyStore {
         try APIKeyStore.write(key)
         var next = archive
         next.settings = settings
+        next.settings.services=archive.settings.services
         do { try commit(next) } catch {
             try? APIKeyStore.write(oldKey)
             throw error
         }
     }
 
-    func send(_ text: String, actions: [String] = [], image: CameraFrame? = nil, images:[CameraFrame] = [],context suppliedContext:CompanionContext? = nil) {
+    func saveService(_ kind:ServiceKind,profile:ServiceEndpoint,key:String) throws {
+        guard !busy,storageReady else {throw CompanionError.message("请等待当前回复完成后保存接口。")}
+        try profile.validate(for:kind)
+        let old=try APIKeyStore.serviceSecret(kind),key=key.trimmingCharacters(in:.whitespacesAndNewlines)
+        let secret=profile.credentialIdentity.map{ServiceSecret(identity:$0,value:key)}
+        try APIKeyStore.write(kind:kind,secret:secret)
+        var next=archive;var services=next.settings.services ?? ServiceRouting();services[kind]=profile;next.settings.services=services
+        do {try commit(next)}catch {try? APIKeyStore.write(kind:kind,secret:old);throw error}
+    }
+
+    func send(_ text: String, actions: [String] = [], image: CameraFrame? = nil, images:[CameraFrame] = [],context suppliedContext:CompanionContext? = nil,search:Bool=false) {
         let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty, !busy else { return }
         do {
@@ -183,6 +215,7 @@ enum APIKeyStore {
             availableActions = DialogueMotion.allowed(actions)
             pendingImage = image
             pendingExtraImages = images
+            pendingSearch=search
             beginReply(key: key)
         } catch { self.error = error.localizedDescription }
     }
@@ -205,6 +238,7 @@ enum APIKeyStore {
         requestID = id
         let snapshot = archive
         var settings = snapshot.settings
+        settings.runtimeSearchRequested=pendingSearch
         var latestContext = context;latestContext.speechLanguage = settings.speech?.language ?? "zh"
         latestContext.mood = mood.summary;settings.runtimeContext = latestContext;settings.runtimeImages = pendingExtraImages
         let actions = availableActions
@@ -218,7 +252,7 @@ enum APIKeyStore {
                 try Task.checkCancellation()
                 guard requestID == id else { return }
                 var next = archive
-                let assistant=Message(role: "assistant", content: reply.text,spokenJapanese:reply.spokenJapanese)
+                let assistant=Message(role: "assistant", content: reply.text,spokenJapanese:reply.spokenJapanese,sources:reply.sources.isEmpty ? nil:reply.sources)
                 if let affect=reply.affect {var value=mood;try value.apply(affect);if next.moods == nil {next.moods=[:]};next.moods?[moodKey]=value}
                 next.messages.append(assistant)
                 try commit(next)
@@ -226,6 +260,7 @@ enum APIKeyStore {
                 replyForSpeech=assistant
                 pendingImage = nil
                 pendingExtraImages = []
+                pendingSearch=false
                 let action = DialogueMotion.isStopRequest(snapshot.messages.last?.content ?? "") ? "stop" : reply.action
                 if let action = action, action == "stop" || actions.contains(action) {
                     dialogueAction = DialogueActionEvent(action: action, motion: action == "procedural" ? reply.motion : nil)
@@ -237,7 +272,7 @@ enum APIKeyStore {
     }
 
     func cancel() {
-        requestTask?.cancel(); requestID = nil; requestTask = nil; busy = false; dialogueAction = nil;replyForSpeech=nil; pendingImage = nil;pendingExtraImages = []
+        requestTask?.cancel(); requestID = nil; requestTask = nil; busy = false; dialogueAction = nil;replyForSpeech=nil; pendingImage = nil;pendingExtraImages = [];pendingSearch=false
     }
     func discardCameraFrame() { if pendingImage?.source == .camera {pendingImage = nil};pendingExtraImages.removeAll{$0.source == .camera} }
     func saveSpeech(_ preferences:SpeechPreferences) throws {

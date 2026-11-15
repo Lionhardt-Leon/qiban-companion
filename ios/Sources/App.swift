@@ -93,6 +93,7 @@ struct ConversationView: View {
     @EnvironmentObject private var store: LocalStore
     @EnvironmentObject private var speech:CompanionSpeech
     @State private var draft = ""
+    @State private var useSearch=false
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
@@ -119,8 +120,9 @@ struct ConversationView: View {
                                     if let japanese=message.resolvedSpokenJapanese {
                                         Text(japanese).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
                                     }
+                                    CitationLinks(sources:message.sources ?? [])
                                     if message.role=="assistant" {
-                                        Button {speech.speak(message,preferences:store.archive.settings.speech ?? SpeechPreferences())} label:{Label("朗读",systemImage:"speaker.wave.2")}.font(.caption)
+                                        Button {speech.speak(message,preferences:store.archive.settings.speech ?? SpeechPreferences(),remote:store.archive.settings.services?.tts)} label:{Label("朗读",systemImage:"speaker.wave.2")}.font(.caption)
                                     }
                                 }
                                 .padding(12).frame(maxWidth: .infinity, alignment: .leading)
@@ -139,12 +141,13 @@ struct ConversationView: View {
                 } else if store.archive.messages.last?.role == "user" {
                     Button("重新请求回复") { store.retry() }.padding(8)
                 }
+                if store.archive.settings.services?.search.enabled==true {SearchToggle(enabled:$useSearch).padding(.horizontal)}
                 HStack(alignment: .bottom) {
                     TextField("想说点什么…", text: $draft, axis: .vertical)
                         .lineLimit(1...5).textFieldStyle(.roundedBorder)
                     Button {
                         let before = store.archive.messages.count
-                        store.send(draft)
+                        store.send(draft,search:useSearch && store.archive.settings.services?.search.enabled==true)
                         if store.archive.messages.count > before { draft = "" }
                     } label: { Image(systemName: "arrow.up.circle.fill").font(.title) }
                     .accessibilityLabel("发送")
@@ -249,9 +252,11 @@ struct SettingsView: View {
                         .textInputAutocapitalization(.never).autocorrectionDisabled()
                     Slider(value: $settings.temperature, in: 0...2, step: 0.1)
                     Text("温度：\(settings.temperature, specifier: "%.1f")").font(.caption)
-                } header: { Text("自定义 API") } footer: {
+                } header: { Text("主对话 API") } footer: {
                     Text("支持 OpenAI 兼容的 Chat Completions。填写完整接口路径或以 /v1 结尾的地址；当前仅支持 HTTPS。密钥保存在本机钥匙串，不包含在备份中。")
                 }
+                Section {NavigationLink {ServiceSettingsView()} label:{Label("独立功能接口",systemImage:"network")}.accessibilityIdentifier("independentServices")
+                    Text("分别配置识图、联网搜索、TTS 和语音识别。未启用的功能沿用原设置。") .font(.caption).foregroundStyle(.secondary)}
                 Section {Text("系统提示词、用户身份、AI 角色卡与身体能力，请在主页设置 → 人设与陪伴中管理。 ").font(.footnote).foregroundStyle(.secondary)}
                 Section {
                     Button(saved ? "已保存" : "保存设置") {

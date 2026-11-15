@@ -27,6 +27,7 @@ struct CompanionHome: View {
     @AppStorage("characterEngine") private var engine = "native"
     @State private var sheet: HomeSheet?
     @State private var draft = ""
+    @State private var useSearch=false
     @State private var pendingMotionRevision: Int?
     @State private var waitingBodyAction:WaitingBodyAction?
     @State private var greetedModels=Set<String>()
@@ -239,7 +240,7 @@ struct CompanionHome: View {
             let preferences=store.archive.settings.speech ?? SpeechPreferences()
             if preferences.autoPlay || senses.conversation {
                 senses.preparePlayback()
-                speech.speak(reply,preferences:preferences,inCall:senses.conversation) {success in
+                speech.speak(reply,preferences:preferences,remote:store.archive.settings.services?.tts,inCall:senses.conversation) {success in
                     if success {senses.resumeAfterPlayback()}else{senses.stop()}
                 }
             }
@@ -247,6 +248,7 @@ struct CompanionHome: View {
         .onChange(of:store.busy) { value in if value {waitingBodyAction=nil;speech.stop();senses.prepareReply()}else {if store.error != nil {senses.replyFailed()};scheduleTouches()} }
         .onChange(of:store.conversationID) {_ in waitingBodyAction=nil;speech.stop();clearTouches()}
         .onChange(of:store.archive.settings.speech) {_ in speech.stop();snowbreak.setOriginalLanguage(store.archive.settings.speech?.language ?? "zh")}
+        .onChange(of:store.archive.settings.services) {_ in waitingBodyAction=nil;clearTouches();speech.stop();senses.stop();if store.archive.settings.services?.search.enabled != true {useSearch=false}}
         .onChange(of:speech.mouthLevel) {value in if isSnowbreak {snowbreak.setSpeechLevel(value)}else{stage.setSpeechLevel(value)}}
         .onChange(of:touchAI) {if !$0 {clearTouches()};snowbreak.setTouchPolicy($0 && !store.archive.settings.endpoint.isEmpty)}
         .onChange(of:store.archive.settings.endpoint) {_ in snowbreak.setTouchPolicy(touchAI && !store.archive.settings.endpoint.isEmpty)}
@@ -313,6 +315,7 @@ struct CompanionHome: View {
 
     private var composer: some View {
         VStack(spacing: 10) {
+            if store.archive.settings.services?.search.enabled==true {SearchToggle(enabled:$useSearch).foregroundStyle(.white).padding(.horizontal)}
             if let image = attachedImage,let thumbnail = UIImage(data:image.jpeg) {
                 HStack(spacing:12){Image(uiImage:thumbnail).resizable().scaledToFit().frame(width:64,height:64);Text(image.source.label+"\n发送时交给当前识图 API，不写入备份").font(.caption);Spacer();Button("移除"){attachedImage = nil}}
                     .padding(10).background(.ultraThinMaterial,in:RoundedRectangle(cornerRadius:16)).padding(.horizontal,18).accessibilityIdentifier("pendingChatImage")
@@ -346,6 +349,9 @@ struct CompanionHome: View {
                         .foregroundStyle(.white).padding(14)
                         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18))
                 }.accessibilityIdentifier("latestCompanionReply").padding(.horizontal, 24)
+                if let sources=reply.sources,!sources.isEmpty {
+                    Menu {ForEach(sources){source in if let url=source.link {Link(source.title,destination:url)}}} label:{Label("本轮检索来源（\(sources.count)）",systemImage:"link")}.font(.caption).foregroundStyle(.white)
+                }
             }
             if store.busy {
                 Button("正在思考… 点击停止") { store.cancel() }.font(.subheadline).foregroundStyle(.white)
@@ -363,7 +369,7 @@ struct CompanionHome: View {
                     .background(.ultraThinMaterial, in: Capsule()).overlay(Capsule().stroke(.white.opacity(0.2)))
                     .accessibilityIdentifier("homeMessageInput")
                 circle(camera.enabled ? "video.fill" : "video.slash", label:camera.enabled || camera.starting ? "关闭后置视频" : "开启后置视频") { camera.toggle() }
-                circle(senses.conversation ? "phone.down.fill" : "mic", label:senses.conversation ? "结束语音通话" : "开始语音通话",enabled: !store.busy || senses.conversation) { if store.archive.settings.endpoint.isEmpty {sheet = .api}else{speech.stop();senses.toggleVoice()} }
+                circle(senses.conversation ? "phone.down.fill" : "mic", label:senses.conversation ? "结束语音通话" : "开始语音通话",enabled: !store.busy || senses.conversation) { if store.archive.settings.endpoint.isEmpty {sheet = .api}else{speech.stop();senses.toggleVoice(remote:store.archive.settings.services?.asr)} }
             }.padding(.horizontal, 14)
         }.padding(.top, 28).padding(.bottom, 12)
             .background(LinearGradient(colors: [.clear, .black.opacity(0.6)], startPoint: .top, endPoint: .bottom))
@@ -397,7 +403,7 @@ struct CompanionHome: View {
                 guard sheet == nil,scenePhase == .active,!store.busy,store.conversationID == conversationID else { return }
                 let before = store.archive.messages.count
                 senses.prepareReply()
-                store.send(text, actions:availableActions, image:images.first,images:Array(images.dropFirst()),context:companionContext(origin))
+                store.send(text, actions:availableActions, image:images.first,images:Array(images.dropFirst()),context:companionContext(origin),search:useSearch && store.archive.settings.services?.search.enabled==true)
                 if store.archive.messages.count > before {
                     attachedImage = nil
                     if explicitText == nil,draft == text { draft = "" }

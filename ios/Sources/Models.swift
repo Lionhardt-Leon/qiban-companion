@@ -7,9 +7,11 @@ struct APISettings: Codable {
     var temperature = 0.7
     var personas:PersonaLibrary? = nil
     var speech:SpeechPreferences? = nil
+    var services:ServiceRouting? = nil
     var runtimeContext:CompanionContext? = nil
     var runtimeImages:[CameraFrame] = []
-    private enum CodingKeys:String,CodingKey {case endpoint,model,persona,temperature,personas,speech}
+    var runtimeSearchRequested=false
+    private enum CodingKeys:String,CodingKey {case endpoint,model,persona,temperature,personas,speech,services}
 }
 
 struct Message: Codable, Identifiable {
@@ -17,6 +19,7 @@ struct Message: Codable, Identifiable {
     var role: String
     var content: String
     var spokenJapanese:String? = nil
+    var sources:[WebCitation]? = nil
     var createdAt = Date()
 
     // Recover older messages saved before prose + JSON replies were decoded.
@@ -52,7 +55,10 @@ struct LocalArchive: Codable {
         guard (moods?.count ?? 0)<=64,(moods ?? [:]).keys.allSatisfy({$0.count<=80}) else{throw CompanionError.message("心情资料过多。")};for mood in (moods ?? [:]).values {try mood.validate()}
         try settings.personas?.validate()
         try settings.speech?.validate()
+        try settings.services?.validate()
         let saved = Array((personaConversations ?? [:]).values)
+        func validSources(_ values:[Message])->Bool {values.allSatisfy{message in (message.sources?.count ?? 0)<=5 && (message.sources?.allSatisfy{$0.title.count<=200 && $0.url.count<=4096 && $0.snippet.count<=1200 && $0.link != nil} ?? true)}}
+        guard validSources(messages),saved.allSatisfy({validSources($0.messages)}) else {throw CompanionError.message("联网来源资料无效。")}
         guard saved.count <= 51,
               saved.reduce(messages.count,{$0+$1.messages.count}) <= 100_000,
               saved.reduce(diary.count,{$0+$1.diary.count}) <= 100_000,

@@ -59,8 +59,14 @@ private final class SpeechEngineWorker:@unchecked Sendable {
     private var generation=UUID(),generationFinished=false
     private var volume:Float=1
     private var completion:((Bool)->Void)?
+    private var remoteTask:Task<Void,Never>?
+    private var remotePlayback=false
+    private var playerRate:Float=1
+    typealias RemoteSynthesizer = @MainActor (ServiceEndpoint,String,String,Float) async throws -> Data
+    private let remoteSynthesizer:RemoteSynthesizer?
+    private let serviceKeyReader:ServiceClient.KeyReader
     override convenience init(){self.init(library:VoicePackageLibrary())}
-    init(library:VoicePackageLibrary){self.library=library;super.init();reload();if let previous=VoiceBreadcrumb.previousStatus {diagnostics=previous}
+    init(library:VoicePackageLibrary,remoteSynthesizer:RemoteSynthesizer?=nil,serviceKeyReader:@escaping ServiceClient.KeyReader=ServiceClient.readKey){self.library=library;self.remoteSynthesizer=remoteSynthesizer;self.serviceKeyReader=serviceKeyReader;super.init();reload();if let previous=VoiceBreadcrumb.previousStatus {diagnostics=previous}
         memoryObserver=NotificationCenter.default.addObserver(forName:UIApplication.didReceiveMemoryWarningNotification,object:nil,queue:.main){[weak self] _ in
             Task{@MainActor [weak self] in guard let self=self else{return};self.stop();self.status="系统内存紧张，已停止本机合成并释放语音资源。";await self.worker.unload()}
         }
@@ -68,6 +74,7 @@ private final class SpeechEngineWorker:@unchecked Sendable {
     deinit{if let observer=memoryObserver{NotificationCenter.default.removeObserver(observer)}}
     func reload(){if let manifest=try? library.manifest(){voices=manifest.voices;packageName=manifest.title}else{voices=[];packageName=""}}
     func stop() {
+        remoteTask?.cancel();remoteTask=nil;remotePlayback=false;playerRate=1
         meter?.invalidate();meter=nil;mouthLevel=0;speakingMessageID=nil;startedGeneration=nil
         cancellation?.cancel();cancellation=nil;generation=UUID();gate?.cancel();gate=nil;queued=[]
         player?.stop();player=nil;systemUtterance=nil;system?.stopSpeaking(at:.immediate);completion=nil;busy=false;status="";generationFinished=false
@@ -88,7 +95,7 @@ private final class SpeechEngineWorker:@unchecked Sendable {
             importing=false
         }
     }
-    func speak(_ message:Message,preferences:SpeechPreferences,inCall:Bool=false,completion:((Bool)->Void)?=nil) {
+    func speak(_ message:Message,preferences:SpeechPreferences,remote:ServiceEndpoint?=nil,inCall:Bool=false,completion:((Bool)->Void)?=nil) {
         stop();speakingMessageID=message.id;error=nil
         do {
             guard !importing else {throw CompanionError.message("正在导入语音包，请稍候。")}
@@ -98,6 +105,29 @@ private final class SpeechEngineWorker:@unchecked Sendable {
             if inCall {try audio.setCategory(.playAndRecord,mode:.voiceChat,options:[.defaultToSpeaker,.allowBluetooth])}
             else {try audio.setCategory(.playback,mode:.spokenAudio,options:[])}
             try audio.setActive(true);busy=true;self.completion=completion;volume=preferences.volume
+            if let remote=remote,remote.enabled {
+                try remote.validate(for:.tts)
+                let key=try serviceKeyReader(.tts,remote),ticket=generation
+                remotePlayback=true;playerRate=remote.apiProtocol == .deepSeekTTS ? preferences.speed:1
+                status="正在调用独立 TTS 接口…"
+                remoteTask=Task { [weak self] in
+                    guard let self=self else{return}
+                    let session=ServiceClient.session();defer{session.invalidateAndCancel();if self.generation==ticket{self.remoteTask=nil}}
+                    do {
+                        for part in ServiceClient.speechParts(text) {
+                            while !self.queued.isEmpty {try await Task.sleep(nanoseconds:50_000_000)}
+                            try Task.checkCancellation();guard self.generation==ticket else{return}
+                            let data:Data
+                            if let synthesize=self.remoteSynthesizer {data=try await synthesize(remote,key,part,preferences.speed)}
+                            else {data=try await ServiceClient.speech(remote,key:key,text:part,speed:preferences.speed,session:session)}
+                            try Task.checkCancellation();guard self.generation==ticket else{return}
+                            self.queued.append(data);self.playNext()
+                        }
+                        self.generationFinished=true;if self.player==nil && self.queued.isEmpty {self.finish()}
+                    }catch {if self.generation==ticket,!Task.isCancelled {self.fail(error)}}
+                }
+                return
+            }
             if preferences.voiceID.hasPrefix("system.") {
                 status="系统语音正在朗读…";let utterance=AVSpeechUtterance(string:text)
                 utterance.voice=AVSpeechSynthesisVoice(language:preferences.language=="ja" ? "ja-JP":"zh-CN");utterance.rate=0.48*preferences.speed;utterance.volume=preferences.volume
@@ -120,8 +150,8 @@ private final class SpeechEngineWorker:@unchecked Sendable {
         guard player==nil else{return}
         guard !queued.isEmpty else{if generationFinished{finish()};return}
         do {
-            let audio=queued.removeFirst();player=try AVAudioPlayer(data:audio);player?.delegate=self;player?.volume=volume;player?.isMeteringEnabled=true;player?.prepareToPlay()
-            guard player?.play()==true else{throw CompanionError.message("无法播放生成的语音。")};markPlaybackStarted();startMeter();status="离线语音正在播放…"
+            let audio=queued.removeFirst();player=try AVAudioPlayer(data:audio);player?.delegate=self;player?.volume=volume;player?.isMeteringEnabled=true;player?.enableRate=true;player?.rate=playerRate;player?.prepareToPlay()
+            guard player?.play()==true else{throw CompanionError.message("无法播放生成的语音。")};markPlaybackStarted();startMeter();status=remotePlayback ? "独立 TTS 语音正在播放…":"离线语音正在播放…"
         }catch {fail(error)}
     }
     private func markPlaybackStarted(){guard startedGeneration != generation,let id=speakingMessageID else{return};startedGeneration=generation;playbackStarted=SpeechPlaybackStart(messageID:id)}

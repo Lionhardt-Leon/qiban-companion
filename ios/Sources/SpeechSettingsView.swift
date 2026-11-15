@@ -13,6 +13,7 @@ struct SpeechSettingsView:View {
     var body:some View {
         NavigationStack {
             Form {
+                if let remote=store.archive.settings.services?.tts,remote.enabled {Section("当前发声来源") {Text("独立 TTS："+remote.apiProtocol.title+" · "+remote.voice)}}
                 Section("离线语音包") {
                     Text(speech.packageName.isEmpty ? "尚未导入训练语音包":speech.packageName).accessibilityIdentifier("speechPackageStatus")
                     Button("导入中／日离线语音包"){picking=true}.disabled(speech.importing || store.busy).accessibilityIdentifier("importVoicePackage")
@@ -50,11 +51,15 @@ struct SpeechSettingsView:View {
                 Section("试听") {
                     Button("试听当前音色") {
                         let sample=Message(role:"assistant",content:"下午好，我在这里陪着你。",spokenJapanese:"こんにちは。今日は何を話しましょうか。")
-                        speech.speak(sample,preferences:draft)
+                        speech.speak(sample,preferences:draft,remote:store.archive.settings.services?.tts)
                     }.disabled(speech.importing || store.busy).accessibilityIdentifier("previewSpeechVoice")
                     Button("停止朗读"){speech.stop()}.disabled(!speech.busy)
                     if !speech.status.isEmpty {Text(speech.status).font(.caption)}
                     if let error=speech.error {Text(error).foregroundStyle(.red).font(.caption)}
+                }
+                Section("独立配音接口") {
+                    NavigationLink("配置独立 TTS 与其他接口") {ServiceSettingsView()}
+                    Text("独立 TTS 启用后，本机音色作为备用并决定中／日台词语言；实际云端音色在独立接口页面设置。") .font(.caption).foregroundStyle(.secondary)
                 }
                 Section {Text("音色设置为全局设置。更换模型或人设不会自动改用另一种声音。原作自带的互动原声片段由角色的“原声”开关单独控制，可关闭以避免与配音混用；双语角色包的原声会跟随所选语言。语言选择影响 AI 后续回复；离线合成不代表 AI 对话也改为本地运行。")
                     .font(.caption).foregroundStyle(.secondary)}

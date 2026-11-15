@@ -7,6 +7,7 @@ struct DialogueReply {
     var spokenJapanese:String? = nil
     var affect:AffectDecision? = nil
     var hasBodyDecision=false
+    var sources:[WebCitation] = []
 }
 
 struct DialogueActionEvent {
