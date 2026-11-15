@@ -243,6 +243,8 @@ struct SettingsView: View {
     var body: some View {
         NavigationStack {
             Form {
+                Section {NavigationLink {ServiceSettingsView()} label:{Label("独立功能接口",systemImage:"network")}.accessibilityIdentifier("independentServices")
+                    Text("分别配置识图、联网搜索、TTS 和语音识别。未启用的功能沿用原设置。") .font(.caption).foregroundStyle(.secondary)}
                 Section {
                     TextField("HTTPS 接口地址", text: $settings.endpoint)
                         .keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
@@ -255,8 +257,6 @@ struct SettingsView: View {
                 } header: { Text("主对话 API") } footer: {
                     Text("支持 OpenAI 兼容的 Chat Completions。填写完整接口路径或以 /v1 结尾的地址；当前仅支持 HTTPS。密钥保存在本机钥匙串，不包含在备份中。")
                 }
-                Section {NavigationLink {ServiceSettingsView()} label:{Label("独立功能接口",systemImage:"network")}.accessibilityIdentifier("independentServices")
-                    Text("分别配置识图、联网搜索、TTS 和语音识别。未启用的功能沿用原设置。") .font(.caption).foregroundStyle(.secondary)}
                 Section {Text("系统提示词、用户身份、AI 角色卡与身体能力，请在主页设置 → 人设与陪伴中管理。 ").font(.footnote).foregroundStyle(.secondary)}
                 Section {
                     Button(saved ? "已保存" : "保存设置") {

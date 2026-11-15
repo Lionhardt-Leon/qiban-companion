@@ -62,8 +62,10 @@ jobs:
             xcrun xcresulttool export attachments --path "$RESULT" --output-path failed-ui-evidence
             zip -qry Failed-UI-evidence.zip failed-ui-evidence
             TAG="qiban-local-failed-${GITHUB_RUN_ID}"
-            gh release create "$TAG" --draft --target '${{ github.sha }}' --title "Failed UI test evidence ${GITHUB_RUN_ID}" --notes 'Synthetic test fixtures only. No IPA delivery.'
-            gh release upload "$TAG" Failed-UI-evidence.zip
+            if ! gh release view "$TAG" >/dev/null 2>&1; then
+              gh release create "$TAG" --draft --target '${{ github.sha }}' --title "Failed UI test evidence ${GITHUB_RUN_ID}" --notes 'Synthetic test fixtures only. No IPA delivery.'
+            fi
+            gh release upload "$TAG" Failed-UI-evidence.zip --clobber
           fi
       - name: Save unsigned IPA to private draft release
         working-directory: ios
