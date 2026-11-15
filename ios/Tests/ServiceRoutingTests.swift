@@ -1,4 +1,5 @@
 import XCTest
+import AVFoundation
 @testable import QibanCompanion
 
 private final class ServiceURLProtocol:URLProtocol {
@@ -180,6 +181,7 @@ final class ServiceRoutingTests:XCTestCase {
         XCTAssertEqual(try bounded.wav().count,16000*30*2+44)
     }
     @MainActor func testInterruptedRemoteSpeechCannotFinishNewerSpeech()async throws {
+        defer{try? AVAudioSession.sharedInstance().setActive(false,options:.notifyOthersOnDeactivation)}
         let directory=FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString);defer{try? FileManager.default.removeItem(at:directory)}
         var pending:[CheckedContinuation<Data,Error>]=[]
         let controller=CompanionSpeech(library:VoicePackageLibrary(directory:directory),remoteSynthesizer:{_,_,_,_ in try await withCheckedThrowingContinuation{pending.append($0)}},serviceKeyReader:{_,_ in "tts-only"})

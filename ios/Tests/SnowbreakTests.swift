@@ -33,9 +33,8 @@ final class SnowbreakTests:XCTestCase {
         let library = try library();defer { try? FileManager.default.removeItem(at:library.directory) }
         try SnowbreakFixture.data.write(to:library.current)
         let stage = SnowbreakStage(library:library),view = stage.makeView()
-        let controller = UIViewController(),window = UIWindow(frame:UIScreen.main.bounds)
-        controller.view.addSubview(view);view.frame = window.bounds;window.rootViewController = controller;window.makeKeyAndVisible()
-        defer { stage.pause();window.isHidden = true }
+        let host=try RendererTestWindow(view:view)
+        defer { stage.detach(view);view.removeFromSuperview();host.close() }
         for _ in 0..<1500 {
             if stage.ready || stage.error != nil { break }
             try await Task.sleep(nanoseconds:20_000_000)

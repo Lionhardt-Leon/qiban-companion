@@ -42,9 +42,8 @@ final class FennyMigrationTests:XCTestCase {
         defer{try? FileManager.default.removeItem(at:folder)}
         try library.commit(library.stage(SnowbreakFixture.data),characterID:"Enya")
         try library.commit(library.stage(SnowbreakFixture.fennyData),characterID:"Fenny")
-        let stage=SnowbreakStage(library:library),view=stage.makeView(),window=UIWindow(frame:UIScreen.main.bounds),controller=UIViewController()
-        controller.view.addSubview(view);view.frame=window.bounds;window.rootViewController=controller;window.makeKeyAndVisible()
-        defer{stage.detach(view);window.isHidden=true}
+        let stage=SnowbreakStage(library:library),view=stage.makeView(),host=try RendererTestWindow(view:view)
+        defer{stage.detach(view);view.removeFromSuperview();host.close()}
         @MainActor func ready() async throws {
             let deadline=Date().addingTimeInterval(90)
             while !stage.ready && stage.error == nil && Date()<deadline {try await Task.sleep(nanoseconds:100_000_000)}
