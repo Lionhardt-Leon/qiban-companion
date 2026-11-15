@@ -104,8 +104,8 @@ extension LocalStore {
         var positions=Dictionary(uniqueKeysWithValues:session.messages.enumerated().map{($0.element.id,$0.offset)})
         for item in change.messages {
             let messageID=UUID(uuidString:item.id) ?? ChatIdentifiers.uuid("message:"+change.id+":"+item.id)
-            let message=Message(id:messageID,role:item.role,content:item.text,spokenJapanese:item.spokenJapanese,createdAt:Date(timeIntervalSince1970:item.createdAt/1000))
-            if let position=positions[messageID] {session.messages[position]=message}
+            var message=Message(id:messageID,role:item.role,content:item.text,spokenJapanese:item.spokenJapanese,createdAt:Date(timeIntervalSince1970:item.createdAt/1000))
+            if let position=positions[messageID] {message.sources=session.messages[position].sources;session.messages[position]=message}
             else {positions[messageID]=session.messages.count;session.messages.append(message)}
         }
         session.messages.sort{$0.createdAt<$1.createdAt}

@@ -42,7 +42,7 @@ import UniformTypeIdentifiers
         }.frame(maxWidth:.infinity,maxHeight:.infinity).background(Color(red:0.96,green:0.97,blue:1)).preferredColorScheme(.light)
         .task{await controller.start()}
         .onDisappear{controller.dispose()}
-        .onChange(of:scenePhase){controller.suspend($0 != .active)}
+        .onChange(of:scenePhase){controller.suspend($0 == .background)}
         .sheet(isPresented:$importing) {CharacterDocumentPicker {result in
             importing=false
             do {if let url=try result.get(){controller.install(url)}}catch{controller.error=error.localizedDescription}
