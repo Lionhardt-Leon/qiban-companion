@@ -32,8 +32,11 @@ struct ServiceEndpointEditor:View {
     @EnvironmentObject private var store:LocalStore
     @EnvironmentObject private var speech:CompanionSpeech
     @State private var draft:ServiceEndpoint
-    @State private var key="",notice=""
-    @State private var loaded=false,keyReady=false,testing=false
+    @State private var key=""
+    @State private var notice=""
+    @State private var loaded=false
+    @State private var keyReady=false
+    @State private var testing=false
     @State private var keyIdentity:String?
     @State private var testTask:Task<Void,Never>?
     @State private var testID=UUID()
@@ -89,7 +92,7 @@ struct ServiceEndpointEditor:View {
     }
     @MainActor private func test() {
         var profile=draft;profile.enabled=true
-        let key=key;testing=true;notice="";speech.stop();audio?.stop();testID=UUID();let ticket=testID
+        let key=self.key;testing=true;notice="";speech.stop();audio?.stop();testID=UUID();let ticket=testID
         testTask=Task {
             defer{if testID==ticket {testing=false}}
             let session=ServiceClient.session();defer{session.invalidateAndCancel()}

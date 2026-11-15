@@ -74,7 +74,7 @@ final class ServiceRoutingTests:XCTestCase {
         XCTAssertEqual(request.url?.path,"/v1/audio/transcriptions");XCTAssertTrue(String(decoding:request.httpBody!,as:UTF8.self).contains("my-transcriber"))
     }
     func testVisionSearchAndChatHaveSeparateKeysAndMinimalInputs()async throws {
-        let session=session();defer{session.invalidateAndCancel();ServiceURLProtocol.handler=nil};let recorder=RequestRecorder()
+        let session=self.session();defer{session.invalidateAndCancel();ServiceURLProtocol.handler=nil};let recorder=RequestRecorder()
         ServiceURLProtocol.handler={request in
             recorder.add(request)
             switch request.url?.host {
@@ -83,7 +83,7 @@ final class ServiceRoutingTests:XCTestCase {
             default:return(200,try self.response(#"{"reply":"我看到了杯子的观察结果，但现在不想挥手。","decision":"refuse","action":"hello"}"#))
             }
         }
-        var settings=settings(),routes=ServiceRouting();routes.vision=profile(.vision);routes.search=profile(.search);settings.services=routes;settings.runtimeSearchRequested=true;settings.persona="private-role-description"
+        var settings=self.settings(),routes=ServiceRouting();routes.vision=profile(.vision);routes.search=profile(.search);settings.services=routes;settings.runtimeSearchRequested=true;settings.persona="private-role-description"
         let image=try CameraFrame(jpeg:Data([0xff,0xd8,0xff,0xd9]),source:.user)
         let reply=try await APIClient.reply(settings:settings,key:"chat-only",history:[Message(role:"assistant",content:"private-older-turn"),Message(role:"user",content:"请看看杯子并查查资料。")],memories:"private-memory",actions:["hello"],image:image,session:session,serviceKey:{kind,_ in kind == .vision ? "vision-only":"search-only"})
         let requests=recorder.values;XCTAssertEqual(requests.count,3)
@@ -101,14 +101,14 @@ final class ServiceRoutingTests:XCTestCase {
         XCTAssertNil(reply.action);XCTAssertTrue(reply.hasBodyDecision);XCTAssertEqual(reply.sources.first?.url,"https://source.example/page")
     }
     func testConfiguredSearchDoesNotRunUnlessThisTurnEnablesIt()async throws {
-        let session=session();defer{session.invalidateAndCancel();ServiceURLProtocol.handler=nil};let recorder=RequestRecorder()
+        let session=self.session();defer{session.invalidateAndCancel();ServiceURLProtocol.handler=nil};let recorder=RequestRecorder()
         ServiceURLProtocol.handler={request in recorder.add(request);return(200,try self.response(#"{"reply":"你好。","decision":"none"}"#))}
-        var settings=settings(),routes=ServiceRouting();routes.search=profile(.search);settings.services=routes
+        var settings=self.settings(),routes=ServiceRouting();routes.search=profile(.search);settings.services=routes
         let reply=try await APIClient.reply(settings:settings,key:"chat",history:[Message(role:"user",content:"你好")],memories:"",actions:[],session:session,serviceKey:{_,_ in XCTFail("No independent key should be read");return ""})
         XCTAssertEqual(recorder.values.count,1);XCTAssertTrue(reply.sources.isEmpty)
     }
     func testJapaneseSupplementUsesOnlyChatCredentialAndPreservesSources()async throws {
-        let session=session();defer{session.invalidateAndCancel();ServiceURLProtocol.handler=nil};let recorder=RequestRecorder()
+        let session=self.session();defer{session.invalidateAndCancel();ServiceURLProtocol.handler=nil};let recorder=RequestRecorder()
         ServiceURLProtocol.handler={request in
             recorder.add(request)
             if request.url?.host=="search.example" {return(200,try JSONSerialization.data(withJSONObject:["results":[["title":"资料","url":"https://source.example/one","snippet":"外部资料"]]]))}
@@ -119,27 +119,27 @@ final class ServiceRoutingTests:XCTestCase {
             }
             return(200,try self.response(#"{"reply":"欢迎。","decision":"none"}"#))
         }
-        var settings=settings(),routes=ServiceRouting();routes.search=profile(.search);settings.services=routes;settings.runtimeSearchRequested=true;settings.runtimeContext=CompanionContext();settings.runtimeContext?.speechLanguage="ja"
+        var settings=self.settings(),routes=ServiceRouting();routes.search=profile(.search);settings.services=routes;settings.runtimeSearchRequested=true;settings.runtimeContext=CompanionContext();settings.runtimeContext?.speechLanguage="ja"
         let reply=try await APIClient.reply(settings:settings,key:"main-key",history:[Message(role:"user",content:"查一下资料")],memories:"",actions:[],session:session,serviceKey:{_,_ in "search-key"})
         XCTAssertEqual(recorder.values.count,3);XCTAssertEqual(reply.spokenJapanese,"おかえり。");XCTAssertEqual(reply.sources.count,1)
     }
     func testMissingSearchConfigurationStopsBeforeNetwork()async throws {
-        let session=session();defer{session.invalidateAndCancel();ServiceURLProtocol.handler=nil}
+        let session=self.session();defer{session.invalidateAndCancel();ServiceURLProtocol.handler=nil}
         ServiceURLProtocol.handler={_ in XCTFail("Must not send");return(200,Data())}
-        var settings=settings();settings.runtimeSearchRequested=true
+        var settings=self.settings();settings.runtimeSearchRequested=true
         do {_=try await APIClient.reply(settings:settings,key:"chat",history:[Message(role:"user",content:"查一下")],memories:"",actions:[],session:session);XCTFail("Expected configuration error")}catch {XCTAssertTrue(error.localizedDescription.contains("搜索接口"))}
     }
     func testVisionFailureNeverFallsBackToSendingImagesToChat()async throws {
-        let session=session();defer{session.invalidateAndCancel();ServiceURLProtocol.handler=nil};let recorder=RequestRecorder()
+        let session=self.session();defer{session.invalidateAndCancel();ServiceURLProtocol.handler=nil};let recorder=RequestRecorder()
         ServiceURLProtocol.handler={request in recorder.add(request);return(401,Data("private-provider-debug-token".utf8))}
-        var settings=settings(),routes=ServiceRouting();routes.vision=profile(.vision);settings.services=routes
+        var settings=self.settings(),routes=ServiceRouting();routes.vision=profile(.vision);settings.services=routes
         do {
             _=try await APIClient.reply(settings:settings,key:"chat",history:[Message(role:"user",content:"看看")],memories:"",actions:[],image:CameraFrame(jpeg:Data([0xff,0xd8,0xff,0xd9])),session:session,serviceKey:{_,_ in "vision"});XCTFail("Expected HTTP failure")
         }catch {XCTAssertTrue(error.localizedDescription.contains("401"));XCTAssertFalse(error.localizedDescription.contains("private-provider"))}
         XCTAssertEqual(recorder.values.count,1);XCTAssertEqual(recorder.values.first?.url?.host,"vision.example")
     }
     func testAuxiliarySearchResultsRejectUnsafeLinksAndBoundOutput()async throws {
-        let session=session();defer{session.invalidateAndCancel();ServiceURLProtocol.handler=nil}
+        let session=self.session();defer{session.invalidateAndCancel();ServiceURLProtocol.handler=nil}
         ServiceURLProtocol.handler={request in
             let query=try self.object(request)["query"] as? String;XCTAssertEqual(query?.count,128)
             let rows:[[String:Any]]=[["title":"bad","url":"javascript:alert(1)","summary":"bad"]]+(0..<10).map{["title":String(repeating:"title",count:100),"url":"https://result.example/\($0)","summary":String(repeating:"x",count:5000)]}
@@ -151,7 +151,7 @@ final class ServiceRoutingTests:XCTestCase {
         XCTAssertEqual(try JSONDecoder().decode(Message.self,from:JSONEncoder().encode(message)).sources,rows)
     }
     func testBoundedResponseAndMalformedAudioReturnControlledErrors()async throws {
-        let session=session();defer{session.invalidateAndCancel();ServiceURLProtocol.handler=nil}
+        let session=self.session();defer{session.invalidateAndCancel();ServiceURLProtocol.handler=nil}
         ServiceURLProtocol.handler={_ in (200,Data(repeating:65,count:140_000))}
         do {_=try await ServiceClient.vision(profile(.vision),key:"",question:"颜色",images:[CameraFrame(jpeg:Data([0xff,0xd8,0xff,0xd9]))],session:session);XCTFail("Expected bounded response")}catch {XCTAssertTrue(error.localizedDescription.contains("过大"))}
         let valid=SpeechWAV.encode(Array(repeating:0.1,count:3200));XCTAssertNoThrow(try ServiceClient.validateWAV(valid))
@@ -160,7 +160,7 @@ final class ServiceRoutingTests:XCTestCase {
         let parts=ServiceClient.speechParts(String(repeating:"你好。",count:300));XCTAssertTrue(parts.allSatisfy{$0.count<=240});XCTAssertEqual(parts.joined(),String(repeating:"你好。",count:300))
     }
     func testRemoteASRReturnsTextAndDoesNotPutAPIKeyInMultipart()async throws {
-        let session=session();defer{session.invalidateAndCancel();ServiceURLProtocol.handler=nil}
+        let session=self.session();defer{session.invalidateAndCancel();ServiceURLProtocol.handler=nil}
         ServiceURLProtocol.handler={request in XCTAssertFalse(String(decoding:request.httpBody!,as:UTF8.self).contains("asr-private-key"));return(200,Data(#"{"text":"今天过得怎么样？","duration_ms":1000}"#.utf8))}
         let text=try await ServiceClient.transcribe(profile(.asr),key:"asr-private-key",wav:SpeechWAV.encode(Array(repeating:0.1,count:3200)),session:session)
         XCTAssertEqual(text,"今天过得怎么样？")
