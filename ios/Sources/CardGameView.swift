@@ -14,6 +14,7 @@ import WebKit
     private var lifecycle=UUID()
     private var networkTasks:[UUID:Task<Void,Never>]=[:]
     private var suspended=false
+    private var closing=false
     private let redirects=CardGameNoRedirect()
     init(store:LocalStore){self.store=store;super.init()}
     func start() async {
@@ -28,6 +29,13 @@ import WebKit
         }catch{self.error=error.localizedDescription}
     }
     func dispose(){lifecycle=UUID();networkTasks.values.forEach{$0.cancel()};networkTasks.removeAll();webView?.configuration.userContentController.removeScriptMessageHandler(forName:"qibanGame",contentWorld:.page);webView?.stopLoading();webView=nil;server?.stop();server=nil}
+    func close(_ finished:@escaping()->Void){
+        guard !closing else{return};closing=true
+        Task {defer{closing=false};do{
+            if let view=webView{_ = try await view.callAsyncJavaScript("if(window.QibanCards) await window.QibanCards.flush();",arguments:[:],in:nil,contentWorld:.page)}
+            finished()
+        }catch{self.error="存档未写入，请稍后再返回："+error.localizedDescription}}
+    }
     func suspend(_ flag:Bool){suspended=flag;if flag{networkTasks.values.forEach{$0.cancel()};networkTasks.removeAll()};webView?.evaluateJavaScript(flag ? "window.QibanCards?.suspend()":"window.QibanCards?.resume()")}
     func install(_ url:URL){
         guard !importingBusy else{return};importingBusy=true
@@ -85,12 +93,12 @@ private final class CardGameNoRedirect:NSObject,URLSessionTaskDelegate,@unchecke
     init(store:LocalStore,onClose:@escaping()->Void){_controller=StateObject(wrappedValue:CardGameController(store:store));self.onClose=onClose}
     var body:some View {
         VStack(spacing:0){
-            HStack{Button(action:onClose){Label("陪伴",systemImage:"chevron.left")};Spacer();Text("游戏").font(.headline);Spacer();Button("导入立绘"){controller.importing=true}.disabled(controller.importingBusy)}.padding(.horizontal,18).padding(.vertical,10)
+            HStack{Button{controller.close(onClose)}label:{Label("陪伴",systemImage:"chevron.left")};Spacer();Text("游戏").font(.headline);Spacer();Button("导入立绘"){controller.importing=true}.disabled(controller.importingBusy)}.padding(.horizontal,18).padding(.vertical,10)
             if let view=controller.webView{CardGameSurface(view:view)}else if controller.error==nil{ProgressView("正在摆好牌桌…").frame(maxWidth:.infinity,maxHeight:.infinity)}
             if controller.importingBusy{ProgressView("正在校验并导入立绘…").padding(8)}
             if let error=controller.error{HStack{Text(error).font(.caption);Button("关闭提示"){controller.error=nil}}.padding(12).foregroundStyle(.red)}
         }.background(Color(red:0.08,green:0.09,blue:0.11)).preferredColorScheme(.dark).tint(.white)
-        .task{await controller.start()}.onDisappear{controller.dispose()}.onChange(of:scenePhase){controller.suspend($0 == .background)}
+        .interactiveDismissDisabled().task{await controller.start()}.onDisappear{controller.dispose()}.onChange(of:scenePhase){controller.suspend($0 == .background)}
         .sheet(isPresented:$controller.importing){CharacterDocumentPicker{result in controller.importing=false;do{if let url=try result.get(){controller.install(url)}}catch{controller.error=error.localizedDescription}}}
     }
 }
