@@ -9,7 +9,7 @@ enum SpokenDialogue {
     private static let stageWords = ["微微","轻轻","缓缓","轻声","柔声","低声","脸颊","眼睛","眼神","眼眸","肩膀","指尖","双唇","唇角","嘴角","抬手","抬起","低头","转身","转过","垂下","偏过","侧过","看着","望着","笑着","笑了","说道","说着","回答道","问道","心想","心里","内心","默默","呼吸","脸红","害羞地","smile","blush","whisper","looks at","turns","nods"]
     private static let speechTags = ["台词：","台词:","对白：","对白:","对话：","对话:","说：","说:","答：","答:","speech:"]
 
-    static func explicit(_ input:String)->String {finish(withoutStages(prepare(input)))}
+    static func explicit(_ input:String)->String {finish(withoutStages(prepare(input,stageEmphasis:false)))}
     static func dialogue(_ input:String)->String {
         let text=withoutStages(prepare(input)),quotes=quoted(text)
         guard !quotes.isEmpty else{return finish(remainder(text))}
@@ -29,10 +29,11 @@ enum SpokenDialogue {
         let tail=remainder(String(text[previous...]));if hasWords(tail){pieces.append(tail)}
         return finish(pieces.joined(separator:"\n"))
     }
-    private static func prepare(_ input:String)->String {
+    private static func prepare(_ input:String,stageEmphasis:Bool=true)->String {
         var value=input
-        for pattern in [#"```[\s\S]*?```"#,#"(?is)<(think|analysis|reasoning)>[\s\S]*?(?:</\1>|$)"#,#"https?://\S+"#,
-                        #"(?s)(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)"#] {
+        var patterns=[#"```[\s\S]*?```"#,#"(?is)<(think|analysis|reasoning)>[\s\S]*?(?:</\1>|$)"#,#"https?://\S+"#]
+        if stageEmphasis {patterns.append(#"(?s)(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)"#)}
+        for pattern in patterns {
             value=value.replacingOccurrences(of:pattern,with:"",options:.regularExpression)
         }
         return value
@@ -62,7 +63,7 @@ enum SpokenDialogue {
         return result
     }
     private static func directParenthesis(_ value:String)->Bool {
-        guard !isMental(value),!stageWords.contains(where:{value.lowercased().contains($0)}),
+        guard !isMental(value),!value.contains("想了想"),!stageWords.contains(where:{value.lowercased().contains($0)}),
               value.range(of:#"^(?:我|你|我们|咱|你好|欢迎|嗯|唔|谢谢|对不起|别|请|おかえり|ただいま|うん|はい)"#,options:.regularExpression) != nil else{return false}
         return true
     }
