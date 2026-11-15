@@ -63,7 +63,7 @@ struct APIClient {
         if !key.isEmpty { request.setValue("Bearer " + key, forHTTPHeaderField: "Authorization") }
         let images = (image.map{[$0]} ?? [])+settings.runtimeImages
         guard images.count <= 3,images.allSatisfy({$0.isFresh()}) else {throw CompanionError.message("图片已过期或超过单次3张上限，请重新发送。")}
-        var promptSettings = settings;var context = settings.runtimeContext ?? CompanionContext();context.imageSources = images.map{$0.caption};promptSettings.runtimeContext = context
+        var promptSettings = settings;var context = settings.runtimeContext ?? CompanionContext();if !context.externalVision {context.imageSources = images.map{$0.caption}};promptSettings.runtimeContext = context
         let system = try PersonaPrompt.compose(settings:promptSettings,memories:memories,actions:DialogueMotion.allowed(actions),hasImage:!images.isEmpty)
         // Bound both history count and payload size; never silently send the entire archive.
         var turns: [ChatRequest.Turn] = []
@@ -90,9 +90,10 @@ struct APIClient {
     static func reply(settings: APISettings, key: String, history: [Message], memories: String,
                       actions: [String], image: CameraFrame? = nil, session suppliedSession: URLSession? = nil,serviceKey:ServiceClient.KeyReader = ServiceClient.readKey) async throws -> DialogueReply {
         let services=settings.services ?? ServiceRouting(),images=(image.map{[$0]} ?? [])+settings.runtimeImages
+        guard images.count<=3,images.allSatisfy({$0.isFresh()}) else {throw CompanionError.message("图片已过期或超过单次3张上限，请重新发送。")}
         let useVision=services.vision.enabled && !images.isEmpty
         var chatSettings=settings
-        if useVision {chatSettings.runtimeImages=[]}
+        if useVision {chatSettings.runtimeImages=[];var context=settings.runtimeContext ?? CompanionContext();context.externalVision=true;context.imageSources=images.map(\.caption);chatSettings.runtimeContext=context}
         // Capture and validate this turn's attachments before auxiliary network calls.
         var request = try makeRequest(settings: chatSettings, key: key, history: history, memories: memories, actions: actions, image:useVision ? nil:image)
         let configuration = URLSessionConfiguration.ephemeral

@@ -95,7 +95,7 @@ final class ServiceRoutingTests:XCTestCase {
             case "search.example":
                 XCTAssertEqual(request.value(forHTTPHeaderField:"Authorization"),"Bearer search-only");XCTAssertFalse(body.contains("image_url"));XCTAssertFalse(body.contains("private-older-turn"));XCTAssertFalse(body.contains("private-role-description"))
             default:
-                XCTAssertEqual(request.value(forHTTPHeaderField:"Authorization"),"Bearer chat-only");XCTAssertFalse(body.contains("data:image"));XCTAssertTrue(body.contains("image_observations"));XCTAssertTrue(body.contains("web_results"));XCTAssertTrue(body.contains("private-role-description"));XCTAssertFalse(body.contains("vision-only"));XCTAssertFalse(body.contains("search-only"))
+                XCTAssertEqual(request.value(forHTTPHeaderField:"Authorization"),"Bearer chat-only");XCTAssertFalse(body.contains("data:image"));XCTAssertTrue(body.contains("image_observations"));XCTAssertTrue(body.contains("web_results"));XCTAssertTrue(body.contains("private-role-description"));XCTAssertFalse(body.contains("vision-only"));XCTAssertFalse(body.contains("search-only"));XCTAssertTrue(body.contains("通过独立识图服务"));XCTAssertFalse(body.contains("本轮没有附带镜头图片或用户图片"))
             }
         }
         XCTAssertNil(reply.action);XCTAssertTrue(reply.hasBodyDecision);XCTAssertEqual(reply.sources.first?.url,"https://source.example/page")
