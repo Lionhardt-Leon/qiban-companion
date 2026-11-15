@@ -83,7 +83,7 @@
     if(event.type==='ttsMode'){localStorage.setItem('fritia_qiban_use_app_tts',event.enabled ? 'true':'false');notice(event.enabled ? '通讯使用 App 全局配音。':'通讯使用原项目 MiMO 参考音色，需在通讯设置中配置提供商并开启语音回复。');return;}
     const state=streams.get(event.id);if(!state) return;
     if(event.type==='fetchHeaders') {
-      const stream=new ReadableStream({start(controller){state.controller=controller;},pull(){state.resume?.();state.resume=null;},cancel(){state.resume?.();call('abort',{id:event.id}).catch(()=>{});streams.delete(event.id);}});
+      const stream=new ReadableStream({start(controller){state.controller=controller;},pull(){state.resume?.();state.resume=null;},cancel(){state.resume?.();call('abort',{id:event.id}).catch(()=>{});streams.delete(event.id);}},{highWaterMark:512*1024,size:chunk=>chunk.byteLength});
       const empty=[204,205,304].includes(event.status);
       state.resolve(new Response(empty ? null:stream,{status:event.status,headers:event.headers}));
     } else if(event.type==='fetchChunk') {

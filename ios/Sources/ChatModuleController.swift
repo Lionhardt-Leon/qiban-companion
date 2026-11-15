@@ -188,16 +188,24 @@ enum ChatNativePane:String,Identifiable {case persona,api,speech;var id:String{r
         var headers:[String:String]=[:]
         for (key,value) in http.allHeaderFields {let key=String(describing:key).lowercased();if !["set-cookie","content-encoding","content-length","connection"].contains(key){headers[key]=String(describing:value)}}
         try await emit(["type":"fetchHeaders","id":id,"status":http.statusCode,"headers":headers])
+        try await Self.relay(stream,sse:sse,limit:limit){[weak self] data in
+            guard let self=self else{throw CancellationError()}
+            try await self.emit(["type":"fetchChunk","id":id,"data":data.base64EncodedString()])
+        }
+        try await emit(["type":"fetchEnd","id":id])
+    }
+    /// Byte iteration stays off the main actor; only bounded chunks cross the
+    /// WebKit bridge, with JavaScript stream backpressure between chunks.
+    nonisolated private static func relay(_ stream:URLSession.AsyncBytes,sse:Bool,limit:Int,send:@escaping @Sendable(Data) async throws->Void) async throws {
         var chunk=Data(),total=0;chunk.reserveCapacity(64*1024)
         for try await byte in stream {
             chunk.append(byte);total+=1;guard total<=limit else{throw CompanionError.message("网络响应达到大小上限，已停止读取。")}
-            if chunk.count>=64*1024 {try Task.checkCancellation();try await emit(["type":"fetchChunk","id":id,"data":chunk.base64EncodedString()]);chunk.removeAll(keepingCapacity:true)}
+            if chunk.count>=64*1024 {try Task.checkCancellation();try await send(chunk);chunk.removeAll(keepingCapacity:true)}
             // SSE events must reach the JavaScript client before a long-lived
             // connection fills a large transport chunk.
-            else if sse,byte==10,(chunk.suffix(2)==Data([10,10]) || chunk.suffix(4)==Data([13,10,13,10])) {try Task.checkCancellation();try await emit(["type":"fetchChunk","id":id,"data":chunk.base64EncodedString()]);chunk.removeAll(keepingCapacity:true)}
+            else if sse,byte==10,(chunk.suffix(2)==Data([10,10]) || chunk.suffix(4)==Data([13,10,13,10])) {try Task.checkCancellation();try await send(chunk);chunk.removeAll(keepingCapacity:true)}
         }
-        if !chunk.isEmpty {try await emit(["type":"fetchChunk","id":id,"data":chunk.base64EncodedString()])}
-        try await emit(["type":"fetchEnd","id":id])
+        if !chunk.isEmpty {try await send(chunk)}
     }
     private func managedRequest(_ original:URLRequest,session:URLSession) async throws -> URLRequest {
         var object=(try JSONSerialization.jsonObject(with:original.httpBody ?? Data())) as? [String:Any] ?? [:]
