@@ -9,16 +9,18 @@ final class ChatModuleServer:@unchecked Sendable {
     private var listener:NWListener?
     private var clients:[UUID:NWConnection]=[:]
     private let root:URL
+    private let bindPort:UInt16
+    private let artRoot:URL?
     let token=UUID().uuidString
     static let port:UInt16=49157
-    var pageURL:URL {URL(string:"http://127.0.0.1:\(Self.port)/\(token)/index.html")!}
-    init(root:URL){self.root=root.standardizedFileURL}
+    var pageURL:URL {URL(string:"http://127.0.0.1:\(bindPort)/\(token)/index.html")!}
+    init(root:URL,port:UInt16=ChatModuleServer.port,artRoot:URL?=nil){self.root=root.standardizedFileURL;self.bindPort=port;self.artRoot=artRoot?.standardizedFileURL}
     func start() async throws {
         try await withCheckedThrowingContinuation { (continuation:CheckedContinuation<Void,Error>) in
             queue.async {
                 do {
                     let parameters=NWParameters.tcp
-                    parameters.requiredLocalEndpoint = .hostPort(host:"127.0.0.1",port:NWEndpoint.Port(rawValue:Self.port)!)
+                    parameters.requiredLocalEndpoint = .hostPort(host:"127.0.0.1",port:NWEndpoint.Port(rawValue:self.bindPort)!)
                     let listener=try NWListener(using:parameters);self.listener=listener
                     var answered=false
                     listener.stateUpdateHandler={state in
@@ -56,8 +58,10 @@ final class ChatModuleServer:@unchecked Sendable {
            path.hasPrefix("/"+token+"/") {
             let relative=String(path.dropFirst(token.count+2))
             if VoiceManifest.safePath(relative) {
-                let file=root.appendingPathComponent(relative).standardizedFileURL
-                if file.path.hasPrefix(root.path+"/"),let size=try? file.resourceValues(forKeys:[.fileSizeKey]).fileSize,size<=64*1024*1024,
+                let base=relative.hasPrefix("art/") ? (artRoot ?? root):root
+                let name=relative.hasPrefix("art/") && artRoot != nil ? String(relative.dropFirst(4)):relative
+                let file=base.appendingPathComponent(name).standardizedFileURL
+                if file.path.hasPrefix(base.path+"/"),let size=try? file.resourceValues(forKeys:[.fileSizeKey]).fileSize,size<=64*1024*1024,
                    let data=try? Data(contentsOf:file,options:.mappedIfSafe) {body=data;status="200 OK";mime=Self.mime(file.pathExtension)}
             }
         }

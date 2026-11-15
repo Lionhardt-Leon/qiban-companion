@@ -1,6 +1,7 @@
 research/
 dist/
 node_modules/
+.room-server-key
 ios/Generated/
 ios/*.xcodeproj/
 ios/build/
