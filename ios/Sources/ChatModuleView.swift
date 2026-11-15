@@ -27,6 +27,7 @@ import UniformTypeIdentifiers
                     }.disabled(!controller.ready)
                     Button("停止朗读"){controller.stopSpeech()}
                     Button("重新打开页面"){controller.refresh()}.disabled(!controller.ready)
+                    Button("导入／更新 .qchat 模块"){beginImport()}
                     Link("原项目与开源授权",destination:URL(string:ChatModuleInfo.source)!)
                 } label:{Image(systemName:"ellipsis.circle").font(.title3)}
             }.padding(.horizontal,16).padding(.vertical,11)
@@ -45,7 +46,7 @@ import UniformTypeIdentifiers
         .onChange(of:scenePhase){controller.suspend($0 == .background)}
         .sheet(isPresented:$importing) {CharacterDocumentPicker {result in
             importing=false
-            do {if let url=try result.get(){controller.install(url)}}catch{controller.error=error.localizedDescription}
+            do {if let url=try result.get(){controller.install(url)}else{Task{await controller.start()}}}catch{controller.error=error.localizedDescription}
         }}
         .sheet(item:$controller.pane,onDismiss:{if controller.ready{controller.refresh()}}) {pane in
             switch pane {
@@ -71,6 +72,14 @@ import UniformTypeIdentifiers
                 Text("对话程序保存在本机，聊天只连接你选择的模型或工具服务。原项目 GPLv3 授权、署名及对应源码随模块提供。iOS 使用远程 HTTP／SSE MCP，不运行电脑的 stdio／npx 进程。")
                     .font(.footnote).foregroundStyle(.secondary)
             }.padding(26)
+        }
+    }
+    private func beginImport() {
+        Task {
+            do {
+                if let view=controller.webView {_=try await view.callAsyncJavaScript("if(window.QibanNative) await window.QibanNative.flush();",arguments:[:],in:nil,contentWorld:.page)}
+                controller.dispose();importing=true
+            }catch{controller.error=error.localizedDescription}
         }
     }
 }
