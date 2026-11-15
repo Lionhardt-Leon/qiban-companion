@@ -26,6 +26,9 @@ jobs:
         run: brew install xcodegen
       - name: Check spoken dialogue examples
         run: python3 tools/check-spoken-dialogue.py
+      - name: Check communications message operations
+        if: inputs.run_tests
+        run: node tools/check-chat-messages.mjs
       - name: Verify speech cancellation lifecycle
         if: inputs.run_tests
         run: python3 tools/probe-speech-cancellation.py

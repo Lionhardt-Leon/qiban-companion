@@ -97,6 +97,7 @@ private final class SpeechEngineWorker:@unchecked Sendable {
     }
     func speak(_ message:Message,preferences:SpeechPreferences,remote:ServiceEndpoint?=nil,inCall:Bool=false,completion:((Bool)->Void)?=nil) {
         stop();speakingMessageID=message.id;error=nil
+        guard preferences.isEnabled else {completion?(true);return}
         do {
             guard !importing else {throw CompanionError.message("正在导入语音包，请稍候。")}
             try preferences.validate();let text=try preferences.text(for:message)

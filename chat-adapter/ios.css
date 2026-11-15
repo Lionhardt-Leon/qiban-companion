@@ -6,3 +6,14 @@ button,input,textarea{touch-action:manipulation}
 #qiban-native-notice[hidden]{display:none}
 .voice-bubble:has(.qiban-voice-caption){flex-wrap:wrap;max-width:min(78vw,600px);height:auto;text-align:left}
 .qiban-voice-caption{flex-basis:100%;white-space:pre-wrap;line-height:1.5;font-size:14px;padding-top:6px}
+.qiban-message-meta{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.qiban-message-controls{display:inline-flex;align-items:center;gap:4px;margin-left:auto}
+.qiban-message-controls button{display:grid;place-items:center;min-width:36px;min-height:36px;padding:2px 6px;border:0;border-radius:10px;background:transparent;color:#646ba2;font-size:25px;line-height:1}
+.qiban-message-controls button:active{background:#e7e9ff}.qiban-message-controls button:disabled{opacity:.35}
+.message-content{-webkit-touch-callout:none}
+.qiban-message-overlay{position:fixed;inset:0;z-index:100000;display:flex;align-items:center;justify-content:center;padding:20px;background:#14172b66;backdrop-filter:blur(4px)}
+.qiban-message-dialog{display:flex;flex-direction:column;gap:12px;width:min(100%,520px);max-height:80dvh;overflow:auto;border:1px solid #e6e8f0;border-radius:22px;padding:22px;background:white;box-shadow:0 16px 50px #14172b33;color:#252a40}
+.qiban-message-dialog h3{margin:0 0 6px;font-size:20px}.qiban-message-dialog p{margin:0;font-size:13px;color:#6c7388}
+.qiban-message-dialog button{min-height:46px;border:1px solid #e5e7f1;background:#f6f7fc;border-radius:12px;color:#333b60;font-size:16px;padding:10px 16px}
+.qiban-message-dialog button.is-primary{background:#5758ff;color:white}.qiban-message-dialog button.is-destructive{color:#c83b46}
+.qiban-message-editor{box-sizing:border-box;width:100%;min-height:190px;max-height:45dvh;resize:vertical;border:1px solid #dce0ee;border-radius:12px;padding:12px;color:#252a40;background:white;font:inherit;line-height:1.6;font-size:16px}

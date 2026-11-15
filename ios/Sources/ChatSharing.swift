@@ -53,7 +53,7 @@ extension LocalStore {
         let status="\n【本App当前界面】现在是文字通讯模式，模型场景暂停；没有执行新的骨骼或触碰动作。不要把文字描写当作身体已执行。用户随时可以回到模型陪伴页面。"
         let preferences=archive.settings.speech ?? SpeechPreferences()
         return ["contacts":library.cards.map{chatContactSnapshot($0)},"speechFormat":SpokenDialogue.textInstruction,"globalPrompt":global+status,"bodyNotice":status,
-                "userName":library.userName.isEmpty ? "你":library.userName,"language":preferences.language,"autoPlay":preferences.autoPlay,
+                "userName":library.userName.isEmpty ? "你":library.userName,"language":preferences.language,"autoPlay":preferences.autoPlay,"speechEnabled":preferences.isEnabled,
                 "model":archive.settings.model,"temperature":archive.settings.temperature,
                 "configured":!archive.settings.endpoint.isEmpty && !archive.settings.model.isEmpty,
                 "searchEnabled":archive.settings.services?.search.enabled==true,

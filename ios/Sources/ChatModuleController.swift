@@ -14,6 +14,7 @@ enum ChatNativePane:String,Identifiable {case persona,api,speech;var id:String{r
     @Published var pane:ChatNativePane?
     @Published var exportFile:ChatFileExport?
     @Published var appTTSMode=true
+    @Published private(set) var speechEnabled=true
     let library=ChatModuleLibrary()
     let store:LocalStore
     let speech:CompanionSpeech
@@ -24,6 +25,7 @@ enum ChatNativePane:String,Identifiable {case persona,api,speech;var id:String{r
     private var server:ChatModuleServer?
     private var requests:[String:Task<Void,Never>]=[:]
     private var observation:AnyCancellable?
+    private var settingsObservation:AnyCancellable?
     private var sessionID=UUID()
     private var suspended=false
     private var exportContinuation:CheckedContinuation<[String:Any],Error>?
@@ -52,6 +54,9 @@ enum ChatNativePane:String,Identifiable {case persona,api,speech;var id:String{r
             observation=speech.$busy.combineLatest(speech.$status).sink{[weak self] busy,status in
                 Task{@MainActor [weak self] in try? await self?.emit(["type":"speech","busy":busy,"status":status,"id":self?.currentSpeechID ?? ""])}
             }
+            settingsObservation=store.$archive.map{($0.settings.speech ?? SpeechPreferences()).isEnabled}.removeDuplicates().sink{[weak self] enabled in
+                Task{@MainActor [weak self] in guard let self=self else{return};self.speechEnabled=enabled;if !enabled{self.stopSpeech()};try? await self.emit(["type":"ttsState","enabled":enabled])}
+            }
             view.load(URLRequest(url:server.pageURL));ready=true;status="正在连接人设与本地会话…"
         }catch {self.error=error.localizedDescription;status=""}
     }
@@ -64,7 +69,8 @@ enum ChatNativePane:String,Identifiable {case persona,api,speech;var id:String{r
     }
     func suspend(_ value:Bool) {suspended=value;if value{cancelRequests();stopSpeech()}}
     func cancelRequests(){for task in requests.values{task.cancel()};requests.removeAll()}
-    func stopSpeech(){speechRevision=UUID();speechQueue=[];currentSpeechID="";speech.stop()}
+    func stopSpeech(){speechRevision=UUID();speechQueue=[];currentSpeechID="";speech.stop();Task{try? await emit(["type":"stopWebSpeech"])}}
+    func setSpeechEnabled(_ enabled:Bool){do{try store.setSpeechEnabled(enabled);speechEnabled=enabled;if !enabled{stopSpeech()}}catch{self.error=error.localizedDescription}}
     func close() {
         Task {
             do {
@@ -74,7 +80,7 @@ enum ChatNativePane:String,Identifiable {case persona,api,speech;var id:String{r
         }
     }
     func dispose() {
-        sessionID=UUID();cancelRequests();stopSpeech();observation=nil
+        sessionID=UUID();cancelRequests();stopSpeech();observation=nil;settingsObservation=nil
         webView?.configuration.userContentController.removeScriptMessageHandler(forName:"qibanChat",contentWorld:.page)
         webView?.stopLoading();webView?.navigationDelegate=nil;webView=nil;ready=false;server?.stop();server=nil
         finishExport(saved:false)
@@ -132,6 +138,7 @@ enum ChatNativePane:String,Identifiable {case persona,api,speech;var id:String{r
             };return ["started":true]
         case "abort":if let id=body["id"] as? String{requests[id]?.cancel()};return ["cancelled":true]
         case "speak":return try await speak(body)
+        case "setTTSEnabled":setSpeechEnabled(body["enabled"] as? Bool ?? false);return ["enabled":speechEnabled]
         case "speechText":return ["text":try dialogueText(body)]
         case "stopSpeech":stopSpeech();return ["stopped":true]
         case "open":
@@ -248,6 +255,7 @@ enum ChatNativePane:String,Identifiable {case persona,api,speech;var id:String{r
         guard !suspended else{throw CompanionError.message("App 已挂起，已停止朗读。")}
         let ticket=speechRevision
         let automatic=body["automatic"] as? Bool ?? false,preferences=store.archive.settings.speech ?? SpeechPreferences()
+        guard preferences.isEnabled else{return ["skipped":true]}
         if automatic && !preferences.autoPlay{return ["skipped":true]}
         let text=body["text"] as? String ?? "";guard text.count<=100_000 else{throw CompanionError.message("朗读正文过长。")}
         let clean=try dialogueText(body);guard !clean.isEmpty else{return ["skipped":true,"spokenChinese":""]}

@@ -22,6 +22,10 @@ struct SpeechSettingsView:View {
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 Section("全局配音") {
+                    Toggle("启用 TTS 语音",isOn:Binding(get:{draft.isEnabled},set:{draft.enabled=$0}))
+                        .accessibilityIdentifier("speechEnabled")
+                    Text(draft.isEnabled ? "控制陪伴与通讯模式的所有 TTS 配音。":"TTS 已关闭，保留文字对话；可随时重新开启。")
+                        .font(.caption).foregroundStyle(.secondary)
                     Picker(store.archive.settings.services?.tts.enabled==true ? "本机备用音色／语言":"音色",selection:$draft.voiceID) {
                         ForEach(choices){voice in Text(voice.title).tag(voice.id)}
                         if !choices.contains(where:{$0.id==draft.voiceID}) {Text("尚未导入的音色："+draft.voiceID).tag(draft.voiceID)}
@@ -32,7 +36,7 @@ struct SpeechSettingsView:View {
                             Label(draft.autoPlay ? "已开启":"已关闭",systemImage:draft.autoPlay ? "checkmark.circle.fill":"circle")
                                 .foregroundStyle(draft.autoPlay ? .green:.secondary)
                         }.frame(maxWidth:.infinity,alignment:.leading).contentShape(Rectangle())
-                    }.buttonStyle(.plain).accessibilityValue(draft.autoPlay ? "1":"0").accessibilityIdentifier("speechAutoPlay")
+                    }.buttonStyle(.plain).disabled(!draft.isEnabled).accessibilityValue(draft.autoPlay ? "1":"0").accessibilityIdentifier("speechAutoPlay")
                     Text(draft.language=="ja" ? "角色说日语，聊天显示中文译文；日文原话可在聊天记录中查看。需要 AI 接口返回日文原话；不会把中文台词当作日语强读。":"角色说中文。选择训练音色后，文字对话和语音通话使用同一套配音。")
                         .font(.caption).foregroundStyle(.secondary)
                     Slider(value:$draft.speed,in:0.7...1.3){Text("语速")};Text("语速 \(draft.speed,specifier:"%.2f")×").font(.caption)
@@ -52,7 +56,7 @@ struct SpeechSettingsView:View {
                     Button("试听当前音色") {
                         let sample=Message(role:"assistant",content:"下午好，我在这里陪着你。",spokenJapanese:"こんにちは。今日は何を話しましょうか。")
                         speech.speak(sample,preferences:draft,remote:store.archive.settings.services?.tts)
-                    }.disabled(speech.importing || store.busy).accessibilityIdentifier("previewSpeechVoice")
+                    }.disabled(!draft.isEnabled || speech.importing || store.busy).accessibilityIdentifier("previewSpeechVoice")
                     Button("停止朗读"){speech.stop()}.disabled(!speech.busy)
                     if !speech.status.isEmpty {Text(speech.status).font(.caption)}
                     if let error=speech.error {Text(error).foregroundStyle(.red).font(.caption)}
@@ -66,6 +70,10 @@ struct SpeechSettingsView:View {
             }.navigationTitle("离线语音").navigationBarTitleDisplayMode(.inline)
         }
         .onAppear {if !loaded {draft=store.archive.settings.speech ?? SpeechPreferences();loaded=true}}
+        .onChange(of:draft.enabled) {value in
+            guard loaded,(value != false) != (store.archive.settings.speech ?? SpeechPreferences()).isEnabled else{return}
+            do {try store.setSpeechEnabled(value != false);speech.stop();notice=value == false ? "TTS 已关闭。":"TTS 已开启。"}catch{speech.error=error.localizedDescription}
+        }
         .onChange(of:draft.voiceID) {id in if let choice=choices.first(where:{$0.id==id}) {draft.language=choice.language}}
         .onChange(of:speech.importing) {value in
             if !value,speech.error==nil,!speech.voices.isEmpty {

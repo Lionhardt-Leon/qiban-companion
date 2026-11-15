@@ -6,6 +6,8 @@
   const available = Boolean(handler);
   const streams = new Map(), pending = new Map(), failures = new Map();
   let profile = null, speechState = { busy: false, id: '' };
+  let speechTicket=0,speechAbort=new AbortController();
+  function stopWebSpeech(){speechTicket++;speechAbort.abort();speechAbort=new AbortController();document.dispatchEvent(new CustomEvent('qiban-stop-web-speech'));}
   const rawFetch = window.fetch.bind(window);
   const base64 = bytes => {
     let result = '';
@@ -73,6 +75,8 @@
     });
   }
   async function receive(event) {
+    if(event.type==='stopWebSpeech'){stopWebSpeech();return;}
+    if(event.type==='ttsState'){if(profile)profile.speechEnabled=event.enabled;if(!event.enabled)stopWebSpeech();document.dispatchEvent(new CustomEvent('qiban-tts-state',{detail:event}));return;}
     if (event.type==='speech') {
       speechState=event;
       if(event.status?.startsWith('语音失败'))notice(event.status);
@@ -105,13 +109,19 @@
     }catch(error){await call('cancelFile',{id:opened.id}).catch(()=>{});throw error;}
   }
   async function speak(fields) {
+    if(!window.QibanNative.ttsEnabled())return {skipped:true};
     const result=await call('speak',fields);
     if(result.spokenJapanese || typeof result.spokenChinese==='string') document.dispatchEvent(new CustomEvent('qiban-speech-translated',{detail:{...fields,spokenJapanese:result.spokenJapanese,spokenChinese:result.spokenChinese}}));
     return result;
   }
   window.QibanNative={available,call,receive,saveBlob,speak,notice,
+    ttsEnabled(){return available && profile?.speechEnabled!==false;},
+    speechTicket(){return speechTicket;},
+    ttsSignal(){return speechAbort.signal;},
+    async setTTSEnabled(enabled){const result=await call('setTTSEnabled',{enabled});await receive({type:'ttsState',enabled:result.enabled});return result;},
+    async stopAllSpeech(){stopWebSpeech();await call('stopSpeech');},
     async spokenText(text){return (await call('speechText',{text})).text;},
-    appSpeechEnabled(){return available && localStorage.getItem('fritia_qiban_use_app_tts')!=='false';},
+    appSpeechEnabled(){return this.ttsEnabled() && localStorage.getItem('fritia_qiban_use_app_tts')!=='false';},
     async initialize(){
       if(!available)return null;
       profile=await call('bootstrap');window.QibanProfile=profile;installStorage(profile.storage);

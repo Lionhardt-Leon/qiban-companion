@@ -43,13 +43,44 @@ patch('src/js/storage.js','prompt: clampText(raw.prompt, 60000)','prompt: clampT
 patch('src/js/storage.js','examples: clampText(raw.examples, 30000)','examples: clampText(raw.examples, 2000000)')
 patch('src/js/storage.js','text: clampText(raw.text, 12000)','text: clampText(raw.text, 100000)')
 patch('src/js/storage.js','const name = clampText(raw.name, 80);','const name = clampText(raw.name, 120);')
-patch('src/js/chat_engine.js','async function buildVoiceReplyAttachment(text, character) {', '''async function buildVoiceReplyAttachment(text, character) {
-  if (window.QibanNative?.available) {
+
+patch('src/js/storage.js','  const normalized = normalizeAppStore({ ...store, updatedAt: now() });', """  store=window.QibanNative?.reconcileStore?.(store) || store;
+  const normalized = normalizeAppStore({ ...store, updatedAt: now() });
+  if(window.QibanNative?.saveDraftStore?.(store,normalized))return normalized;""")
+for path in ['src/js/chat_engine.js','src/js/tool_chat_engine.js']:
+    patch(path,'recordLongTermMemoryTurn({','if(!window.QibanNative?.isDraftStore?.(nextStore)) recordLongTermMemoryTurn({')
+    patch(path,'markFailedTurn(conversation.id,','if(!window.QibanNative?.isDraftStore?.(nextStore)) markFailedTurn(conversation.id,')
+    patch(path,'const memoryMessage = await buildLongTermMemoryMessage({','const memoryMessage = await buildLongTermMemoryMessage({\n    qibanMessageIds:window.QibanNative?.memoryIDs?.(store),')
+patch('src/js/long_term_memory.js','    if (result.memories.length === 0 && result.edges.length === 0) return null;', '    const limited=window.QibanNative?.limitMemory?.(result,loadRawStore(),options.qibanMessageIds);\n    if(limited)Object.assign(result,limited);\n    if (result.memories.length === 0 && result.edges.length === 0) return null;')
+patch('src/js/tts_engine.js','response = await fetch(request.url, request.init);',"response = await fetch(request.url,{...request.init,...(window.QibanNative?.available ? {signal:window.QibanNative.ttsSignal()}:{})});")
+files['src/js/ui.js']=b"import {initQibanMessageActions,decorateQibanMessage} from './qiban_messages.js';\n"+files['src/js/ui.js']
+patch('src/js/ui.js','  state.store = loadAppStore();',"""  state.store = loadAppStore();
+  initQibanMessageActions({getStore:()=>state.store,isBusy:()=>pendingConversationReplies>0 || Boolean(state.activeToolRun),changeBusy:delta=>{pendingConversationReplies=Math.max(0,pendingConversationReplies+delta);},refresh:()=>renderAll(),stopPlayback:()=>stopVoicePlayback(),chatSettings:key=>buildCharacterChatSettings(key)});""")
+patch('src/js/ui.js','function commitOutgoingMessage(text, attachments = []) {',"""function commitOutgoingMessage(text, attachments = []) {
+  if(window.QibanNative?.available && pendingConversationReplies>0){window.QibanNative.notice('请等待当前回复完成，输入内容已保留。');return null;}""")
+patch('src/js/ui.js',"    speakerName: '分析员',","    speakerName: window.QibanProfile?.userName || '你',")
+patch('src/js/ui.js',"  name.textContent = message.speakerName || (message.role === 'user' ? '分析员' : '角色');","  name.textContent = message.role==='user' ? (window.QibanProfile?.userName || message.speakerName || '你') : (message.speakerName || '角色');")
+patch('src/js/ui.js',"  return row;\n}\n\nfunction isActiveToolMessage", "  decorateQibanMessage(row,message,getActiveConversation());\n  return row;\n}\n\nfunction isActiveToolMessage")
+patch('src/js/ui.js','const signature = JSON.stringify([message, activeToolMessage,','const signature = JSON.stringify([message, window.QibanNative?.ttsEnabled?.(), pendingConversationReplies>0, activeToolMessage,')
+patch('src/js/ui.js','voiceReplyEnabled: conversation.voiceReplyEnabled === true,','voiceReplyEnabled: conversation.voiceReplyEnabled === true && (!window.QibanNative?.available || window.QibanNative.ttsEnabled()),')
+patch('src/js/ui.js','function isVoiceReplyMessage(message) {',"function isVoiceReplyMessage(message) {\n  if(window.QibanNative?.available && !window.QibanNative.ttsEnabled())return false;")
+patch('src/js/ui.js','  const attachments = message.attachments || [];',"  const attachments = (message.attachments || []).filter(item=>!window.QibanNative?.available || window.QibanNative.ttsEnabled() || item.source!=='tts-reply');")
+patch('src/js/ui.js','function togglePrivateVoiceReply() {',"function togglePrivateVoiceReply() {\n  if(window.QibanNative?.available && !window.QibanNative.ttsEnabled()){window.QibanNative.notice('TTS 已关闭，可点击顶部 TTS 开关重新开启。');return;}")
+patch('src/js/ui.js',"const enabled = Boolean(isPrivate && conversation?.voiceReplyEnabled === true);","const enabled = Boolean(isPrivate && conversation?.voiceReplyEnabled === true && (!window.QibanNative?.available || window.QibanNative.ttsEnabled()));")
+
+patch('src/js/chat_engine.js','async function buildVoiceReplyAttachment(text, character) {', """export async function buildVoiceReplyAttachment(text, character) {
+  if(!window.QibanNative?.available)return qibanOriginalVoiceAttachment(text,character);
+  if(!window.QibanNative.ttsEnabled())return null;
+  const ticket=window.QibanNative.speechTicket();
+  try {
     const spoken=await window.QibanNative.spokenText(text);
-    if(!spoken)return null;
+    if(!spoken || !window.QibanNative.ttsEnabled() || ticket!==window.QibanNative.speechTicket())return null;
     if(window.QibanNative.appSpeechEnabled())return window.QibanNative.voiceAttachment(text);
-    text=spoken;
-  }''')
+    const attachment=await qibanOriginalVoiceAttachment(spoken,character);
+    return window.QibanNative.ttsEnabled() && ticket===window.QibanNative.speechTicket() ? attachment:null;
+  }catch(error){if(!window.QibanNative.ttsEnabled() || ticket!==window.QibanNative.speechTicket())return null;throw error;}
+}
+async function qibanOriginalVoiceAttachment(text, character) {""")
 patch('src/js/chat_engine.js','attachments: [voiceAttachment]','attachments: [voiceAttachment].filter(Boolean)')
 patch('src/js/chat_engine.js','voiceReply: true','voiceReply: Boolean(voiceAttachment)')
 for path in ['src/js/chat_engine.js','src/js/tool_chat_engine.js']:
@@ -61,6 +92,7 @@ for path in ['src/js/chat_engine.js','src/js/tool_chat_engine.js','src/js/roundt
 patch('src/js/roundtable.js', '${speaker.prompt || `你正在扮演 ${speaker.name}。`}', '${window.QibanNative?.available ? window.QibanNative.characterPrompt(speaker) : (speaker.prompt || `你正在扮演 ${speaker.name}。`)}')
 patch('src/js/chat_engine.js','  const system = [','  const system = [\n    window.QibanNative?.available ? window.QibanNative.nativeMemory(character,mode) : \'\',')
 patch('src/js/ui.js','async function toggleVoicePlayback(messageId, attachment) {', '''async function toggleVoicePlayback(messageId, attachment) {
+  if(window.QibanNative?.available && !window.QibanNative.ttsEnabled() && attachment?.source==='tts-reply'){window.QibanNative.notice('TTS 已关闭。');return;}
   if (attachment?.path?.startsWith('qiban-speech:') && window.QibanNative?.available) {
     try { await window.QibanNative.playVoice(messageId, attachment); }
     catch(error) {window.QibanNative.notice('App 配音：'+error.message);} return;
@@ -89,6 +121,8 @@ files['qiban_boot.js']="""try {await window.QibanNative.initialize(); await impo
 catch(error) {document.body.textContent='通讯模块启动失败：'+error.message;if(window.QibanNative?.available)await window.QibanNative.call('pageError',{message:error.message});}
 """.encode('utf-8')
 files['src/js/qiban_native.js']=(ROOT/'chat-adapter/native.js').read_bytes()
+for name,target in [('identity.js','qiban_identity.js'),('message-ops.js','qiban_message_ops.js'),('message-actions.js','qiban_messages.js')]:
+    files['src/js/'+target]=(ROOT/'chat-adapter'/name).read_bytes()
 files['qiban_ios.css']=(ROOT/'chat-adapter/ios.css').read_bytes()
 files['LICENSE.txt']=files['LICENSE']
 notice=f'''Fritia Online Chat / QingchenWait
@@ -113,7 +147,7 @@ for path in (ROOT/'chat-adapter').glob('*'):
     if path.is_file():site['source/adapters/'+path.name]=path.read_bytes()
 site['source/README.txt']=notice.encode('utf-8')
 manifest={'schema':'qiban-chat-module/1','revision':REVISION,'upstream':UPSTREAM,'license':'GPL-3.0','files':{name:hashlib.sha256(data).hexdigest() for name,data in site.items()}}
-out=ROOT/'dist/Fritia-Chat-iOS-v2.qchat'
+out=ROOT/'dist/Fritia-Chat-iOS-v3.qchat'
 out.parent.mkdir(parents=True,exist_ok=True)
 with zipfile.ZipFile(out,'w',compression=zipfile.ZIP_STORED) as z:
     def write(name,data):
@@ -125,5 +159,5 @@ digest=hashlib.sha256(out.read_bytes()).hexdigest()
 native=ROOT/'ios/Sources/ChatModuleLibrary.swift'
 native.write_text(re.sub(r'static let packageSHA256 = "[^"]+"','static let packageSHA256 = "'+digest+'"',native.read_text(encoding='utf-8')),encoding='utf-8')
 report={'file':str(out),'bytes':out.stat().st_size,'sha256':digest,'files':len(site)+1,'upstreamRevision':REVISION,'upstreamZipSHA256':hashlib.sha256(archive.read_bytes()).hexdigest(),'originalAssetsPubliclyUploaded':False,'licenseAndSourceIncluded':True}
-(ROOT/'dist/Chat-Module-v2-manifest.json').write_text(json.dumps(report,ensure_ascii=False,indent=2),encoding='utf-8')
+(ROOT/'dist/Chat-Module-v3-manifest.json').write_text(json.dumps(report,ensure_ascii=False,indent=2),encoding='utf-8')
 print(json.dumps(report,ensure_ascii=True))

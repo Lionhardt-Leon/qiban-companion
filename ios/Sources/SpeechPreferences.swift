@@ -1,6 +1,8 @@
 import Foundation
 
 struct SpeechPreferences:Codable,Equatable {
+    var enabled:Bool? = nil
+    var isEnabled:Bool {enabled != false}
     var voiceID = "system.zh"
     var language = "zh"
     var autoPlay = false

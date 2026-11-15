@@ -280,6 +280,12 @@ enum APIKeyStore {
         try preferences.validate()
         var next = archive;next.settings.speech = preferences;try commit(next)
     }
+    func setSpeechEnabled(_ enabled:Bool) throws {
+        guard storageReady else{throw CompanionError.message("本地存储尚未就绪。")}
+        var next=archive
+        var preferences=next.settings.speech ?? SpeechPreferences()
+        preferences.enabled=enabled;next.settings.speech=preferences;try commit(next)
+    }
     func restartConversation() throws {
         var next = archive
         next.messages = [];next.memories = "";next.moods?.removeValue(forKey:moodKey)
