@@ -91,7 +91,7 @@ final class PhoneCardRoomServer:@unchecked Sendable {
                 if let error=result["error"] as? String{throw CompanionError.message(error)}
                 guard let state=result["state"] as? [String:Any],let code=state["code"] as? String,let token=result["token"] as? String else{throw CompanionError.message("本机房间没有返回座位。")}
                 self.engine=engine;self.roomCode=code;self.hostName=String((input["name"] as? String ?? "房主").prefix(24));self.credential=["token":token]
-                let parameters=NWParameters.tcp;parameters.includePeerToPeer=true
+                let parameters=NWParameters(tls:nil,tcp:NWProtocolTCP.Options());parameters.includePeerToPeer=true
                 let listener=try NWListener(using:parameters,on:NWEndpoint.Port(rawValue:requestedPort)!)
                 if advertise{listener.service=NWListener.Service(name:"Qiban-"+code+"-"+String(self.instance.prefix(8)),type:Self.serviceType,domain:nil,txtRecord:NWTXTRecord(["id":self.instance,"room":code,"name":self.hostName,"version":"1"]))}
                 self.listener=listener
@@ -106,6 +106,7 @@ final class PhoneCardRoomServer:@unchecked Sendable {
                 }
                 listener.newConnectionHandler={[weak self] client in self?.accept(client)}
                 listener.start(queue:self.queue)
+                self.queue.asyncAfter(deadline:.now()+10){if !answered{answered=true;self.stopValue();done.resume(throwing:CompanionError.message("手机开房超时，请允许本地网络权限后重试。"))}}
             }catch{self.stopValue();done.resume(throwing:error)}
         }}
     }
@@ -218,9 +219,11 @@ final class PhoneCardRoomRequest:@unchecked Sendable {
     private var client:NWConnection?
     private var completion:CheckedContinuation<[String:Any],Error>?
     private var received=Data()
+    private var cancelled=false
     func run(endpoint:NWEndpoint,body:Data) async throws -> [String:Any] {
         try await withTaskCancellationHandler(operation:{try await withCheckedThrowingContinuation{done in queue.async{
             self.completion=done
+            if self.cancelled{self.finish(.failure(CancellationError()));return}
             let parameters=NWParameters.tcp;parameters.includePeerToPeer=true
             let client=NWConnection(to:endpoint,using:parameters);self.client=client
             client.stateUpdateHandler={[weak self] state in
@@ -231,7 +234,7 @@ final class PhoneCardRoomRequest:@unchecked Sendable {
                 }else if case .failed(let error)=state{self.finish(.failure(error))}
             }
             client.start(queue:self.queue);self.queue.asyncAfter(deadline:.now()+12){self.finish(.failure(CompanionError.message("手机房间连接超时，请确认房主仍在 App 前台。")))}
-        }}},onCancel:{self.queue.async{self.finish(.failure(CancellationError()))}})
+        }}},onCancel:{self.queue.async{self.cancelled=true;self.finish(.failure(CancellationError()))}})
     }
     private func finish(_ result:Result<[String:Any],Error>){guard let done=completion else{return};completion=nil;client?.stateUpdateHandler=nil;client?.cancel();client=nil;done.resume(with:result)}
     private func read(){client?.receive(minimumIncompleteLength:1,maximumLength:65536){[weak self] data,_,complete,error in

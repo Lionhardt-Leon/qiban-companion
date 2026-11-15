@@ -94,7 +94,7 @@ import WebKit
         case "nearbyRequest":
             guard !suspended,networkTasks.count<=4,let id=body["id"] as? String,id.count<=80,let input=body["body"] as? [String:Any] else{throw CompanionError.message("附近房间请求无效。")}
             let bytes=try JSONSerialization.data(withJSONObject:input);guard bytes.count<=1_700_000 else{throw CompanionError.message("联机图片过大。")}
-            let endpoint=try await discovery.endpoint(id);return try await PhoneCardRoomRequest().run(endpoint:endpoint,body:bytes)
+            let endpoint=try await discovery.endpoint(id);try Task.checkCancellation();return try await PhoneCardRoomRequest().run(endpoint:endpoint,body:bytes)
         case "copyText":guard let text=body["text"] as? String,text.count<=4096 else{throw CompanionError.message("复制内容过长。")};UIPasteboard.general.string=text;return ["copied":true]
         case "request":
             guard !suspended,networkTasks.count<=4,let address=body["url"] as? String,address.utf8.count<=2048,let url=URL(string:address),

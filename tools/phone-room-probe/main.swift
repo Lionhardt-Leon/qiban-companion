@@ -11,7 +11,7 @@ enum AppIdentity {static let storageNamespace="QibanNativeRoomProbe-"+UUID().uui
 
 @main struct Probe {
     static var checks=0
-    static func check(_ ok:Bool,_ label:String) throws {guard ok else{throw CompanionError.message("Probe failed: "+label)};checks+=1}
+    static func check(_ ok:Bool,_ label:String) throws {guard ok else{throw CompanionError.message("Probe failed: "+label)};checks+=1;FileHandle.standardOutput.write(Data(("NATIVE_OK "+label+"\n").utf8))}
     static func fetch(_ url:URL,body:[String:Any]?=nil) async throws -> (Data,Int){
         var request=URLRequest(url:url);request.timeoutInterval=8
         if let body=body{request.httpMethod="POST";request.httpBody=try JSONSerialization.data(withJSONObject:body);request.setValue("application/json",forHTTPHeaderField:"Content-Type")}
@@ -26,11 +26,11 @@ enum AppIdentity {static let storageNamespace="QibanNativeRoomProbe-"+UUID().uui
         try check(imported.characters==1 && imported.images==1 && progress==1,"actual ImageIO art import and progress")
         let catalog=try library.catalog();try check(catalog.count==1,"actual imported art catalog")
         do{_ = try library.install(bad);throw CompanionError.message("Unsafe art pack accepted")}catch{try check(try library.catalog().count==1,"failed import preserves installed art")}
-        let chat=ChatModuleServer(root:root),game=ChatModuleServer(root:root,port:49158,artRoot:library.artRoot)
+        let chat=ChatModuleServer(root:root,port:UInt16(args[4])!),game=ChatModuleServer(root:root,port:UInt16(args[5])!,artRoot:library.artRoot)
         try await chat.start();try await game.start()
         let (chatHTML,chatStatus)=try await fetch(chat.pageURL), (gameHTML,gameStatus)=try await fetch(game.pageURL)
-        try check(chatStatus==200 && String(decoding:chatHTML,as:UTF8.self).contains("app.mjs"),"communications port 49157 routes correctly")
-        try check(gameStatus==200 && String(decoding:gameHTML,as:UTF8.self).contains("app.mjs"),"game port 49158 routes correctly")
+        try check(chatStatus==200 && String(decoding:chatHTML,as:UTF8.self).contains("app.mjs"),"communications listener routes its configured port")
+        try check(gameStatus==200 && String(decoding:gameHTML,as:UTF8.self).contains("app.mjs"),"game listener routes a different configured port")
         let (_,jsStatus)=try await fetch(game.pageURL.deletingLastPathComponent().appendingPathComponent("app.mjs"));try check(jsStatus==200,"actual game module served")
         let portrait=catalog[0]["portrait"] as! String
         let (png,pngStatus)=try await fetch(game.pageURL.deletingLastPathComponent().appendingPathComponent(portrait));try check(pngStatus==200 && png.prefix(4)==Data([137,80,78,71]),"imported art is reachable on game port")

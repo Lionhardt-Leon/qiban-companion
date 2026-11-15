@@ -1,7 +1,7 @@
 """One focused macOS native regression: real loopback ports, art import, phone room TCP/JSC.
 No simulator, game artwork, provider accounts, VPN or UU session are used.
 """
-import base64,hashlib,json,subprocess,sys,tempfile,zipfile
+import base64,hashlib,json,socket,subprocess,sys,tempfile,zipfile
 from pathlib import Path
 root=Path(__file__).resolve().parents[1]
 if sys.platform!='darwin':raise SystemExit('Native Network/ImageIO/JavaScriptCore probe requires macOS.')
@@ -13,4 +13,10 @@ with tempfile.TemporaryDirectory(prefix='qiban-phone-probe-') as tmp:
   with zipfile.ZipFile(work/name,'w',compression=zipfile.ZIP_STORED) as z:z.writestr('catalog.json',json.dumps(m));z.writestr('index.html' if bad else image,b'bad' if bad else png)
  cmd=['swiftc','-swift-version','5','-parse-as-library','-o',str(work/'probe'),'-framework','Network','-framework','JavaScriptCore','-framework','ImageIO','-framework','Security',str(root/'ios/Sources/ChatModuleServer.swift'),str(root/'ios/Sources/PhoneCardRooms.swift'),str(root/'ios/Sources/CardGameLibrary.swift'),str(root/'ios/Sources/VoicePackage.swift'),str(root/'tools/phone-room-probe/main.swift')]
  subprocess.run(cmd,check=True,cwd=root)
- subprocess.run([str(work/'probe'),str(root/'games/tycoon'),str(work/'valid.qcards'),str(work/'bad.qcards')],check=True,cwd=root,timeout=40)
+ # The build host may already use app-default ports; use two distinct OS-chosen free
+ # ports. The old hard-coded Host check rejects both, so this still detects the bug.
+ sockets=[socket.socket(),socket.socket()]
+ for sock in sockets:sock.bind(('127.0.0.1',0))
+ ports=[str(sock.getsockname()[1]) for sock in sockets]
+ for sock in sockets:sock.close()
+ subprocess.run([str(work/'probe'),str(root/'games/tycoon'),str(work/'valid.qcards'),str(work/'bad.qcards'),*ports],check=True,cwd=root,timeout=40)

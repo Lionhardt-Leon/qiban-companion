@@ -19,7 +19,7 @@ final class ChatModuleServer:@unchecked Sendable {
         try await withCheckedThrowingContinuation { (continuation:CheckedContinuation<Void,Error>) in
             queue.async {
                 do {
-                    let parameters=NWParameters.tcp
+                    let parameters=NWParameters(tls:nil,tcp:NWProtocolTCP.Options())
                     parameters.requiredLocalEndpoint = .hostPort(host:"127.0.0.1",port:NWEndpoint.Port(rawValue:self.bindPort)!)
                     let listener=try NWListener(using:parameters);self.listener=listener
                     var answered=false
