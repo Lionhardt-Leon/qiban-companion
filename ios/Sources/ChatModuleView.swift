@@ -39,7 +39,7 @@ import UniformTypeIdentifiers
                 VStack(spacing:8){Text(error).font(.footnote).foregroundStyle(.red);Button("重新打开"){controller.error=nil;if controller.webView != nil{controller.refresh()}else{Task{await controller.start()}}}}
                     .padding(12).frame(maxWidth:.infinity).background(.white)
             }
-        }.frame(maxWidth:.infinity,maxHeight:.infinity).background(Color(red:0.96,green:0.97,blue:1)).preferredColorScheme(.light)
+        }.frame(maxWidth:.infinity,maxHeight:.infinity).background(Color(red:0.96,green:0.97,blue:1)).preferredColorScheme(.light).tint(.indigo)
         .task{await controller.start()}
         .onDisappear{controller.dispose()}
         .onChange(of:scenePhase){controller.suspend($0 == .background)}
