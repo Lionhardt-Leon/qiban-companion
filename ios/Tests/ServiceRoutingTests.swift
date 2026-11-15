@@ -142,11 +142,12 @@ final class ServiceRoutingTests:XCTestCase {
         let session=self.session();defer{session.invalidateAndCancel();ServiceURLProtocol.handler=nil}
         ServiceURLProtocol.handler={request in
             let query=try self.object(request)["query"] as? String;XCTAssertEqual(query?.count,128)
-            let rows:[[String:Any]]=[["title":"bad","url":"javascript:alert(1)","summary":"bad"]]+(0..<10).map{["title":String(repeating:"title",count:100),"url":"https://result.example/\($0)","summary":String(repeating:"x",count:5000)]}
+            let rows:[[String:Any]]=[["title":"bad","url":"javascript:alert(1)","summary":"bad"]]+(0..<10).map{["title":String(repeating:"title",count:100),"url":"https://result.example/\($0)","summary":$0==0 ? "":String(repeating:"x",count:5000),"snippet":"snippet fallback"]}
             return(200,try JSONSerialization.data(withJSONObject:["results":rows]))
         }
         let rows=try await ServiceClient.search(profile(.search),key:"",query:String(repeating:"问",count:150),session:session)
         XCTAssertEqual(rows.count,5);XCTAssertTrue(rows.allSatisfy{$0.link != nil && $0.title.count<=200 && $0.snippet.count<=1200})
+        XCTAssertEqual(rows.first?.snippet,"snippet fallback")
         let message=Message(role:"assistant",content:"回答",sources:rows)
         XCTAssertEqual(try JSONDecoder().decode(Message.self,from:JSONEncoder().encode(message)).sources,rows)
     }

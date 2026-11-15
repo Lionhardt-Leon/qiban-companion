@@ -52,7 +52,8 @@ enum ServiceClient {
         return rows.prefix(20).compactMap {row -> WebCitation? in
             guard let url=row["url"] as? String,url.count<=4096,seen.insert(url).inserted else{return nil}
             let title=(row["title"] as? String ?? "").trimmingCharacters(in:.whitespacesAndNewlines)
-            let item=WebCitation(title:String((title.isEmpty ? url:title).prefix(200)),url:url,snippet:String((row["summary"] as? String ?? row["snippet"] as? String ?? "").prefix(1200)))
+            let summary=(row["summary"] as? String ?? "").trimmingCharacters(in:.whitespacesAndNewlines)
+            let item=WebCitation(title:String((title.isEmpty ? url:title).prefix(200)),url:url,snippet:String((summary.isEmpty ? (row["snippet"] as? String ?? ""):summary).prefix(1200)))
             return item.link == nil ? nil:item
         }.prefix(5).map{$0}
     }

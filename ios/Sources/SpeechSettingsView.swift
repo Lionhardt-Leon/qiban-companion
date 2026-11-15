@@ -22,7 +22,7 @@ struct SpeechSettingsView:View {
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 Section("全局配音") {
-                    Picker("音色",selection:$draft.voiceID) {
+                    Picker(store.archive.settings.services?.tts.enabled==true ? "本机备用音色／语言":"音色",selection:$draft.voiceID) {
                         ForEach(choices){voice in Text(voice.title).tag(voice.id)}
                         if !choices.contains(where:{$0.id==draft.voiceID}) {Text("尚未导入的音色："+draft.voiceID).tag(draft.voiceID)}
                     }.accessibilityIdentifier("speechVoicePicker")
