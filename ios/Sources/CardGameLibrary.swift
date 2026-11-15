@@ -7,6 +7,9 @@ struct CardArtManifest:Codable {
     struct Character:Codable {let id:String;let name:String;let group:String;let portrait:String;let avatar:String?;let states:[String:String]?;let layers:[String]?;let stateLayers:[String:[String]]?}
     let schema:String;let id:String;let title:String;let characters:[Character];let files:[String:String]
 }
+struct CardArtImportResult:Sendable {
+    let title:String;let characters:Int;let images:Int
+}
 struct CardGameLibrary {
     private let base=FileManager.default.urls(for:.applicationSupportDirectory,in:.userDomainMask)[0]
         .appendingPathComponent(AppIdentity.storageNamespace).appendingPathComponent("CardGame",isDirectory:true)
@@ -42,7 +45,7 @@ struct CardGameLibrary {
         }
         return result
     }
-    func install(_ url:URL) throws {
+    func install(_ url:URL,progress:(@Sendable(Int,Int)->Void)?=nil) throws -> CardArtImportResult {
         let access=url.startAccessingSecurityScopedResource();defer{if access{url.stopAccessingSecurityScopedResource()}}
         guard (try url.resourceValues(forKeys:[.fileSizeKey]).fileSize ?? Int.max)<=500*1024*1024 else{throw CompanionError.message("立绘包超过500MB。")}
         let archive=try StoredVoiceArchive(url:url)
@@ -62,6 +65,7 @@ struct CardGameLibrary {
         let stage=artRoot.appendingPathComponent(".stage-"+UUID().uuidString,isDirectory:true)
         try FileManager.default.createDirectory(at:stage,withIntermediateDirectories:true);defer{try? FileManager.default.removeItem(at:stage)}
         var total:Int64=0
+        var completed=0
         for entry in archive.entries where entry.path != "catalog.json" {
             total+=entry.size
             guard Self.imagePath(entry.path),entry.size<=20*1024*1024,total<=500*1024*1024,let expected=manifest.files[entry.path] else{throw CompanionError.message("立绘包只允许有限大小的图片。")}
@@ -72,6 +76,7 @@ struct CardGameLibrary {
                   width>0,height>0,width<=12000,height<=12000,width*height<=32_000_000 else {throw CompanionError.message("立绘图片损坏或像素超过限制。")}
             let file=stage.appendingPathComponent(entry.path);try FileManager.default.createDirectory(at:file.deletingLastPathComponent(),withIntermediateDirectories:true)
             try bytes.write(to:file,options:[.atomic,.completeFileProtection])
+            completed+=1;progress?(completed,manifest.files.count)
         }
         try manifestData.write(to:stage.appendingPathComponent("catalog.json"),options:[.atomic,.completeFileProtection])
         let current=artRoot.appendingPathComponent(manifest.id,isDirectory:true),backup=artRoot.appendingPathComponent(".previous-"+UUID().uuidString,isDirectory:true)
@@ -79,5 +84,6 @@ struct CardGameLibrary {
         if existed{try FileManager.default.moveItem(at:current,to:backup)}
         do{try FileManager.default.moveItem(at:stage,to:current)}catch{if existed{try? FileManager.default.moveItem(at:backup,to:current)};throw error}
         if existed{try? FileManager.default.removeItem(at:backup)}
+        return CardArtImportResult(title:manifest.title,characters:manifest.characters.count,images:manifest.files.count)
     }
 }

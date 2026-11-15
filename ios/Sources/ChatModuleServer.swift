@@ -53,7 +53,7 @@ final class ChatModuleServer:@unchecked Sendable {
         let request=(lines.first ?? "").split(separator:" ")
         var status="404 Not Found",body=Data("Not found".utf8),mime="text/plain; charset=utf-8"
         if request.count==3,["GET","HEAD"].contains(String(request[0])),
-           lines.contains(where:{$0.lowercased()=="host: 127.0.0.1:\(Self.port)"}),
+           lines.contains(where:{$0.lowercased()=="host: 127.0.0.1:\(bindPort)"}),
            let path=String(request[1]).components(separatedBy:"?").first?.removingPercentEncoding,
            path.hasPrefix("/"+token+"/") {
             let relative=String(path.dropFirst(token.count+2))

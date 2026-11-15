@@ -26,6 +26,8 @@ jobs:
         run: brew install xcodegen
       - name: Check spoken dialogue examples
         run: python3 tools/check-spoken-dialogue.py
+      - name: Check native game route, art import and phone room
+        run: python3 tools/probe-phone-rooms.py
       - name: Check communications message operations
         if: inputs.run_tests
         run: node tools/check-chat-messages.mjs

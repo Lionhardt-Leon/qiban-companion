@@ -154,10 +154,6 @@ struct CompanionHome: View {
                     VStack(spacing: 2) {
                         Text("栖伴").font(.system(size: 24, weight: .semibold, design: .rounded))
                         Text("LOCAL").font(.system(size: 8, weight: .medium)).tracking(3).opacity(0.6)
-                        Button {sheet = .messenger} label:{Label("通讯",systemImage:"bubble.left.and.bubble.right").font(.system(size:12,weight:.semibold)).padding(.horizontal,13).padding(.vertical,9).background(.ultraThinMaterial,in:Capsule())}
-                            .accessibilityIdentifier("openMessenger")
-                        Button {sheet = .games} label:{Label("游戏",systemImage:"suit.spade.fill").font(.system(size:12,weight:.semibold)).padding(.horizontal,13).padding(.vertical,9).background(.ultraThinMaterial,in:Capsule())}
-                            .accessibilityIdentifier("openCardGames")
                     }.padding(.top, 8)
                     Spacer()
                     VStack(alignment:.trailing,spacing: 12) {
@@ -470,6 +466,10 @@ struct CompanionHome: View {
             VStack(alignment: .leading, spacing: 26) {
                 circle("chevron.left", label: "返回陪伴") { sheet = nil }
                 Text("设置").font(.system(size: 34, weight: .bold))
+                HStack(spacing:12) {
+                    Button{sheet = .messenger}label:{Label("通讯",systemImage:"bubble.left.and.bubble.right").font(.headline).frame(maxWidth:.infinity).padding(16).background(.white.opacity(0.10),in:RoundedRectangle(cornerRadius:16))}.accessibilityIdentifier("openMessenger")
+                    Button{sheet = .games}label:{Label("游戏",systemImage:"suit.spade.fill").font(.headline).frame(maxWidth:.infinity).padding(16).background(.white.opacity(0.10),in:RoundedRectangle(cornerRadius:16))}.accessibilityIdentifier("openCardGames")
+                }
                 RestartConversationButton {
                     senses.suspend();speech.stop();pendingMotionRevision = nil;draft = "";attachedImage = nil
                 }
