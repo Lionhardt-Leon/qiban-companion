@@ -277,7 +277,7 @@ struct SettingsView: View {
                     Text("仅在发起对话时连接你配置的服务。最近最多 30 条消息及人设、记忆用于上下文；日记不会自动发送。没有官方登录或自动更新。")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
-            }.navigationTitle("设置")
+            }.navigationTitle("设置").navigationBarTitleDisplayMode(.inline)
                 .onAppear {
                     settings = store.archive.settings
                     do { key = try APIKeyStore.read(); keyReady = true }
