@@ -216,7 +216,7 @@ struct CompanionHome: View {
             case .settings:
                 homeSettings
             case .character: withClose { CharacterPreview() }
-            case .api: withClose { SettingsView() }
+            case .api: SettingsView(onClose:{sheet = nil})
             case .history: withClose { ConversationView() }
             case .diary: withClose { DiaryView() }
             case .memory: withClose { MemoryView() }

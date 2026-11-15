@@ -230,6 +230,7 @@ struct BackupDocument: FileDocument {
 }
 
 struct SettingsView: View {
+    var onClose:(()->Void)? = nil
     @EnvironmentObject private var store: LocalStore
     @State private var settings = APISettings()
     @State private var key = ""
@@ -278,6 +279,7 @@ struct SettingsView: View {
                         .font(.footnote).foregroundStyle(.secondary)
                 }
             }.navigationTitle("设置").navigationBarTitleDisplayMode(.inline)
+                .toolbar {if let close=onClose {ToolbarItem(placement:.confirmationAction) {Button("完成",action:close)}}}
                 .onAppear {
                     settings = store.archive.settings
                     do { key = try APIKeyStore.read(); keyReady = true }
@@ -316,6 +318,6 @@ struct SettingsView: View {
                     }
                     Button("取消", role: .cancel) { pendingImport = nil }
                 }
-        }
+        }.frame(maxWidth:.infinity,maxHeight:.infinity)
     }
 }

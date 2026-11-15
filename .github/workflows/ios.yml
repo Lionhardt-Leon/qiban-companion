@@ -1,6 +1,11 @@
 name: Qiban Companion iOS
 on:
   workflow_dispatch:
+    inputs:
+      run_tests:
+        description: Run automated checks before packaging
+        type: boolean
+        default: true
 permissions:
   contents: write
 jobs:
@@ -20,13 +25,16 @@ jobs:
       - name: Install XcodeGen
         run: brew install xcodegen
       - name: Verify speech cancellation lifecycle
+        if: inputs.run_tests
         run: python3 tools/probe-speech-cancellation.py
       - name: Generate project
         working-directory: ios
         run: xcodegen generate
       - name: Verify dance playback clock
+        if: inputs.run_tests
         run: node tools/test-dance-clock.mjs
       - name: Run core tests
+        if: inputs.run_tests
         working-directory: ios
         run: |
           set -euo pipefail
@@ -35,6 +43,7 @@ jobs:
           xcrun simctl bootstatus "$DEVICE_ID" -b
           xcodebuild test -project QibanCompanion.xcodeproj -scheme QibanCompanion -destination "platform=iOS Simulator,id=$DEVICE_ID" -only-testing:QibanCompanionTests -parallel-testing-enabled NO -maximum-concurrent-test-simulator-destinations 1 -resultBundlePath CoreTests.xcresult COMPAT_APP_BUNDLE="$COMPAT_BUNDLE" STORAGE_NAMESPACE="$COMPAT_STORAGE" KEYCHAIN_SERVICE="$COMPAT_KEYCHAIN" CODE_SIGNING_ALLOWED=NO
       - name: Run UI tests in fresh simulator process
+        if: inputs.run_tests
         working-directory: ios
         run: |
           set -euo pipefail
@@ -77,7 +86,11 @@ jobs:
           TAG="qiban-local-${SHA}-${GITHUB_RUN_NUMBER}"
           gh release create "$TAG" --draft --target '${{ github.sha }}' --title "Qiban Local ${SHA}" --notes 'Private unsigned iOS preview. Not device verified.'
           gh release upload "$TAG" QibanCompanion-unsigned.ipa
-          xcrun xcresulttool export attachments --path UITestResults.xcresult --output-path ui-evidence
-          zip -qry UI-evidence.zip ui-evidence
-          gh release upload "$TAG" UI-evidence.zip
+          if [ -d UITestResults.xcresult ]; then
+            xcrun xcresulttool export attachments --path UITestResults.xcresult --output-path ui-evidence
+            zip -qry UI-evidence.zip ui-evidence
+            gh release upload "$TAG" UI-evidence.zip
+          else
+            echo "Automated tests were skipped for this packaging run." >> "$GITHUB_STEP_SUMMARY"
+          fi
           echo "Private draft release: $TAG" >> "$GITHUB_STEP_SUMMARY"
