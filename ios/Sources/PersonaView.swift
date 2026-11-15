@@ -7,6 +7,8 @@ struct PersonaView:View {
     let modelName:String
     let actions:[String]
     var onClose:(()->Void)? = nil
+    var initialCardID:UUID? = nil
+    var applyToModel=true
     @State private var library = PersonaLibrary()
     @State private var selected:UUID?
     @State private var tab = "AI 人设"
@@ -51,17 +53,18 @@ struct PersonaView:View {
                     Button {
                         do {
                             guard let selected = selected else {return}
-                            try store.savePersonas(library,selected:selected,modelKey:modelKey)
-                            library = store.archive.settings.personas!;notice = "已保存并应用到\(modelName)"
+                            if applyToModel {try store.savePersonas(library,selected:selected,modelKey:modelKey)}
+                            else {try store.saveChatPersonas(library)}
+                            library = store.archive.settings.personas!;notice = applyToModel ? "已保存并应用到\(modelName)":"已保存，共用于通讯和模型陪伴。"
                         } catch {store.error = error.localizedDescription}
-                    } label:{Label("保存并应用到当前伙伴",systemImage:"checkmark.circle.fill").font(.headline).frame(maxWidth:.infinity).padding(15)}
+                    } label:{Label(applyToModel ? "保存并应用到当前伙伴":"保存人设库",systemImage:"checkmark.circle.fill").font(.headline).frame(maxWidth:.infinity).padding(15)}
                         .buttonStyle(.borderedProminent).tint(.indigo).disabled(store.busy || !loaded || !store.storageReady)
                         .accessibilityIdentifier("savePersona").padding(.horizontal,20).padding(.vertical,10).background(.ultraThinMaterial)
                 }
                 .onAppear {
                     guard !loaded else{return}
                     library = store.archive.settings.personas ?? PersonaLibrary.migrating(store.archive.settings.persona)
-                    selected = library.card(for:modelKey)?.id;loaded = true
+                    selected = initialCardID ?? library.card(for:modelKey)?.id;loaded = true
                 }
                 .sheet(isPresented:$importing) {
                     CharacterDocumentPicker {result in

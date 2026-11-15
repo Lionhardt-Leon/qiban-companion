@@ -50,8 +50,12 @@ struct LocalArchive: Codable {
     var personaConversations:[String:PersonaConversation]? = nil
     var personaSessionKey:String? = nil
     var moods:[String:CompanionMood]? = nil
+    var chatResetTokens:[String:String]? = nil
+    var chatContactOrigins:[String:String]? = nil
 
     func validate() throws {
+        guard (chatResetTokens?.count ?? 0)<=100,(chatResetTokens ?? [:]).allSatisfy({$0.key.count<=80 && $0.value.count<=80}) else {throw CompanionError.message("对话重置标记无效。")}
+        guard (chatContactOrigins?.count ?? 0)<=50,(chatContactOrigins ?? [:]).allSatisfy({$0.key.count<=80 && $0.value.count<=80}) else {throw CompanionError.message("通讯角色映射无效。")}
         guard (moods?.count ?? 0)<=64,(moods ?? [:]).keys.allSatisfy({$0.count<=80}) else{throw CompanionError.message("心情资料过多。")};for mood in (moods ?? [:]).values {try mood.validate()}
         try settings.personas?.validate()
         try settings.speech?.validate()

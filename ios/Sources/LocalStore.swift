@@ -107,7 +107,7 @@ enum APIKeyStore {
         }
     }
 
-    private func commit(_ next: LocalArchive) throws {
+    func commit(_ next: LocalArchive) throws {
         guard storageReady else { throw CompanionError.message("本地存储未就绪，未覆盖原数据。") }
         try next.validate()
         let data = try JSONEncoder().encode(next)
@@ -283,6 +283,8 @@ enum APIKeyStore {
     func restartConversation() throws {
         var next = archive
         next.messages = [];next.memories = "";next.moods?.removeValue(forKey:moodKey)
+        if next.chatResetTokens == nil {next.chatResetTokens=[:]}
+        next.chatResetTokens?[currentCard?.id.uuidString ?? "legacy"] = UUID().uuidString
         if let key = next.personaSessionKey {next.personaConversations?.removeValue(forKey:key)}
         // Preserve a local recovery snapshot; it never enters the new API context.
         guard storageReady else {throw CompanionError.message("本地存储未就绪，未清除资料。")}

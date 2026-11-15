@@ -2,7 +2,7 @@ import SwiftUI
 import SceneKit
 
 private enum HomeSheet: String, Identifiable {
-    case settings, character, api, history, diary, memory, embodiment, snowbreak, persona, speech
+    case settings, character, api, history, diary, memory, embodiment, snowbreak, persona, speech, messenger
     var id: String { rawValue }
 }
 
@@ -154,6 +154,8 @@ struct CompanionHome: View {
                     VStack(spacing: 2) {
                         Text("栖伴").font(.system(size: 24, weight: .semibold, design: .rounded))
                         Text("LOCAL").font(.system(size: 8, weight: .medium)).tracking(3).opacity(0.6)
+                        Button {sheet = .messenger} label:{Label("通讯",systemImage:"bubble.left.and.bubble.right").font(.system(size:12,weight:.semibold)).padding(.horizontal,13).padding(.vertical,9).background(.ultraThinMaterial,in:Capsule())}
+                            .accessibilityIdentifier("openMessenger")
                     }.padding(.top, 8)
                     Spacer()
                     VStack(alignment:.trailing,spacing: 12) {
@@ -224,6 +226,7 @@ struct CompanionHome: View {
             case .snowbreak: withClose { SnowbreakImportView(stage:snowbreak) }
             case .persona: PersonaView(modelKey:modelKey,modelName:modelLabel,actions:availableActions,onClose:{sheet = nil})
             case .speech: withClose {SpeechSettingsView()}
+            case .messenger: ChatModuleView(store:store,speech:speech,appearance:"载体："+modelLabel+"；"+companionContext("即时通讯").bodyStatus,onClose:{sheet=nil})
             }
         }
         .onChange(of: sheet) { if $0 != nil { clearTouches();camera.stop();senses.suspend();speech.stop();stage.stop();snowbreak.pause() } }
@@ -513,6 +516,8 @@ struct CompanionHome: View {
                     else { Text("恩雅沿用旧项目的材质、原作动作与病房打光。").font(.caption).foregroundStyle(.secondary).padding(16) }
                     Divider().padding(.leading, 50)
                     settingsRow("模型与自定义 API", icon: "slider.horizontal.3") { sheet = .api }
+                    Divider().padding(.leading,50)
+                    settingsRow("通讯聊天 · 会话与群聊",icon:"bubble.left.and.bubble.right") {sheet = .messenger}
                     Divider().padding(.leading,50)
                     settingsRow("人设与陪伴",icon:"person.text.rectangle") {sheet = .persona}
                     Divider().padding(.leading,50)

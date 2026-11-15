@@ -1,0 +1,6 @@
+/* Local iOS shell adjustments; the upstream responsive layout is preserved. */
+html,body{overscroll-behavior:none;-webkit-text-size-adjust:100%}
+button,input,textarea{touch-action:manipulation}
+@media(max-width:760px){input,textarea,select{font-size:16px!important}.modal,.panel{max-height:100dvh}}
+#qiban-native-notice{position:fixed;left:16px;right:16px;bottom:90px;z-index:99999;padding:14px 18px;border-radius:16px;background:#343247;color:white;box-shadow:0 6px 24px #1114;white-space:pre-wrap;font-size:14px}
+#qiban-native-notice[hidden]{display:none}

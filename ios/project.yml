@@ -27,8 +27,8 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: $(COMPAT_APP_BUNDLE)
-        MARKETING_VERSION: "0.25.0"
-        CURRENT_PROJECT_VERSION: "43"
+        MARKETING_VERSION: "0.26.0"
+        CURRENT_PROJECT_VERSION: "44"
         GENERATE_INFOPLIST_FILE: YES
     dependencies:
       - package: ONNXRuntime
@@ -42,6 +42,9 @@ targets:
       properties:
         StorageNamespace: $(STORAGE_NAMESPACE)
         KeychainService: $(KEYCHAIN_SERVICE)
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
+        NSLocalNetworkUsageDescription: 仅在你连接局域网的 MCP 工具、模型或 WebDAV 服务时访问对应设备；本地通讯页面只监听本机回环地址。
         CFBundleDisplayName: 栖伴
         NSMicrophoneUsageDescription: 语音通话和环境反馈默认在本机识别；启用独立ASR后，每段录音会上传到你指定的识别接口。识别文字和声音类别可用于AI对话。
         NSSpeechRecognitionUsageDescription: 在设备支持时将你的语音本机转成对话文字。
@@ -50,6 +53,11 @@ targets:
         LSSupportsOpeningDocumentsInPlace: true
         UILaunchScreen: {}
         UTExportedTypeDeclarations:
+          - UTTypeIdentifier: com.qiban.chatmodule
+            UTTypeDescription: 栖伴本地通讯模块
+            UTTypeConformsTo: [public.data, public.archive]
+            UTTypeTagSpecification:
+              public.filename-extension: [qchat]
           - UTTypeIdentifier: com.qiban.offlinevoice
             UTTypeDescription: 栖伴离线语音包
             UTTypeConformsTo: [public.data, public.archive]
