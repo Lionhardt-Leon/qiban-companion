@@ -31,7 +31,7 @@ import WebKit
     func suspend(_ flag:Bool){suspended=flag;if flag{networkTasks.values.forEach{$0.cancel()};networkTasks.removeAll()};webView?.evaluateJavaScript(flag ? "window.QibanCards?.suspend()":"window.QibanCards?.resume()")}
     func install(_ url:URL){
         guard !importingBusy else{return};importingBusy=true
-        Task {defer{importingBusy=false};do{let library=self.library;try await Task.detached{try library.install(url)}.value;webView?.evaluateJavaScript("window.QibanCards?.reloadArt()")}
+        Task {defer{importingBusy=false};do{let library=self.library;try await Task.detached{try library.install(url)}.value;webView?.evaluateJavaScript("void window.QibanCards?.reloadArt()",completionHandler:nil)}
             catch{self.error=error.localizedDescription}}
     }
     func userContentController(_ userContentController:WKUserContentController,didReceive message:WKScriptMessage,replyHandler:@escaping(Any?,String?)->Void){

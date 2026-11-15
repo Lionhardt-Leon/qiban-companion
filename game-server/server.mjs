@@ -71,8 +71,9 @@ export class RoomService {
         if(p.seat!==r.host)error('只有房主可以开局。');if(r.game)error('已有牌局。');
         if(r.seats.filter(s=>s&&!s.bot).some(s=>!s.ready))error('请等待所有玩家准备。');
         if(r.seats.some(s=>!s)&&!input.fillBots)error('座位未满；可选择用电脑补齐。');
-        for(let i=0;i<r.capacity;i++)if(!r.seats[i]){const profile=Array.isArray(input.botProfiles)?input.botProfiles[i]:null;
-          r.seats[i]={seat:i,name:text(profile?.name)||`电脑 ${i+1}`,appearance:profile?cleanAppearance(profile.appearance):{id:'builtin-'+i,name:'电脑',portrait:'',avatar:''},bot:true,ready:true,seen:this.now()};}
+        const seats=r.seats.map((s,i)=>{if(s)return s;const profile=Array.isArray(input.botProfiles)?input.botProfiles[i]:null;
+          return {seat:i,name:text(profile?.name)||`电脑 ${i+1}`,appearance:profile?cleanAppearance(profile.appearance):{id:'builtin-'+i,name:'电脑',portrait:'',avatar:''},bot:true,ready:true,seen:this.now()};});
+        r.seats=seats;
         r.game=createGame(r.seats.map(s=>({name:s.name,bot:s.bot,character:s.appearance.id})),this.random);break;
       case 'act':if(!r.game)error('牌局尚未开始。');act(r.game,p.seat,input.action);break;
       case 'next':
