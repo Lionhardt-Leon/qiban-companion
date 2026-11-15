@@ -85,6 +85,7 @@ extension LocalStore {
         try prepareChatSharing();var next=archive;var library=next.settings.personas!
         let id=change.qibanId.flatMap(UUID.init(uuidString:)) ?? ChatIdentifiers.uuid("contact:"+change.id)
         let index=library.cards.firstIndex{$0.id==id}
+        if change.qibanId != nil,index==nil{return ["linked":false,"reason":"该人设已从本体删除，通讯中的历史副本仍保留。"]}
         if index==nil,library.cards.count>=50{return ["linked":false,"reason":"本体人设库已满，通讯角色仍保留在通讯模块中。"]}
         var card=index.map{library.cards[$0]} ?? PersonaCard();card.id=id
         if card.name != change.name {card.name=change.name;card.title=change.name}

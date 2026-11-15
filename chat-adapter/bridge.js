@@ -25,7 +25,7 @@
   }
   function installStorage(initial) {
     const storage = window.localStorage, proto = Storage.prototype;
-    const get = proto.getItem, set = proto.setItem, remove = proto.removeItem, keyAt = proto.key;
+    const get = proto.getItem, set = proto.setItem, remove = proto.removeItem, keyAt = proto.key, clear = proto.clear;
     const length = Object.getOwnPropertyDescriptor(proto, 'length').get;
     const cache = new Map(Object.entries(initial || {})), deleted = new Set(), revisions = new Map();
     const managed = key => key.startsWith('fritia_') || key.startsWith('fritia-');
@@ -49,7 +49,7 @@
     proto.removeItem = function(key) {key=String(key);if(this!==storage || !managed(key)) return remove.call(this,key);cache.delete(key);deleted.add(key);remove.call(storage,key);persist(key,null);};
     proto.key = function(index) {return this===storage ? keys()[index] ?? null : keyAt.call(this,index);};
     Object.defineProperty(proto,'length',{configurable:true,get(){return this===storage ? keys().length : length.call(this);}});
-    proto.clear = function(){for(const key of this===storage ? keys() : []) this.removeItem(key);};
+    proto.clear = function(){if(this!==storage)return clear.call(this);for(const key of keys()) this.removeItem(key);};
     window.QibanNative.flushStorage = async () => {
       await Promise.allSettled([...pending.values()]);
       if (failures.size) {const retry=[...failures.values()];for(const item of retry) persist(item.key,item.value);await Promise.allSettled([...pending.values()]);}
@@ -80,6 +80,7 @@
       return;
     }
     if(event.type==='refresh') return;
+    if(event.type==='ttsMode'){localStorage.setItem('fritia_qiban_use_app_tts',event.enabled ? 'true':'false');notice(event.enabled ? '通讯使用 App 全局配音。':'通讯使用原项目 MiMO 参考音色，需在通讯设置中配置提供商并开启语音回复。');return;}
     const state=streams.get(event.id);if(!state) return;
     if(event.type==='fetchHeaders') {
       const stream=new ReadableStream({start(controller){state.controller=controller;},pull(){state.resume?.();state.resume=null;},cancel(){state.resume?.();call('abort',{id:event.id}).catch(()=>{});streams.delete(event.id);}});
@@ -109,6 +110,7 @@
     return result;
   }
   window.QibanNative={available,call,receive,saveBlob,speak,notice,
+    appSpeechEnabled(){return available && localStorage.getItem('fritia_qiban_use_app_tts')!=='false';},
     async initialize(){
       if(!available)return null;
       profile=await call('bootstrap');window.QibanProfile=profile;installStorage(profile.storage);

@@ -9,6 +9,7 @@ const read=(key,fallback)=>{try{return JSON.parse(localStorage.getItem(key)) || 
 export async function initQibanChat() {
   if(!window.QibanNative?.available)return;
   profile=window.QibanProfile;const hidden=new Set(read(HIDDEN,[]));
+  const userName=document.getElementById('qiban-user-name');if(userName)userName.textContent=profile.userName || '你';
   let store=loadAppStore();const active=store.activeConversationId,mirrors=read(KEY,{});
   for(const contact of profile.contacts) {
     if(hidden.has(contact.id))continue;
@@ -20,7 +21,17 @@ export async function initQibanChat() {
     if(!conversation){conversation={id:'private:'+card.id,type:'private',title:card.name,avatar:card.avatar,memberIds:[card.id],createdAt:Date.now(),updatedAt:Date.now()};store.conversations.unshift(conversation);store.messages[conversation.id]=[];}
     let list=store.messages[conversation.id] || [];
     const signatures={...(mirrors[card.id]?.signatures || {})};
-    if(mirrors[card.id]?.resetToken!==undefined && mirrors[card.id].resetToken!==contact.resetToken)list=[];
+    if(mirrors[card.id]?.resetToken!==undefined && mirrors[card.id].resetToken!==contact.resetToken) {
+      list=[];
+      const memory=read('fritia_long_term_memory',null);
+      if(memory) {
+        const removed=new Set((memory.memories || []).filter(item=>item.scope==='private:'+card.id).map(item=>item.id));
+        memory.memories=(memory.memories || []).filter(item=>!removed.has(item.id));
+        memory.edges=(memory.edges || []).filter(item=>item.scope!=='private:'+card.id && !(item.sourceMemoryIds || []).some(id=>removed.has(id)));
+        memory.deletedIds=[...new Set([...(memory.deletedIds || []),...removed])];
+        localStorage.setItem('fritia_long_term_memory',JSON.stringify(memory));
+      }
+    }
     let offset=0,more=true;
     while(more) {
       const result=await window.QibanNative.call('messages',{id:contact.qibanId,offset});
@@ -67,7 +78,7 @@ export async function initQibanChat() {
 }
 
 function configureProviders() {
-  const old=getSettings(),managed={id:'qiban-app',apiKey:'qiban-app-managed',baseUrl:'https://qiban.app/v1',model:'qiban-chat'},vision={id:'qiban-app-vision',apiKey:'qiban-app-managed',baseUrl:'https://qiban.app/vision/v1',model:'qiban-vision'};
+  const old=getSettings(),managed={id:'qiban-app',apiKey:'qiban-app-managed',baseUrl:'https://qiban.app/v1',model:profile.model || 'qiban-chat'},vision={id:'qiban-app-vision',apiKey:'qiban-app-managed',baseUrl:'https://qiban.app/vision/v1',model:'qiban-vision'};
   const previous=read('fritia_qiban_configured',false);
   const providers=[managed,vision,...old.chatProviders.filter(item=>!['qiban-app','qiban-app-vision'].includes(item.id))];
   saveSettings({...old,chatProviders:providers,defaultChatProviderId:previous ? old.defaultChatProviderId:'qiban-app',defaultImageCaptionProviderId:previous ? old.defaultImageCaptionProviderId:'qiban-app-vision',temperature:profile.temperature});
@@ -78,7 +89,7 @@ function onStore(event) {
   const store=event.detail || loadAppStore(),toSpeak=[];
   for(const list of Object.values(store.messages))for(const message of list) {
     if(!seen.has(message.id) && message.role==='user')window.QibanNative.call('stopSpeech').catch(()=>{});
-    if(!seen.has(message.id) && message.role==='assistant' && message.status==='sent' && message.text && !message.meta?.qibanSpokenJapanese)toSpeak.push(message);
+    if(window.QibanNative.appSpeechEnabled() && !seen.has(message.id) && message.role==='assistant' && message.status==='sent' && message.text && !message.meta?.qibanSpokenJapanese)toSpeak.push(message);
     if(message.status!=='typing')seen.add(message.id);
   }
   let queue=Promise.resolve();
@@ -94,7 +105,7 @@ async function synchronize() {
     for(const card of store.characters) {
       const conversation=store.conversations.find(item=>item.type==='private' && item.memberIds[0]===card.id);
       const list=(conversation ? store.messages[conversation.id] : []) || [];
-      const valid=list.filter(item=>['user','assistant'].includes(item.role) && item.status!=='typing' && item.status!=='error');
+      const valid=list.filter(item=>['user','assistant'].includes(item.role) && item.status!=='typing' && item.status!=='error' && !item.meta?.toolMode);
       // Only remove a message which was previously synchronized and is now
       // absent. Unloaded native history and typing placeholders are preserved.
       const allIDs=new Set(list.map(item=>item.id)),old=mirrors[card.id] || {};

@@ -21,6 +21,10 @@ import UniformTypeIdentifiers
                     Button("系统提示词／用户与 AI 人设"){controller.openPane(.persona)}
                     Button("App 对话与独立接口"){controller.openPane(.api)}
                     Button("App 中／日配音与 TTS"){controller.openPane(.speech)}
+                    Menu("通讯配音来源") {
+                        Button {controller.setAppSpeech(true)} label:{Label("App 全局配音",systemImage:controller.appTTSMode ? "checkmark.circle.fill":"circle")}
+                        Button {controller.setAppSpeech(false)} label:{Label("通讯 MiMO 参考语音",systemImage:controller.appTTSMode ? "circle":"checkmark.circle.fill")}
+                    }.disabled(!controller.ready)
                     Button("停止朗读"){controller.stopSpeech()}
                     Button("重新打开页面"){controller.refresh()}.disabled(!controller.ready)
                     Link("原项目与开源授权",destination:URL(string:ChatModuleInfo.source)!)

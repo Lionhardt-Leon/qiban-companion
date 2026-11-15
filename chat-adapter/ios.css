@@ -4,3 +4,5 @@ button,input,textarea{touch-action:manipulation}
 @media(max-width:760px){input,textarea,select{font-size:16px!important}.modal,.panel{max-height:100dvh}}
 #qiban-native-notice{position:fixed;left:16px;right:16px;bottom:90px;z-index:99999;padding:14px 18px;border-radius:16px;background:#343247;color:white;box-shadow:0 6px 24px #1114;white-space:pre-wrap;font-size:14px}
 #qiban-native-notice[hidden]{display:none}
+.voice-bubble:has(.qiban-voice-caption){flex-wrap:wrap;max-width:min(78vw,600px);height:auto;text-align:left}
+.qiban-voice-caption{flex-basis:100%;white-space:pre-wrap;line-height:1.5;font-size:14px;padding-top:6px}

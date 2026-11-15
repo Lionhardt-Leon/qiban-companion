@@ -13,6 +13,7 @@ enum ChatNativePane:String,Identifiable {case persona,api,speech;var id:String{r
     @Published var ready=false
     @Published var pane:ChatNativePane?
     @Published var exportFile:ChatFileExport?
+    @Published var appTTSMode=true
     let library=ChatModuleLibrary()
     let store:LocalStore
     let speech:CompanionSpeech
@@ -81,6 +82,7 @@ enum ChatNativePane:String,Identifiable {case persona,api,speech;var id:String{r
         try? FileManager.default.removeItem(at:temp)
     }
     func refresh() {Task{try? await emit(["type":"refresh"]);webView?.reload()}}
+    func setAppSpeech(_ enabled:Bool){appTTSMode=enabled;stopSpeech();Task{try? await emit(["type":"ttsMode","enabled":enabled])}}
     func openPane(_ value:ChatNativePane) {
         Task {
             do {if let view=webView {_=try await view.callAsyncJavaScript("if(window.QibanNative) await window.QibanNative.flush();",arguments:[:],in:nil,contentWorld:.page)};cancelRequests();stopSpeech();pane=value}
@@ -100,10 +102,12 @@ enum ChatNativePane:String,Identifiable {case persona,api,speech;var id:String{r
     private func execute(_ command:String,body:[String:Any]) async throws -> Any {
         switch command {
         case "ready":status="";return ["ready":true]
+        case "pageError":status="";error=body["message"] as? String ?? "通讯模块启动失败。";return ["shown":true]
         case "bootstrap":
             var result=try store.chatBootstrap();let library=self.library
             result["appearance"]=appearance
-            result["storage"]=try await Task.detached{try library.state()}.value
+            let storage=try await Task.detached{try library.state()}.value
+            result["storage"]=storage;appTTSMode=storage["fritia_qiban_use_app_tts"] != "false"
             return result
         case "persist":
             let key=body["key"] as? String ?? "",library=self.library
