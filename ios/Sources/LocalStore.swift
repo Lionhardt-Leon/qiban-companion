@@ -252,7 +252,7 @@ enum APIKeyStore {
                 try Task.checkCancellation()
                 guard requestID == id else { return }
                 var next = archive
-                let assistant=Message(role: "assistant", content: reply.text,spokenJapanese:reply.spokenJapanese,sources:reply.sources.isEmpty ? nil:reply.sources)
+                let assistant=Message(role: "assistant", content: reply.text,spokenJapanese:reply.spokenJapanese,spokenChinese:reply.spokenChinese,sources:reply.sources.isEmpty ? nil:reply.sources)
                 if let affect=reply.affect {var value=mood;try value.apply(affect);if next.moods == nil {next.moods=[:]};next.moods?[moodKey]=value}
                 next.messages.append(assistant)
                 try commit(next)

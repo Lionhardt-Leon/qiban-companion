@@ -83,7 +83,7 @@ struct APIClient {
         }
         request.httpBody = try JSONEncoder().encode(ChatRequest(
             model: settings.model, messages: [.init(role: "system", content:system)] + turns,
-            temperature: settings.temperature, max_tokens: context.speechLanguage == "ja" ? 3072 : (actions.contains("procedural") ? 2048 : 1024)))
+            temperature: settings.temperature, max_tokens: context.speechLanguage == "ja" ? 4096 : (actions.contains("procedural") ? 2560 : 1536)))
         return request
     }
 
@@ -127,7 +127,7 @@ struct APIClient {
               !text.isEmpty else { throw CompanionError.message("没有收到有效回复，请确认接口兼容 Chat Completions。") }
         var primary=try DialogueMotion.parse(text,actions:actions);primary.sources=sources
         let needsBody = !primary.hasBodyDecision && !DialogueMotion.allowed(actions).isEmpty
-        let spoken=SpeechPreferences.clean(primary.text)
+        let spoken=primary.spokenChinese.map{SpeechPreferences.clean($0)} ?? SpokenDialogue.dialogue(primary.text)
         let needsJapanese = settings.runtimeContext?.speechLanguage == "ja" && SpeechPreferences.clean(primary.spokenJapanese ?? "").isEmpty && !spoken.isEmpty
         guard needsBody || needsJapanese else{return primary}
         // At most one supplement for missing speech and/or body metadata.
@@ -144,7 +144,7 @@ struct APIClient {
             let (body,response)=try await session.data(for:repair);try Task.checkCancellation()
             guard let http=response as? HTTPURLResponse,(200..<300).contains(http.statusCode),let result=try? JSONDecoder().decode(ChatResponse.self,from:body),let text=result.choices.first?.message.content,let supplement=try? DialogueMotion.parse(text,actions:needsBody ? actions:[]) else{return primary}
             let useBody=needsBody && supplement.hasBodyDecision
-            return DialogueReply(text:primary.text,action:useBody ? supplement.action:primary.action,motion:useBody ? supplement.motion:primary.motion,spokenJapanese:needsJapanese ? (supplement.spokenJapanese ?? primary.spokenJapanese):primary.spokenJapanese,affect:useBody ? supplement.affect:primary.affect,hasBodyDecision:primary.hasBodyDecision || useBody,sources:primary.sources)
+            return DialogueReply(text:primary.text,action:useBody ? supplement.action:primary.action,motion:useBody ? supplement.motion:primary.motion,spokenJapanese:needsJapanese ? (supplement.spokenJapanese ?? primary.spokenJapanese):primary.spokenJapanese,spokenChinese:primary.spokenChinese,affect:useBody ? supplement.affect:primary.affect,hasBodyDecision:primary.hasBodyDecision || useBody,sources:primary.sources)
         }catch is CancellationError {throw CancellationError()}catch {try Task.checkCancellation();return primary}
     }
 

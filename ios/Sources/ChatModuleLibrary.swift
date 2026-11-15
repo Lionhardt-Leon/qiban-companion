@@ -4,7 +4,7 @@ import CryptoKit
 enum ChatModuleInfo {
     static let source = "https://github.com/QingchenWait/Fritia_Online_CHAT"
     static let revision = "7dfa8044dfef79c6c2876f69607c079218e723fb"
-    static let packageSHA256 = "3be30de1cbfd095ac6c5f8c40ef66e8efd947f47aa628c925885f95d99862917"
+    static let packageSHA256 = "747c1ac9cab3c92ae83df05fdd98301671143559efae04478ec93e9dd8a2cf02"
 }
 
 struct ChatModuleManifest:Decodable {
@@ -21,7 +21,10 @@ struct ChatModuleLibrary {
     }
     var current:URL {directory.appendingPathComponent("current",isDirectory:true)}
     var site:URL {current.appendingPathComponent("site",isDirectory:true)}
-    var installed:Bool {FileManager.default.fileExists(atPath:site.appendingPathComponent("index.html").path)}
+    var installed:Bool {
+        FileManager.default.fileExists(atPath:site.appendingPathComponent("index.html").path) &&
+        (try? String(contentsOf:current.appendingPathComponent("package.sha256"),encoding:.utf8))==ChatModuleInfo.packageSHA256
+    }
     private var stateDirectory:URL {directory.appendingPathComponent("state",isDirectory:true)}
     func state() throws -> [String:String] {
         guard FileManager.default.fileExists(atPath:stateDirectory.path) else{return [:]}
@@ -69,7 +72,8 @@ struct ChatModuleLibrary {
             guard partHash.finalize().map({String(format:"%02x",$0)}).joined()==expected else{throw CompanionError.message("对话模块文件损坏。")}
         }
         let previous=directory.appendingPathComponent("previous-"+UUID().uuidString,isDirectory:true)
-        let hadCurrent=installed
+        try ChatModuleInfo.packageSHA256.write(to:stage.appendingPathComponent("package.sha256"),atomically:true,encoding:.utf8)
+        let hadCurrent=FileManager.default.fileExists(atPath:current.path)
         if hadCurrent {try FileManager.default.moveItem(at:current,to:previous)}
         do {try FileManager.default.moveItem(at:stage,to:current)}
         catch {if hadCurrent{try? FileManager.default.moveItem(at:previous,to:current)};throw error}

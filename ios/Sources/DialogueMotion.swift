@@ -5,6 +5,7 @@ struct DialogueReply {
     let action: String?
     var motion: MotionPlan? = nil
     var spokenJapanese:String? = nil
+    var spokenChinese:String? = nil
     var affect:AffectDecision? = nil
     var hasBodyDecision=false
     var sources:[WebCitation] = []
@@ -93,7 +94,8 @@ enum DialogueMotion {
         """ : ""
         return """
         你同时控制屏幕上的伙伴。理解用户最新话语、上下文、情绪和你自己的回复，再选择至多一个合适的肢体动作。
-        请只输出一个 JSON 对象：{"reply":"给用户的自然语言回复","decision":"accept或refuse或none","action":"动作ID或none或stop"}。
+        请只输出一个 JSON 对象：{"reply":"给用户的自然语言回复","speech_zh":"角色实际说出口的中文台词，纯旁白时为空","decision":"accept或refuse或none","action":"动作ID或none或stop"}。
+        \(SpokenDialogue.instruction)
         先理解整句话的意图，再按人设和上下文决定是否愿意执行。举起右手、抬起右手、右手抬起来、把右手举高等可以表达同一意图，不按关键词命中执行。否定、引用、假设、询问能力、第三人称叙述不是要求立即执行。
         同意并准备执行时 decision=accept，action 给真实可用动作；拒绝时 decision=refuse、action=none，用 reply 自然解释，例如“我不想抬起来”。无动作时 decision=none。拒绝时禁止附带 motion。不要在同一轮一边拒绝一边选择执行；拒绝不会强制结束已有姿态。缺少明确 accept 的回复不会驱动新动作。
         用户可以表达情绪而不说动作名称，例如“恩雅羞一下”“能害羞一点吗”表示害羞表情；你同意时使用原作 snowbreak_home_shy（若可用），否则 gesture_shy。不要因用户没有说标准名称就只回复文字。也可在 accept 的 JSON 中返回 intent:"shy"／"nod"／"wave_left"／"wave_right"／"open_arms"，App 会将这些语义映射为当前可用动作；仍不从用户文本直接执行。
@@ -122,13 +124,15 @@ enum DialogueMotion {
             }
             var raw = (envelope["action"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
             let japanese = (envelope["speech_ja"] as? String)?.trimmingCharacters(in:.whitespacesAndNewlines)
+            let chinese = (envelope["speech_zh"] as? String)?.trimmingCharacters(in:.whitespacesAndNewlines)
+            guard (chinese?.count ?? 0) <= 8_000 else {throw CompanionError.message("中文语音台词过长，请重试。")}
             guard (japanese?.count ?? 0) <= 8_000 else {throw CompanionError.message("日文语音台词过长，请重试。")}
             let spoken = japanese?.isEmpty == false ? japanese:nil
             let affect:AffectDecision?
             if let object=envelope["affect"],let data=try? JSONSerialization.data(withJSONObject:object),let parsed=try? JSONDecoder().decode(AffectDecision.self,from:data),(try? parsed.validate()) != nil {affect=parsed}else{affect=nil}
             let recognizedDecision=["accept","refuse","none"].contains(envelope["decision"] as? String ?? "")
             guard envelope["decision"] as? String == "accept" else {
-                return DialogueReply(text:reply.trimmingCharacters(in:.whitespacesAndNewlines),action:nil,spokenJapanese:spoken,affect:affect,hasBodyDecision:recognizedDecision)
+                return DialogueReply(text:reply.trimmingCharacters(in:.whitespacesAndNewlines),action:nil,spokenJapanese:spoken,spokenChinese:chinese,affect:affect,hasBodyDecision:recognizedDecision)
             }
             let intent=(envelope["intent"] as? String) ?? ((raw == nil || raw == "none") ? CompanionBehavior.inferredIntent(affect):raw) ?? ""
             let aliases:[String:[String]]=["shy":["snowbreak_home_shy","gesture_shy"],"害羞":["snowbreak_home_shy","gesture_shy"],"羞一下":["snowbreak_home_shy","gesture_shy"],"nod":["gesture_nod","Yes"],"点头":["gesture_nod","Yes"],"wave_left":["gesture_wave_left"],"wave_right":["gesture_wave_right","hello"],"open_arms":["gesture_open_arms"],"张开双臂":["gesture_open_arms"]]
@@ -139,11 +143,11 @@ enum DialogueMotion {
             if id == "procedural", valid {
                 if let object = envelope["motion"], let data = try? JSONSerialization.data(withJSONObject: object),
                    let motion = try? JSONDecoder().decode(MotionPlan.self, from: data), (try? motion.validate()) != nil {
-                    return DialogueReply(text: reply.trimmingCharacters(in: .whitespacesAndNewlines), action: id, motion: motion,spokenJapanese:spoken,affect:affect,hasBodyDecision:recognizedDecision)
+                    return DialogueReply(text: reply.trimmingCharacters(in: .whitespacesAndNewlines), action: id, motion: motion,spokenJapanese:spoken,spokenChinese:chinese,affect:affect,hasBodyDecision:recognizedDecision)
                 }
-                return DialogueReply(text: reply.trimmingCharacters(in: .whitespacesAndNewlines), action: nil,spokenJapanese:spoken,affect:affect,hasBodyDecision:recognizedDecision)
+                return DialogueReply(text: reply.trimmingCharacters(in: .whitespacesAndNewlines), action: nil,spokenJapanese:spoken,spokenChinese:chinese,affect:affect,hasBodyDecision:recognizedDecision)
             }
-            return DialogueReply(text: reply.trimmingCharacters(in: .whitespacesAndNewlines), action: valid ? id : nil,spokenJapanese:spoken,affect:affect,hasBodyDecision:recognizedDecision)
+            return DialogueReply(text: reply.trimmingCharacters(in: .whitespacesAndNewlines), action: valid ? id : nil,spokenJapanese:spoken,spokenChinese:chinese,affect:affect,hasBodyDecision:recognizedDecision)
         }
         // A provider may ignore the JSON instruction. Plain text remains usable, with no guessed motion.
         guard !original.isEmpty else { throw CompanionError.message("没有收到有效回复。") }

@@ -7,6 +7,7 @@ struct ChatSharedMessage:Decodable {
     let text:String
     let createdAt:Double
     let spokenJapanese:String?
+    let spokenChinese:String?
 }
 
 struct ChatContactChange:Decodable {
@@ -51,7 +52,7 @@ extension LocalStore {
         let global="【App系统提示词】\n"+library.systemPrompt+"\n【用户人设】\n称呼："+library.userName+"\n"+library.userDescription
         let status="\n【本App当前界面】现在是文字通讯模式，模型场景暂停；没有执行新的骨骼或触碰动作。不要把文字描写当作身体已执行。用户随时可以回到模型陪伴页面。"
         let preferences=archive.settings.speech ?? SpeechPreferences()
-        return ["contacts":library.cards.map{chatContactSnapshot($0)},"globalPrompt":global+status,"bodyNotice":status,
+        return ["contacts":library.cards.map{chatContactSnapshot($0)},"speechFormat":SpokenDialogue.textInstruction,"globalPrompt":global+status,"bodyNotice":status,
                 "userName":library.userName.isEmpty ? "你":library.userName,"language":preferences.language,"autoPlay":preferences.autoPlay,
                 "model":archive.settings.model,"temperature":archive.settings.temperature,
                 "configured":!archive.settings.endpoint.isEmpty && !archive.settings.model.isEmpty,
@@ -72,7 +73,10 @@ extension LocalStore {
         let result:[[String:Any]]=list[start..<end].map {message in
             var row:[String:Any]=["id":message.id.uuidString,"role":message.role,"text":message.displayContent,"createdAt":message.createdAt.timeIntervalSince1970*1000,
                                   "speakerId":message.role=="user" ? "player":speaker,"speakerName":message.role=="user" ? user:name,"status":"sent"]
-            if let japanese=message.resolvedSpokenJapanese {row["meta"]=["qibanSpokenJapanese":japanese]}
+            var meta:[String:String]=[:]
+            if let japanese=message.resolvedSpokenJapanese {meta["qibanSpokenJapanese"]=japanese}
+            if let chinese=message.resolvedSpokenChinese {meta["qibanSpokenChinese"]=chinese}
+            if !meta.isEmpty {row["meta"]=meta}
             return row
         }
         return ["messages":result,"more":end<list.count,"next":end]
@@ -81,7 +85,7 @@ extension LocalStore {
         guard !busy,change.messages.count<=300,change.removedIds.count<=300,change.name.count<=120,
               Set(change.messages.map(\.id)).count==change.messages.count,
               change.prompt.count<=PersonaLimits.promptCharacters,change.examples.count<=PersonaLimits.fieldCharacters,
-              change.messages.allSatisfy({["user","assistant"].contains($0.role) && $0.id.count<=100 && $0.text.count<=100_000 && $0.createdAt.isFinite && ($0.spokenJapanese?.count ?? 0)<=100_000}) else{throw CompanionError.message("通讯同步内容无效或本体正在回复，请稍后再试。")}
+              change.messages.allSatisfy({["user","assistant"].contains($0.role) && $0.id.count<=100 && $0.text.count<=100_000 && $0.createdAt.isFinite && ($0.spokenJapanese?.count ?? 0)<=100_000 && ($0.spokenChinese?.count ?? 0)<=100_000}) else{throw CompanionError.message("通讯同步内容无效或本体正在回复，请稍后再试。")}
         try prepareChatSharing();var next=archive;var library=next.settings.personas!
         let id=change.qibanId.flatMap(UUID.init(uuidString:)) ?? ChatIdentifiers.uuid("contact:"+change.id)
         let index=library.cards.firstIndex{$0.id==id}
@@ -104,7 +108,7 @@ extension LocalStore {
         var positions=Dictionary(uniqueKeysWithValues:session.messages.enumerated().map{($0.element.id,$0.offset)})
         for item in change.messages {
             let messageID=UUID(uuidString:item.id) ?? ChatIdentifiers.uuid("message:"+change.id+":"+item.id)
-            var message=Message(id:messageID,role:item.role,content:item.text,spokenJapanese:item.spokenJapanese,createdAt:Date(timeIntervalSince1970:item.createdAt/1000))
+            var message=Message(id:messageID,role:item.role,content:item.text,spokenJapanese:item.spokenJapanese,spokenChinese:item.spokenChinese,createdAt:Date(timeIntervalSince1970:item.createdAt/1000))
             if let position=positions[messageID] {message.sources=session.messages[position].sources;session.messages[position]=message}
             else {positions[messageID]=session.messages.count;session.messages.append(message)}
         }

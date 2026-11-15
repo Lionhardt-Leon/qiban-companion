@@ -106,10 +106,11 @@
   }
   async function speak(fields) {
     const result=await call('speak',fields);
-    if(result.spokenJapanese) document.dispatchEvent(new CustomEvent('qiban-speech-translated',{detail:{...fields,spokenJapanese:result.spokenJapanese}}));
+    if(result.spokenJapanese || typeof result.spokenChinese==='string') document.dispatchEvent(new CustomEvent('qiban-speech-translated',{detail:{...fields,spokenJapanese:result.spokenJapanese,spokenChinese:result.spokenChinese}}));
     return result;
   }
   window.QibanNative={available,call,receive,saveBlob,speak,notice,
+    async spokenText(text){return (await call('speechText',{text})).text;},
     appSpeechEnabled(){return available && localStorage.getItem('fritia_qiban_use_app_tts')!=='false';},
     async initialize(){
       if(!available)return null;
@@ -129,8 +130,8 @@
     },
     voiceAttachment(text){return {id:'qiban-voice-'+crypto.randomUUID(),type:'audio',name:'App 全局配音',mime:'audio/x-qiban',path:'qiban-speech:'+encodeURIComponent(JSON.stringify({text})),source:'tts-reply',duration:Math.max(1,Math.ceil(text.length/5))};},
     characterPrompt(character){
-      if(character?.qibanId && profile?.contacts?.some(item=>item.qibanId===character.qibanId))return (character.prompt || '')+(profile?.bodyNotice || '');
-      return (profile?.globalPrompt || '')+'\n【当前角色】\n'+(character?.prompt || '');
+      if(character?.qibanId && profile?.contacts?.some(item=>item.qibanId===character.qibanId))return (character.prompt || '')+(profile?.bodyNotice || '')+'\n'+(profile?.speechFormat || '');
+      return (profile?.globalPrompt || '')+'\n【当前角色】\n'+(character?.prompt || '')+'\n'+(profile?.speechFormat || '');
     },
     nativeMemory(character,mode){if(mode!=='private')return '';const item=profile?.contacts?.find(item=>item.id===character?.id);return (item?.memories ? '【本体已有的本角色私聊记忆】\n'+item.memories : '')+(character?.id===profile?.activeId && profile?.appearance ? '\n【进入通讯时的载体状态，当前模型已暂停】\n'+profile.appearance : '');},
     async flush(){await window.QibanNative.flushStorage?.();},

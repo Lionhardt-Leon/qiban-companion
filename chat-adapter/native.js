@@ -38,10 +38,10 @@ export async function initQibanChat() {
       for(const message of result.messages) {
         const existing=list.find(item=>item.id===message.id || item.meta?.qibanNativeId===message.id);
         if(existing) {
-          const local=JSON.stringify([existing.text,existing.meta?.qibanSpokenJapanese]);
+          const local=JSON.stringify([existing.text,existing.meta?.qibanSpokenJapanese,existing.meta?.qibanSpokenChinese]);
           if(!signatures[existing.id] || signatures[existing.id]===local)Object.assign(existing,{text:message.text,meta:{...existing.meta,...message.meta,qibanNativeId:message.id}});
-          if(existing.text===message.text)signatures[existing.id]=JSON.stringify([existing.text,existing.meta?.qibanSpokenJapanese]);
-        }else {list.push({...message,meta:{...message.meta,qibanNativeId:message.id}});signatures[message.id]=JSON.stringify([message.text,message.meta?.qibanSpokenJapanese]);}
+          if(existing.text===message.text)signatures[existing.id]=JSON.stringify([existing.text,existing.meta?.qibanSpokenJapanese,existing.meta?.qibanSpokenChinese]);
+        }else {list.push({...message,meta:{...message.meta,qibanNativeId:message.id}});signatures[message.id]=JSON.stringify([message.text,message.meta?.qibanSpokenJapanese,message.meta?.qibanSpokenChinese]);}
       }
       offset=result.next;more=result.more;
     }
@@ -59,8 +59,11 @@ export async function initQibanChat() {
     let store=loadAppStore(),changed=false;
     for(const list of Object.values(store.messages))for(const message of list) {
       if(message.id===event.detail.id || event.detail.id.startsWith(message.id+':')) {
-        message.meta={...message.meta,qibanSpokenJapanese:event.detail.spokenJapanese};changed=true;
-        for(const item of message.attachments || [])if(item.path?.startsWith('qiban-speech:'))item.path='qiban-speech:'+encodeURIComponent(JSON.stringify({text:message.text,spokenJapanese:event.detail.spokenJapanese}));
+        message.meta={...message.meta};
+        if(event.detail.spokenJapanese)message.meta.qibanSpokenJapanese=event.detail.spokenJapanese;
+        if(typeof event.detail.spokenChinese==='string')message.meta.qibanSpokenChinese=event.detail.spokenChinese;
+        changed=true;
+        for(const item of message.attachments || [])if(item.path?.startsWith('qiban-speech:'))item.path='qiban-speech:'+encodeURIComponent(JSON.stringify({text:message.text,spokenJapanese:event.detail.spokenJapanese,spokenChinese:event.detail.spokenChinese}));
       }
     }
     if(changed)saveAppStore(store);
@@ -93,7 +96,7 @@ function onStore(event) {
     if(message.status!=='typing')seen.add(message.id);
   }
   let queue=Promise.resolve();
-  for(const message of toSpeak)queue=queue.then(()=>window.QibanNative.speak({id:message.id,text:message.text,spokenJapanese:message.meta?.qibanSpokenJapanese || '',automatic:true})).catch(error=>window.QibanNative.notice('App 配音：'+error.message));
+  for(const message of toSpeak)queue=queue.then(()=>window.QibanNative.speak({id:message.id,text:message.text,spokenJapanese:message.meta?.qibanSpokenJapanese || '',spokenChinese:message.meta?.qibanSpokenChinese,automatic:true})).catch(error=>window.QibanNative.notice('App 配音：'+error.message));
   dirty=true;clearTimeout(timer);timer=setTimeout(()=>synchronize().catch(error=>window.QibanNative.notice('本体同步：'+error.message)),600);
 }
 
@@ -111,16 +114,16 @@ async function synchronize() {
       const allIDs=new Set(list.map(item=>item.id)),old=mirrors[card.id] || {};
       const removed=(old.ids || []).filter(id=>!allIDs.has(id));
       const promptEdited=old.prompt!==undefined ? old.prompt!==card.prompt : !card.qibanId;
-      const changed=valid.filter(item=>old.signatures?.[item.id]!==JSON.stringify([item.text,item.meta?.qibanSpokenJapanese]));
+      const changed=valid.filter(item=>old.signatures?.[item.id]!==JSON.stringify([item.text,item.meta?.qibanSpokenJapanese,item.meta?.qibanSpokenChinese]));
       const batches=Math.max(1,Math.ceil(changed.length/200),Math.ceil(removed.length/200));
       let linked=null;const signatures={...old.signatures};
       for(let batch=0;batch<batches;batch++) {
-        const messages=changed.slice(batch*200,batch*200+200).map(item=>({id:item.id,role:item.role,text:item.text,createdAt:item.createdAt,spokenJapanese:item.meta?.qibanSpokenJapanese || null}));
+        const messages=changed.slice(batch*200,batch*200+200).map(item=>({id:item.id,role:item.role,text:item.text,createdAt:item.createdAt,spokenJapanese:item.meta?.qibanSpokenJapanese || null,spokenChinese:item.meta?.qibanSpokenChinese ?? null}));
         if(!messages.length && !removed.length && card.name===old.name && !promptEdited && old.qibanId)continue;
         linked=await window.QibanNative.call('syncContact',{active:store.activeConversationId===conversation?.id,contact:{id:card.id,qibanId:card.qibanId || old.qibanId || null,name:card.name,prompt:card.prompt || '',examples:card.examples || '',promptEdited,messages,removedIds:removed.slice(batch*200,batch*200+200)}});
         if(!linked.linked)break;
         for(const message of messages) {
-          signatures[message.id]=JSON.stringify([message.text,message.spokenJapanese || undefined]);
+          signatures[message.id]=JSON.stringify([message.text,message.spokenJapanese || undefined,message.spokenChinese ?? undefined]);
           const item=valid.find(item=>item.id===message.id);if(item)item.meta={...item.meta,qibanNativeId:linked.messageIDs[message.id]};
         }
       }

@@ -24,6 +24,8 @@ jobs:
         run: python3 tools/fetch-g2p-sdk.py
       - name: Install XcodeGen
         run: brew install xcodegen
+      - name: Check spoken dialogue examples
+        run: python3 tools/check-spoken-dialogue.py
       - name: Verify speech cancellation lifecycle
         if: inputs.run_tests
         run: python3 tools/probe-speech-cancellation.py

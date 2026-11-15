@@ -19,6 +19,7 @@ struct Message: Codable, Identifiable {
     var role: String
     var content: String
     var spokenJapanese:String? = nil
+    var spokenChinese:String? = nil
     var sources:[WebCitation]? = nil
     var createdAt = Date()
 
@@ -29,6 +30,7 @@ struct Message: Codable, Identifiable {
         return try? DialogueMotion.parse(content,actions:[])
     }
     var displayContent:String {recoveredReply?.text ?? content}
+    var resolvedSpokenChinese:String? {spokenChinese ?? recoveredReply?.spokenChinese}
     var resolvedSpokenJapanese:String? {
         if let value=spokenJapanese,!value.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty {return value}
         return recoveredReply?.spokenJapanese

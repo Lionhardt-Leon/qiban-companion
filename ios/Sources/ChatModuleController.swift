@@ -132,6 +132,7 @@ enum ChatNativePane:String,Identifiable {case persona,api,speech;var id:String{r
             };return ["started":true]
         case "abort":if let id=body["id"] as? String{requests[id]?.cancel()};return ["cancelled":true]
         case "speak":return try await speak(body)
+        case "speechText":return ["text":try dialogueText(body)]
         case "stopSpeech":stopSpeech();return ["stopped":true]
         case "open":
             selectedCardID=(body["card"] as? String).flatMap(UUID.init(uuidString:));cancelRequests();stopSpeech()
@@ -237,13 +238,19 @@ enum ChatNativePane:String,Identifiable {case persona,api,speech;var id:String{r
         }
         request.httpBody=try JSONSerialization.data(withJSONObject:object);return request
     }
+    private func dialogueText(_ body:[String:Any]) throws -> String {
+        let text=body["text"] as? String ?? "",chinese=body["spokenChinese"] as? String
+        guard text.count<=100_000,(chinese?.count ?? 0)<=100_000 else{throw CompanionError.message("朗读正文过长。")}
+        let message=Message(role:"assistant",content:text,spokenChinese:chinese)
+        return message.resolvedSpokenChinese.map{SpeechPreferences.clean($0)} ?? SpokenDialogue.dialogue(message.displayContent)
+    }
     private func speak(_ body:[String:Any]) async throws -> [String:Any] {
         guard !suspended else{throw CompanionError.message("App 已挂起，已停止朗读。")}
         let ticket=speechRevision
         let automatic=body["automatic"] as? Bool ?? false,preferences=store.archive.settings.speech ?? SpeechPreferences()
         if automatic && !preferences.autoPlay{return ["skipped":true]}
         let text=body["text"] as? String ?? "";guard text.count<=100_000 else{throw CompanionError.message("朗读正文过长。")}
-        let clean=SpeechPreferences.clean(text);guard !clean.isEmpty else{return ["skipped":true]}
+        let clean=try dialogueText(body);guard !clean.isEmpty else{return ["skipped":true,"spokenChinese":""]}
         var japanese=body["spokenJapanese"] as? String
         if preferences.language=="ja",SpeechPreferences.clean(japanese ?? "").isEmpty {
             if let cached=japaneseCache[clean] {japanese=cached}
@@ -262,10 +269,10 @@ enum ChatNativePane:String,Identifiable {case persona,api,speech;var id:String{r
         }
         let id=body["id"] as? String ?? UUID().uuidString
         try Task.checkCancellation();guard ticket==speechRevision else{throw CancellationError()}
-        let message=Message(id:ChatIdentifiers.uuid("speech:"+id),role:"assistant",content:text,spokenJapanese:japanese)
+        let message=Message(id:ChatIdentifiers.uuid("speech:"+id),role:"assistant",content:text,spokenJapanese:japanese,spokenChinese:clean)
         if automatic,speech.busy {guard speechQueue.count<8 else{return ["skipped":true]};speechQueue.append((message,id))}
         else {if !automatic{stopSpeech()};play(message,id:id)}
-        return ["started":true,"spokenJapanese":japanese ?? ""]
+        return ["started":true,"spokenJapanese":japanese ?? "","spokenChinese":clean]
     }
     private func play(_ message:Message,id:String) {
         currentSpeechID=id
