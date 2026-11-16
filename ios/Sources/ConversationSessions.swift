@@ -46,7 +46,8 @@ extension LocalArchive {
         guard activeSessionIDs?[key] != id else{return}
         let restored=sessionContents(id)
         if let previous=activeSessionIDs?[key] {
-            sessionHistories?[previous]=sessionContents(previous)
+            let saved=sessionContents(previous)
+            sessionHistories?[previous]=saved
             if let index=conversationSessions?.firstIndex(where:{$0.id==previous}){conversationSessions?[index].mood=moods?[key]}
         }
         activeSessionIDs?[key]=id;sessionHistories?.removeValue(forKey:id)
