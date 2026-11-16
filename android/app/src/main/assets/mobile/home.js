@@ -221,7 +221,7 @@
     return state;
   }
   const icon=window.QibanUI.icon;
-  let personaDraft=null,personaID='',personaTab='AI 人设',attachedImage=null,voiceCall=false;
+  let personaDraft=null,personaID='',personaTab='AI 人设',attachedImage=null,voiceCall=false,visionTicket=0,visionBusy=false;
   const paneParents={api:'settings',services:'api',service:'services',persona:'settings',speech:'settings',history:'settings',messages:'settings',memories:'settings',diary:'settings',appearance:'settings',snowbreak:'settings',embodiment:'settings',assets:'settings',network:'settings',images:'',actions:'',mood:'actions','body-state':'actions',sources:'',greetings:'','edit-message':'messages','persona-transfer':'persona-return','prompt-preview':'persona-return','local-vision':'images'};
   function render() {
     if(!archive)return;
@@ -280,7 +280,7 @@
     $('#panel-back').hidden=!paneParents[pane];window.QibanUI.hydrate($('#panel-content'));
     if(!$('#panel').open)$('#panel').showModal();$('#panel').scrollTop=0;
   }
-  function close(){restoreModel();call('homePage',{open:false}).catch(()=>{});if($('#confirmation').open)$('#confirmation').close();$('#panel').close();currentPane='';personaDraft=null;stage({type:'resume'});call('editing',{value:false}).catch(()=>{});}
+  function close(){visionTicket++;restoreModel();call('homePage',{open:false}).catch(()=>{});if($('#confirmation').open)$('#confirmation').close();$('#panel').close();currentPane='';personaDraft=null;stage({type:'resume'});call('editing',{value:false}).catch(()=>{});}
   function restoreModel(){const model=$('#model');if(model.parentElement!==document.body){document.body.prepend(model);model.removeAttribute('style');}}
   function nav(id,title,symbol,summary='',disabled=false){return `<button type="button" ${disabled?'disabled':`data-do="${id}"`} class="nav-row${disabled?' disabled':''}">${icon(symbol)}<span class="row-copy">${escape(title)}${summary?`<small>${escape(summary)}</small>`:''}</span>${disabled?'':icon('chevron.right','chevron')}</button>`;}
   function heading(title){return `<h3 class="section-title">${escape(title)}</h3>`;}
@@ -353,7 +353,7 @@
       case 'choose-photo':$('#photo-file').value='';$('#photo-file').click();return;
       case 'self-portrait':attachedImage=await portrait();close();return showAttachment();
       case 'remove-image':attachedImage=null;return showAttachment();
-      case 'local-vision':{const result=await call('localVision',{image:attachedImage});panel('本机识图',`<p id="vision-result" style="white-space:pre-wrap">${escape(result.text)}</p>${button('attach-vision','附到聊天输入')}`,'local-vision');return;}
+      case 'local-vision':{if(visionBusy)return;visionBusy=true;const ticket=++visionTicket;notice('正在本机识图…');const control=$('[data-do=local-vision]');if(control)control.disabled=true;try{const result=await call('localVision',{image:attachedImage});if(ticket!==visionTicket||currentPane!=='images')return;panel('本机识图',`<p id="vision-result" style="white-space:pre-wrap">${escape(result.text)}</p>${button('attach-vision','附到聊天输入')}`,'local-vision');}finally{visionBusy=false;if(control?.isConnected)control.disabled=false;}return;}
       case 'attach-vision':$('#input').value+=($('#input').value?'\n':'')+$('#vision-result').textContent;close();return render();
       case 'sources':{const sources=archive.messages.at(-1)?.sources||[];return panel('本轮检索来源',sources.map(s=>`<div class="section"><a href="${escape(s.url)}" target="_blank">${escape(s.title)}</a><p>${escape(s.snippet)}</p></div>`).join(''),'sources');}
       case 'greetings':return panel('使用角色开场白',`<div class="section group">${role().firstMessages.map((text,i)=>`<button data-greeting="${i}">${escape(text.slice(0,60))}</button>`).join('')}</div>`,'greetings');
