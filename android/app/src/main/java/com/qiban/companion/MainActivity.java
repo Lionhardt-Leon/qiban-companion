@@ -29,6 +29,7 @@ public final class MainActivity extends Activity {
     volatile long modelRevision=0;private String modelLabel="本地伙伴";
     private PermissionRequest pendingMediaPermission;
     private volatile boolean destroyed=false,suspended=false,stageEditing=false;
+    private boolean recoveringRenderer=false;private long lastRendererRecovery=0;private View rendererFailure;
     private final ScheduledExecutorService interactionQueue=Executors.newSingleThreadScheduledExecutor();private final ArrayDeque<JSONObject> pendingTouches=new ArrayDeque<>();
     @Override public void onCreate(Bundle state){super.onCreate(state);getWindow().setDecorFitsSystemWindows(false);if(Build.VERSION.SDK_INT>=33)getOnBackInvokedDispatcher().registerOnBackInvokedCallback(android.window.OnBackInvokedDispatcher.PRIORITY_DEFAULT,this::handleBack);getWindow().setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);getWindow().setStatusBarColor(Color.rgb(35,29,45));getWindow().setNavigationBarColor(Color.rgb(25,21,33));
         try{File privateRoot=new File(getFilesDir(),"QibanCompanion");store=new ArchiveStore(privateRoot);packs=new PackLibrary(new File(privateRoot,"libraries"));vault=new SecretVault(this);network=new NetworkBroker(store,vault);rooms=new PhoneRooms();discovery=new RoomDiscovery(this);speech=new SpeechPlayer(this,store,packs,network,this::speechEvent);conversation=new HomeConversation(this);sensors=new Sensors(this);
@@ -55,7 +56,7 @@ public final class MainActivity extends Activity {
         });
         view.setWebViewClient(new WebViewClient(){@Override public WebResourceResponse shouldInterceptRequest(WebView v,WebResourceRequest request){Uri u=request.getUrl();if(!"https".equals(u.getScheme())||!Objects.equals(u.getHost(),name+".qiban.local"))return null;try{return files.open(name,u.getPath());}catch(Exception e){return LocalOrigin.error(404,"资源未能读取："+u.getPath());}}
             @Override public boolean shouldOverrideUrlLoading(WebView v,WebResourceRequest request){Uri u=request.getUrl();if(("https://"+u.getHost()).equals(origin))return false;if(request.hasGesture()&&List.of("http","https").contains(u.getScheme()))startActivity(new Intent(Intent.ACTION_VIEW,u));return true;}
-            @Override public boolean onRenderProcessGone(WebView v,RenderProcessGoneDetail detail){network.cancelAll();speech.stop();content.removeView(v);views.remove(name);v.destroy();notice("显示进程已重启，记录仍保留。再次打开页面即可恢复。");if(name.equals("home"))safe(()->show("home"));return true;}
+            @Override public boolean onRenderProcessGone(WebView v,RenderProcessGoneDetail detail){recoverRenderer(name,v,detail.didCrash());return true;}
         });
         view.setWebChromeClient(new WebChromeClient(){@Override public boolean onShowFileChooser(WebView web,ValueCallback<Uri[]> result,FileChooserParams params){int id=nextPicker++;pickers.put(id,result);Intent intent=new Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("*/*");intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE,params.getMode()==FileChooserParams.MODE_OPEN_MULTIPLE);try{startActivityForResult(intent,id);return true;}catch(ActivityNotFoundException e){pickers.remove(id);result.onReceiveValue(null);notice("系统未安装文件选择器。");return false;}}
             @Override public void onPermissionRequest(PermissionRequest request){runOnUiThread(()->{
@@ -69,7 +70,45 @@ public final class MainActivity extends Activity {
     }
     private void respond(JavaScriptReplyProxy reply,String id,JSONObject value,String error){runOnUiThread(()->{if(destroyed)return;try{JSONObject result=new JSONObject().put("id",id);if(error!=null)result.put("error",error);else result.put("value",value==null?new JSONObject():value);reply.postMessage(result.toString());}catch(Exception ignored){}});}
     private static String cleanError(Throwable e){Throwable cause=e instanceof ExecutionException&&e.getCause()!=null?e.getCause():e;return cause.getMessage()==null?cause.getClass().getSimpleName():cause.getMessage();}
-    void show(String name){runOnUiThread(()->safe(()->{if(!name.equals("home")&&!name.equals("chat")&&!name.equals("game"))return;if(name.equals("chat")&&!packs.hasChat()){notice("请先导入随本版提供的 Fritia-Chat-Mobile-v5.qchat。");pickImport();return;}if(conversation.busy()&&!name.equals(surface)){notice("请先停止或等待当前回复。");return;}speech.stop();network.cancelAll();String previous=surface;surface=name;if(previous.equals("home"))clearTouches();if(previous.equals("home"))script("home","window.QibanHome?.suspend()");if(previous.equals("game"))script("game","window.QibanCards?.suspend()");if(previous.equals("chat"))script("chat","window.QibanAndroid?.suspend();window.QibanNative?.stopAllSpeech()");for(WebView v:views.values())v.setVisibility(View.GONE);WebView next=views.get(name);if(next==null){next=create(name);views.put(name,next);content.addView(next,new FrameLayout.LayoutParams(-1,-1));}else if(name.equals("chat")&&!previous.equals("chat"))next.reload();next.setVisibility(View.VISIBLE);next.onResume();toolbar.setVisibility(name.equals("chat")?View.VISIBLE:View.GONE);toolbar.surface(name);setSurfaceChrome(name);setRequestedOrientation(name.equals("game")?ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE:ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED);if(name.equals("home")){script(name,"window.QibanHome?.resume()");sensors.resume();}else sensors.pause();if(name.equals("game"))script(name,"window.QibanCards?.resume()");}));}
+    private void recoverRenderer(String name,WebView failed,boolean crashed){
+        android.util.Log.w("QibanRenderer",name+" renderer gone; crashed="+crashed);
+        if(!views.remove(name,failed))return;
+        content.removeView(failed);failed.destroy();
+        if(name.equals("home")){modelRevision++;modelNonce="";availableActions=new JSONArray();bodyState=new JSONObject();stageEditing=false;clearTouches();}
+        if(destroyed||!surface.equals(name)||recoveringRenderer)return;
+        network.cancelAll();conversation.cancel();speech.stop();sensors.pause();recoveringRenderer=true;
+        // Several WebViews can share a renderer. Remove all affected views before
+        // rebuilding the active surface; a background home callback must not
+        // navigate away from a game that was being opened.
+        content.postDelayed(()->{
+            recoveringRenderer=false;if(destroyed)return;
+            long now=SystemClock.elapsedRealtime();
+            if(lastRendererRecovery!=0&&now-lastRendererRecovery<10000){
+                LinearLayout box=new LinearLayout(this);box.setOrientation(LinearLayout.VERTICAL);box.setGravity(Gravity.CENTER);box.setPadding(dp(24),dp(24),dp(24),dp(24));box.setBackgroundColor(Color.rgb(35,29,45));
+                TextView text=new TextView(this);text.setTextColor(Color.WHITE);text.setTextSize(17);text.setText("显示暂时未能恢复，已保存的对话、素材和牌局仍保留。");box.addView(text);
+                Button retry=new Button(this);retry.setText("重新打开当前页面");retry.setOnClickListener(v->{lastRendererRecovery=0;content.removeView(box);rendererFailure=null;show(surface);});box.addView(retry);rendererFailure=box;content.addView(box,new FrameLayout.LayoutParams(-1,-1));return;
+            }
+            lastRendererRecovery=now;show(surface);notice("页面已自动重新加载，已保存的记录仍保留。");
+        },300);
+    }
+    void show(String name){runOnUiThread(()->safe(()->{
+        if(!name.equals("home")&&!name.equals("chat")&&!name.equals("game"))return;
+        if(name.equals("chat")&&!packs.hasChat()){notice("请先导入随本版提供的 Fritia-Chat-Mobile-v5.qchat。");pickImport();return;}
+        if(conversation.busy()&&!name.equals(surface)){notice("请先停止或等待当前回复。");return;}
+        if(rendererFailure!=null){content.removeView(rendererFailure);rendererFailure=null;}
+        speech.stop();network.cancelAll();String previous=surface;surface=name;
+        if(previous.equals("home")){clearTouches();script("home","window.QibanHome?.suspend()");}
+        if(previous.equals("game"))script("game","window.QibanCards?.suspend()");
+        if(previous.equals("chat"))script("chat","window.QibanAndroid?.suspend();window.QibanNative?.stopAllSpeech()");
+        for(WebView v:views.values())v.setVisibility(View.GONE);
+        WebView next=views.get(name);
+        if(next==null){next=create(name);views.put(name,next);content.addView(next,new FrameLayout.LayoutParams(-1,-1));}
+        else if(name.equals("chat")&&!previous.equals("chat"))next.reload();
+        next.setVisibility(View.VISIBLE);next.onResume();toolbar.setVisibility(name.equals("chat")?View.VISIBLE:View.GONE);toolbar.surface(name);setSurfaceChrome(name);
+        setRequestedOrientation(name.equals("game")?ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE:ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED);
+        if(name.equals("home")){script(name,"window.QibanHome?.resume()");sensors.resume();}else sensors.pause();
+        if(name.equals("game"))script(name,"window.QibanCards?.resume()");
+    }));}
     private void setSurfaceChrome(String page){WindowInsetsController controller=getWindow().getInsetsController();if(controller==null)return;boolean chat=page.equals("chat"),game=page.equals("game");if(game)getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);else getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);getWindow().setStatusBarColor(chat?Color.rgb(250,250,253):Color.rgb(35,29,45));getWindow().setNavigationBarColor(chat?Color.rgb(250,250,253):Color.rgb(15,10,25));int appearance=WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS|WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS;controller.setSystemBarsAppearance(chat?appearance:0,appearance);if(game){controller.setSystemBarsBehavior(WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);controller.hide(WindowInsets.Type.systemBars());}else controller.show(WindowInsets.Type.systemBars());}
     void script(String name,String code){runOnUiThread(()->{WebView w=views.get(name);if(w!=null&&!destroyed)w.evaluateJavascript(code,null);});}
     void homeEvent(JSONObject event){if(event.optString("type").equals("busy")&&!event.optBoolean("value")&&sensors!=null)runOnUiThread(()->sensors.replyFinished());script("home","window.QibanHome?.receive("+event+")");}
@@ -149,7 +188,7 @@ public final class MainActivity extends Activity {
     private JSONObject homeBootstrap()throws Exception {
         JSONArray models=new JSONArray();for(String id:List.of("Enya","Fenny"))if(packs.model(id).isFile())models.put(json("id",id,"file",id+".snowbreak"));if(new File(packs.models,"generic.json").isFile())models.put(json("id","generic","file","generic.json"));
         JSONArray voices=new JSONArray().put(json("id","system.zh","title","系统中文（非训练音色）","language","zh")).put(json("id","system.ja","title","系统日语（非训练音色）","language","ja"));File manifest=new File(packs.voice,"manifest.json");String voiceName="";if(manifest.isFile()){JSONObject source=FilesSupport.json(manifest,1024*1024);voiceName=source.optString("title",source.optString("name","已导入训练语音包"));JSONArray list=source.getJSONArray("voices");for(int i=0;i<list.length();i++)voices.put(list.getJSONObject(i));}
-        return json("archive",store.snapshot(),"models",models,"selectedModel",getPreferences(0).getString("model",""),"voices",voices,"voicePackageName",voiceName,"chatInstalled",packs.hasChat(),"version",BuildConfig.VERSION_NAME,"device",Build.MANUFACTURER+" "+Build.MODEL,"renderer",getPreferences(0).getString("renderQuality","automatic"),"touchAI",getPreferences(0).getBoolean("touchAI",true),"preferences",preferences());
+        return json("archive",store.snapshot(),"models",models,"pendingModel",stagedModel,"selectedModel",getPreferences(0).getString("model",""),"voices",voices,"voicePackageName",voiceName,"chatInstalled",packs.hasChat(),"version",BuildConfig.VERSION_NAME,"device",Build.MANUFACTURER+" "+Build.MODEL,"renderer",getPreferences(0).getString("renderQuality","automatic"),"touchAI",getPreferences(0).getBoolean("touchAI",true),"preferences",preferences());
     }
     private JSONObject homeCommand(String command,JSONObject b)throws Exception {
         switch(command){

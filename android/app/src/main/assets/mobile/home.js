@@ -680,7 +680,7 @@
   };
   run(async () => {
     await refresh();
-    const file = state.selectedModel === 'generic' ? 'generic.json' : state.models.find(m => m.id === state.selectedModel)?.file || state.models[0]?.file;
+    const file = state.pendingModel || (state.selectedModel === 'generic' ? 'generic.json' : state.models.find(m => m.id === state.selectedModel)?.file || state.models[0]?.file);
     if (file) await loadModel(file);else $('#empty').hidden = false;
   });
 })();

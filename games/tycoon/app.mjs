@@ -1,5 +1,5 @@
 import {RULES_VERSION,SUITS,card,face,label,createGame,startRound,act,botAction,legalMoves,makePlay,beats,viewFor,restoreGame,titles} from './engine.mjs';
-import {setOriginalTheme,originalTheme,titleHTML,tableHTML,updateOriginalSelection,missingThemeHTML,mountOriginalTable,fitOriginalStage,bindOriginalFan,OriginalAudio,OriginalPresentation,playName} from './original-table.mjs';
+import {setOriginalTheme,originalTheme,titleHTML,tableHTML,updateOriginalTable,updateOriginalSelection,missingThemeHTML,mountOriginalTable,fitOriginalStage,bindOriginalFan,OriginalAudio,OriginalPresentation,playName} from './original-table.mjs';
 const $=s=>document.querySelector(s),root=$('#app'),modal=$('#modal');
 const native=window.webkit?.messageHandlers?.qibanGame;
 const bridge=(command,data={})=>native.postMessage({command,...data});
@@ -32,7 +32,8 @@ function render(){
   const v=mode==='lobby'?null:currentView();
   if(mode==='offline'&&game&&turnRevision!==game.revision){turnRevision=game.revision;turnDue=Date.now()+15000;}
   if(v)presentation.observe(v,seatArt);
-  root.innerHTML=!originalTheme()?missingThemeHTML(!!native):mode==='lobby'?lobby():mode==='online'&&!room?.game?titlePage(waiting(),'等待室'):board();
+  const html=!originalTheme()?missingThemeHTML(!!native):mode==='lobby'?lobby():mode==='online'&&!room?.game?titlePage(waiting(),'等待室'):board();
+  if(!updateOriginalTable(root,html))root.innerHTML=html;
   bind();mountOriginalTable().catch(()=>{});audio.sync();
 }
 function titlePage(content,subtitle='即刻入席'){return titleHTML(content+`<div class="row">${button('rules','规则速查','rule-link')}${button('options','声音设置','rule-link')}</div>`,{joker:art.find(c=>c.id.endsWith('/p5-joker'))||character(data.selections[0]),riko:art.find(c=>c.id.endsWith('/p5-riko'))||character(data.selections[3]),subtitle,stats:data.stats?`累计 ${data.stats.played||0} 局 · 获胜 ${data.stats.won||0} 局`:''});}

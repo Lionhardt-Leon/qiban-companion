@@ -3,12 +3,12 @@
 import {card,face,label,makePlay,beats,legalMoves,titles} from './engine.mjs';
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const rect=(l,t,r,b)=>`left:${l*100}%;top:${t*100}%;width:${(r-l)*100}%;height:${(b-t)*100}%`;
-const at=(content,l,t,r,b,cls='')=>`<div class="placed ${cls}" style="${rect(l,t,r,b)}">${content}</div>`;
+const at=(content,l,t,r,b,cls='')=>`<div class="placed ${cls}" data-slot="${l}:${t}" style="${rect(l,t,r,b)}">${content}</div>`;
 const image=(url,cls='',style='')=>url?`<img class="${cls}" src="${esc(url)}" style="${style}" alt="" draggable="false">`:'';
 let theme=null;
-const cache=new Map(),tints=new Map();
+const cache=new Map(),tints=new Map(),tintedParks=new Map();
 export const originalTheme=()=>theme;
-export function setOriginalTheme(themes=[]){const next=themes.find(t=>t.id==='p5-original'&&t.revision===1);if(theme?.images?.table_bg!==next?.images?.table_bg){cache.clear();tints.clear();}theme=next||null;}
+export function setOriginalTheme(themes=[]){const next=themes.find(t=>t.id==='p5-original'&&t.revision===1);if(theme?.images?.table_bg!==next?.images?.table_bg){cache.clear();tints.clear();tintedParks.clear();}theme=next||null;}
 const art=key=>theme?.images?.[key]||'';
 const sprite=(key,cls='',style='')=>image(art(key),cls,style);
 async function load(url){if(!url)return null;if(!cache.has(url))cache.set(url,(async()=>{const i=new Image();i.src=url;await i.decode();return i;})().catch(()=>null));return cache.get(url);}
@@ -92,10 +92,52 @@ export function tableHTML(v,{getCharacter,selected,busy=false,online=false,roomC
   return html+'</main>';
 }
 function resultsHTML(v,getCharacter,online){const n=v.players.length;return `<section class="original-results">${sprite('table_bg','result-pattern')}${sprite('result_burst','result-burst')}<div class="result-cards" style="${rect(.54-n*.075,.15,.54+n*.075,.6)}">${v.order.map((i,rank)=>`<article class="result-card ${i===v.seat?'is-self':''}">${sprite('result_card','result-card-bg')}${at(portraitHTML(getCharacter(i),mood(v,i),'result-portrait',false),.035,.13,.965,.8)}${sprite('result_border','result-card-border')}${at(sprite('identity'+level(n,rank)),.015,.015,.93,.22)}${at(sprite('result_name'),.025,.73,.975,.88)}${at(esc(v.players[i].name),.09,.735,.93,.875,'result-player-name')}${i===v.seat?at(sprite('result_self'),.64,.62,.98,.75):''}${v.fallen===i?at('一落千丈',.04,.22,.96,.32,'fallen-caption'):''}${at(`本局 +${(n-1-rank)*10}<br>累计 ${v.players[i].score*10} 分`,.045,.875,.955,1,'result-score')}</article>`).join('')}</div></section>`;}
-export function titleHTML(content,{joker,riko,subtitle='',stats=''}){return `<main class="title-screen">${sprite('table_bg','table-pattern')}${sprite('lobby_bg','lobby-backdrop')}${at('PERSONA / PRIVATE CARD CLUB',.055,.06,.55,.11,'club-caption')}${at('TYCOON',.065,.17,.54,.34,'tycoon-title')}${at('大富豪 · 夺回你的出牌权',.065,.34,.55,.4,'title-subtitle')}${at(portraitHTML(joker,'Neutral','title-portrait'),.015,.42,.36,.89)}${at(portraitHTML(riko,'Neutral','title-portrait'),.3,.46,.57,.89)}${at('3 / 4 PLAYERS　 ·　 54 CARDS',.06,.87,.55,.91,'club-caption')}${at(esc(stats),.06,.915,.55,.95,'title-stats')}${at('栖伴 0.30.1 · P5 Tycoon 原版界面',.06,.957,.55,.985,'title-version')}<section class="title-pane" style="${rect(.55,.045,.965,.955)}"><h1>${esc(subtitle||'即刻入席')}</h1>${content}</section><button data-do="exitGame" class="companion-return">‹ 返回陪伴</button></main>`;}
+export function titleHTML(content,{joker,riko,subtitle='',stats=''}){return `<main class="title-screen">${sprite('table_bg','table-pattern')}${sprite('lobby_bg','lobby-backdrop')}${at('PERSONA / PRIVATE CARD CLUB',.055,.06,.55,.11,'club-caption')}${at('TYCOON',.065,.17,.54,.34,'tycoon-title')}${at('大富豪 · 夺回你的出牌权',.065,.34,.55,.4,'title-subtitle')}${at(portraitHTML(joker,'Neutral','title-portrait'),.015,.42,.36,.89)}${at(portraitHTML(riko,'Neutral','title-portrait'),.3,.46,.57,.89)}${at('3 / 4 PLAYERS　 ·　 54 CARDS',.06,.87,.55,.91,'club-caption')}${at(esc(stats),.06,.915,.55,.95,'title-stats')}${at('栖伴 0.30.2 · P5 Tycoon 原版界面',.06,.957,.55,.985,'title-version')}<section class="title-pane" style="${rect(.55,.045,.965,.955)}"><h1>${esc(subtitle||'即刻入席')}</h1>${content}</section><button data-do="exitGame" class="companion-return">‹ 返回陪伴</button></main>`;}
 export function missingThemeHTML(native){return `<main class="theme-required"><div><div class="club-caption">P5 TYCOON</div><h1>导入原版视听包</h1><p>牌面、人物身份框、背景、按钮、表情与音效<br>都从原版素材载入。</p><button class="primary" data-do="importArt">导入 P5-Tycoon-Original-v1.qcards</button><p class="hint">已有的尘白立绘、自定义角色与牌局存档会继续保留。<br>旧版的 P5 立绘包只含人物，需要用完整视听包更新。</p><button class="secondary" data-do="exitGame">返回陪伴</button></div></main>`;}
 export function fitOriginalStage(){const viewport=document.querySelector('#viewport'),stage=document.querySelector('#stage');if(!viewport||!stage)return;const ratio=Math.min(viewport.clientWidth/1600,viewport.clientHeight/900);stage.style.setProperty('--table-scale',ratio);document.body.classList.toggle('portrait-device',innerHeight>innerWidth);}
-export async function mountOriginalTable(){fitOriginalStage();const token=theme;for(const el of document.querySelectorAll('[data-park]')){const url=await tintPark(Number(el.dataset.park));if(theme===token&&el.isConnected&&url)el.querySelector('.sector-park').src=url;}}
+export async function mountOriginalTable(){fitOriginalStage();const token=theme;for(const el of document.querySelectorAll('[data-park]')){const n=Number(el.dataset.park),url=await tintPark(n);if(theme===token&&url){tintedParks.set(n,url);const img=el.querySelector('.sector-park');if(el.isConnected&&img.getAttribute('src')!==url)img.src=url;}}}
+
+// Reconcile the live table instead of removing decoded images on every bot turn,
+// network revision or animation completion. Coordinate slots identify the comic
+// panels; card IDs keep the fan and its remaining textures mounted after a play.
+function tableNodeKey(node){
+  if(node.nodeType!==1)return '';
+  for(const attr of ['data-slot','data-park','data-card','data-do'])if(node.hasAttribute(attr))return node.nodeName+':'+attr+':'+node.getAttribute(attr);
+  if(node.nodeName==='IMG')return 'IMG:'+(node.className||node.getAttribute('src'));
+  if(node.classList.contains('fan-hand'))return 'hand';
+  return '';
+}
+function patchTableNode(current,next){
+  if(current.nodeType===3){if(current.data!==next.data)current.data=next.data;return;}
+  for(const attr of [...current.attributes])if(!next.hasAttribute(attr.name))current.removeAttribute(attr.name);
+  for(const attr of next.attributes)if(current.getAttribute(attr.name)!==attr.value)current.setAttribute(attr.name,attr.value);
+  const old=[...current.childNodes],keyed=new Map(old.map(n=>[tableNodeKey(n),n]).filter(([k])=>k)),used=new Set();
+  const plan=[];
+  for(const child of [...next.childNodes]){
+    const key=tableNodeKey(child);
+    let live=key?keyed.get(key):old.find(n=>!used.has(n)&&!tableNodeKey(n)&&n.nodeType===child.nodeType&&n.nodeName===child.nodeName);
+    if(live&&live.nodeName!==child.nodeName)live=null;
+    if(live)used.add(live);else live=child;
+    plan.push([live,child]);
+  }
+  // Remove obsolete status/action slots first, so an unchanged background or
+  // hand never has to be detached and reinserted around a disappearing sibling.
+  for(const node of old)if(!used.has(node))node.remove();
+  let cursor=current.firstChild;
+  for(const [live,child] of plan){
+    if(used.has(live))patchTableNode(live,child);
+    if(live!==cursor)current.insertBefore(live,cursor);
+    cursor=live.nextSibling;
+  }
+}
+export function updateOriginalTable(root,html){
+  const board=root.firstElementChild;if(!board?.classList.contains('p5-table'))return false;
+  const fragment=document.createElement('template');fragment.innerHTML=html;
+  const next=fragment.content.firstElementChild;if(!next?.classList.contains('p5-table'))return false;
+  // The live backgrounds may already be tinted while a later render is queued.
+  for(const el of next.querySelectorAll('[data-park]')){const url=tintedParks.get(Number(el.dataset.park));if(url)el.querySelector('.sector-park').src=url;}
+  patchTableNode(board,next);return true;
+}
 
 // Selection changes no game state. Keep decoded images, tinted backgrounds,
 // animation canvas and pointer listeners mounted on mobile WebViews.
