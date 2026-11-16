@@ -629,6 +629,7 @@
       if (event.type === 'sound') {
         notice('听到：' + event.label);
       }
+      if(event.type==='cameraDescribe')run(()=>sendHome('看看镜头里的内容，告诉我你看到了什么。'));
       if (event.type === 'camera') {
         camera = event.enabled;
         $('#camera').classList.toggle('on',camera);$('#camera').innerHTML=icon(camera?'video.fill':'video.slash');$('#camera').ariaLabel=camera?'关闭后置视频':'开启后置视频';
