@@ -6,9 +6,10 @@ import java.security.MessageDigest;
 import org.json.*;
 
 final class FilesSupport {
+    static byte[] read(InputStream in,int max)throws IOException {ByteArrayOutputStream out=new ByteArrayOutputStream();byte[] b=new byte[Math.min(65536,max)];int n;while(out.size()<max&&(n=in.read(b,0,Math.min(b.length,max-out.size())))!=-1)out.write(b,0,n);return out.toByteArray();}
     static void atomic(File file,byte[] data)throws Exception {file.getParentFile().mkdirs();File temp=new File(file.getParentFile(),"."+file.getName()+".tmp");try(FileOutputStream out=new FileOutputStream(temp)){out.write(data);out.getFD().sync();}try{Files.move(temp.toPath(),file.toPath(),StandardCopyOption.ATOMIC_MOVE,StandardCopyOption.REPLACE_EXISTING);}catch(AtomicMoveNotSupportedException e){Files.move(temp.toPath(),file.toPath(),StandardCopyOption.REPLACE_EXISTING);}}
     static void atomic(File file,String data)throws Exception{atomic(file,data.getBytes(StandardCharsets.UTF_8));}
-    static String text(File file,int max)throws Exception{if(file.length()>max)throw new IOException("文件超过允许大小。");try(InputStream in=new FileInputStream(file)){return new String(in.readNBytes(max+1),StandardCharsets.UTF_8);}}
+    static String text(File file,int max)throws Exception{if(file.length()>max)throw new IOException("文件超过允许大小。");try(InputStream in=new FileInputStream(file)){return new String(FilesSupport.read(in,max+1),StandardCharsets.UTF_8);}}
     static JSONObject json(File file,int max)throws Exception{return new JSONObject(text(file,max));}
     static boolean safe(String path){return path.length()>0&&path.length()<240&&!path.startsWith("/")&&!path.contains("\\")&&!path.contains(":")&&java.util.Arrays.stream(path.split("/",-1)).noneMatch(p->p.equals("..")||p.equals(".")||p.isEmpty());}
     static File child(File root,String path)throws Exception{if(!safe(path))throw new IOException("文件路径无效。");File f=new File(root,path).getCanonicalFile();if(!f.toPath().startsWith(root.getCanonicalFile().toPath()))throw new IOException("文件越界。");return f;}

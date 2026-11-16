@@ -18,6 +18,7 @@ android {
         if (!project.hasProperty('javaOnly')) { externalNativeBuild { cmake { arguments '-DANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=ON', '-DROOT=' + root.absolutePath.replace('\\','/'); cppFlags '-std=c++17' } } }
     }
     buildFeatures { buildConfig true }
+    androidResources { noCompress += ['tflite'] }
     compileOptions { sourceCompatibility JavaVersion.VERSION_17; targetCompatibility JavaVersion.VERSION_17; coreLibraryDesugaringEnabled true }
     if (!project.hasProperty('javaOnly')) { externalNativeBuild { cmake { path file('src/main/cpp/CMakeLists.txt'); version '3.22.1' } } }
     signingConfigs {
@@ -40,6 +41,7 @@ dependencies {
     implementation 'org.mozilla:rhino:1.9.1'
     implementation 'com.microsoft.onnxruntime:onnxruntime-android:1.24.2'
     implementation 'com.google.mlkit:image-labeling:17.0.9'
+    implementation 'com.google.ai.edge.litert:litert:1.4.1'
     coreLibraryDesugaring 'com.android.tools:desugar_jdk_libs:2.1.5'
     testImplementation 'junit:junit:4.13.2'
     testImplementation 'org.json:json:20250517'

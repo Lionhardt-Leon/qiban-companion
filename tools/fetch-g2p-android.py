@@ -22,9 +22,9 @@ patcher['patch'](source,deps);patcher['patch_package_text'](source)
 headers={p.relative_to(source/'include').as_posix().lower():p.relative_to(source/'include').as_posix() for p in (source/'include').rglob('*') if p.is_file()}
 for p in (source/'src').rglob('*'):
     if p.suffix not in ['.cpp','.h','.hpp']:continue
-    text=p.read_text(encoding='utf-8')
-    fixed=re.sub(r'(#\s*include\s*["<])(GPTSoVITS/[^">]+)([">])',lambda m:m[1]+headers.get(m[2].lower(),m[2])+m[3],text)
-    if fixed!=text:p.write_text(fixed,encoding='utf-8')
+    raw=p.read_bytes()
+    fixed=re.sub(rb'(#\s*include\s*["<])(GPTSoVITS/[^">]+)([">])',lambda m:m[1]+headers.get(m[2].decode('ascii').lower(),m[2].decode('ascii')).encode('ascii')+m[3],raw)
+    if fixed!=raw:p.write_bytes(fixed)
 (work/'paths.cmake').write_text('\n'.join('set('+k+' "'+str(v.resolve()).replace('\\','/')+'")' for k,v in [('GSV',source),('DEPS',deps),('BOOST_HEADERS',boost)]))
 notices=['Qiban Android speech: pinned GPT-SoVITS-cpp '+helper['GSV']+'; patches in tools/tts-native/patch_frontend.py. Corresponding source URLs and exact revisions follow.']
 for name,folder in [('GPT-SoVITS-cpp',source),*[(k,deps/k) for k in helper['DEPS']]]:
