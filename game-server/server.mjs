@@ -18,7 +18,7 @@ const toolDefs=[
   ['qiban_create_room','创建 3／4 人牌桌；返回私有座位凭证。','create',{requestId:{type:'string'},capacity:{type:'integer',enum:[3,4]},name:{type:'string'},password:{type:'string'}}],
   ['qiban_join_room','加入现有牌桌，返回私有座位凭证。','join',{requestId:{type:'string'},code:{type:'string'},name:{type:'string'},password:{type:'string'}}],
   ['qiban_room_state','只查看自己手牌和公开牌桌，不会提供其他玩家的手牌。','state',{code:{type:'string'},token:{type:'string'}}],
-  ['qiban_room_action','准备、开始、出牌、换牌、PASS、下一局或离开；需要最新 revision 和唯一 actionId。','action',{code:{type:'string'},token:{type:'string'},revision:{type:'integer'},actionId:{type:'string'},op:{type:'string',enum:['ready','start','act','next','leave']},ready:{type:'boolean'},fillBots:{type:'boolean'},action:{type:'object',properties:{type:{enum:['play','pass','exchange']},ids:{type:'array',items:{type:'integer'}}},additionalProperties:false}}]
+  ['qiban_room_action','准备、开始、出牌、换牌、PASS、下一局或离开；需要最新 revision 和唯一 actionId。','action',{code:{type:'string'},token:{type:'string'},revision:{type:'integer'},actionId:{type:'string'},op:{type:'string',enum:['ready','start','act','auto','next','leave']},enabled:{type:'boolean'},ready:{type:'boolean'},fillBots:{type:'boolean'},action:{type:'object',properties:{type:{enum:['play','pass','exchange']},ids:{type:'array',items:{type:'integer'}}},additionalProperties:false}}]
 ];
 const mime={'.html':'text/html; charset=utf-8','.mjs':'text/javascript; charset=utf-8','.css':'text/css; charset=utf-8'};
 export function createRoomServer({key='',service=new RoomService(),allowedOrigins=[],webRoot=resolve(dirname(fileURLToPath(import.meta.url)),'../games/tycoon')}={}) {

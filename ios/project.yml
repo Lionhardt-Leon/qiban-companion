@@ -30,8 +30,8 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: $(COMPAT_APP_BUNDLE)
-        MARKETING_VERSION: "0.28.1"
-        CURRENT_PROJECT_VERSION: "48"
+        MARKETING_VERSION: "0.29.0"
+        CURRENT_PROJECT_VERSION: "49"
         GENERATE_INFOPLIST_FILE: YES
     dependencies:
       - package: ONNXRuntime
@@ -83,7 +83,7 @@ targets:
             UTTypeConformsTo: [public.data, public.archive]
             UTTypeTagSpecification:
               public.filename-extension: [qvoice]
-        UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
+        UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait, UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight]
   QibanCompanionTests:
     type: bundle.unit-test
     platform: iOS

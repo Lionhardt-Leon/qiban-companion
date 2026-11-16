@@ -9,6 +9,7 @@ import WebKit
     @Published var importingBusy=false
     @Published var importProgress:Double=0
     @Published var notice:String?
+    @Published var returnRequested=false
     private(set) var webView:WKWebView?
     private var server:ChatModuleServer?
     private let library=CardGameLibrary()
@@ -32,6 +33,7 @@ import WebKit
             guard (response as? HTTPURLResponse)?.statusCode==200,String(decoding:html,as:UTF8.self).contains("app.mjs") else{throw CompanionError.message("本机牌桌页面载入失败，可点“重新打开”。")}
             let content=WKUserContentController();content.addScriptMessageHandler(self,contentWorld:.page,name:"qibanGame")
             let config=WKWebViewConfiguration();config.userContentController=content;config.websiteDataStore = .default()
+            config.mediaTypesRequiringUserActionForPlayback=[]
             let view=WKWebView(frame:.zero,configuration:config);view.navigationDelegate=self;view.isOpaque=false;view.backgroundColor = .black
             webView=view;view.load(URLRequest(url:server.pageURL));objectWillChange.send()
         }catch{self.error=error.localizedDescription}
@@ -50,7 +52,7 @@ import WebKit
         guard !importingBusy else{return};importingBusy=true;importProgress=0;notice=nil;error=nil
         let ticket=UUID();importTicket=ticket
         Task {defer{importingBusy=false};do{let library=self.library;let result=try await Task.detached{try library.install(url){done,total in Task{@MainActor [weak self] in guard let self=self,self.importingBusy,self.importTicket==ticket else{return};self.importProgress=Double(done)/Double(max(1,total))}}}.value
-                importProgress=1;notice="已导入「\(result.title)」：\(result.characters) 个角色，\(result.images) 张图片。可在牌桌选角中使用。"
+                importProgress=1;notice="已导入「\(result.title)」：\(result.characters) 个角色，\(result.images) 张图片。"
                 if let view=webView{_ = try? await view.callAsyncJavaScript("if(window.QibanCards) await window.QibanCards.reloadArt();",arguments:[:],in:nil,contentWorld:.page)}
             }
             catch{self.error=error.localizedDescription}}
@@ -70,10 +72,11 @@ import WebKit
         case "bootstrap":
             let personas=store.archive.settings.personas
             let names=Array(Set(([personas?.userName ?? ""]+(personas?.cards.map(\.userName) ?? [])).filter{!$0.isEmpty})).sorted()
-            return ["state":try library.state() as Any? ?? NSNull(),"characters":try library.catalog(),"personas":names.map{["name":$0]},"phoneHosting":true,"hostInfo":await PhoneCardRoomServer.shared.info()]
-        case "catalog":return ["characters":try library.catalog()]
+            return ["state":try library.state() as Any? ?? NSNull(),"characters":try library.catalog(),"themes":try library.themeCatalog(),"personas":names.map{["name":$0]},"phoneHosting":true,"hostInfo":await PhoneCardRoomServer.shared.info()]
+        case "catalog":return ["characters":try library.catalog(),"themes":try library.themeCatalog()]
         case "persist":guard let text=body["value"] as? String else{throw CompanionError.message("缺少牌桌存档。")};try library.persist(text);return ["ok":true]
         case "importArt":importing=true;return ["ok":true]
+        case "returnToCompanion":returnRequested=true;return ["ok":true]
         case "hostRoom":
             guard !suspended,let input=body["input"] as? [String:Any],let source=Bundle.main.url(forResource:"tycoon",withExtension:nil)?.appendingPathComponent("native-runtime.js") else{throw CompanionError.message("本机牌桌暂时不可用。")}
             let result=try await PhoneCardRoomServer.shared.start(source:source,input:input)
@@ -127,15 +130,18 @@ private final class CardGameNoRedirect:NSObject,URLSessionTaskDelegate,@unchecke
     let onClose:()->Void
     init(store:LocalStore,onClose:@escaping()->Void){_controller=StateObject(wrappedValue:CardGameController(store:store));self.onClose=onClose}
     var body:some View {
-        VStack(spacing:0){
-            HStack{Button{controller.close(onClose)}label:{Label("陪伴",systemImage:"chevron.left")};Spacer();Text("游戏").font(.headline);Spacer();Button("导入立绘"){controller.importing=true}.disabled(controller.importingBusy)}.padding(.horizontal,18).padding(.vertical,10)
-            if let view=controller.webView{CardGameSurface(view:view)}else if controller.error==nil{ProgressView("正在摆好牌桌…").frame(maxWidth:.infinity,maxHeight:.infinity)}else{VStack(spacing:16){Text("牌桌暂时未能打开");Button("重新打开"){controller.retry()}}.frame(maxWidth:.infinity,maxHeight:.infinity)}
-            if controller.importingBusy{VStack{ProgressView(value:controller.importProgress);Text("正在校验并导入立绘… \(Int(controller.importProgress*100))%").font(.caption)}.padding(12)}
-            if let notice=controller.notice{HStack{Text(notice).font(.caption);Button("知道了"){controller.notice=nil}}.padding(12).foregroundStyle(.green).accessibilityIdentifier("cardArtImportSuccess")}
-            if let error=controller.error{HStack{Text(error).font(.caption);Button("关闭提示"){controller.error=nil}}.padding(12).foregroundStyle(.red)}
-        }.background(Color(red:0.08,green:0.09,blue:0.11)).preferredColorScheme(.dark).tint(.white)
-        .interactiveDismissDisabled().task{await controller.start()}.onDisappear{if !controller.importing && !controller.importingBusy{controller.dispose()}}.onChange(of:scenePhase){controller.suspend($0 == .background)}
+        ZStack(alignment:.bottom){
+            if let view=controller.webView{CardGameSurface(view:view).ignoresSafeArea()}else{VStack(spacing:16){ProgressView("正在摆好原版牌桌…");if controller.error != nil{Button("重新打开"){controller.retry()}};Button("返回陪伴"){finish()}}.frame(maxWidth:.infinity,maxHeight:.infinity)}
+            VStack(spacing:6){
+                if controller.importingBusy{VStack{ProgressView(value:controller.importProgress);Text("正在校验并导入视听资源… \(Int(controller.importProgress*100))%").font(.caption)}.padding(12).background(.ultraThinMaterial)}
+                if let notice=controller.notice{HStack{Text(notice).font(.caption);Button("知道了"){controller.notice=nil}}.padding(10).background(.ultraThinMaterial).foregroundStyle(.green).accessibilityIdentifier("cardArtImportSuccess")}
+                if let error=controller.error{HStack{Text(error).font(.caption);Button("关闭提示"){controller.error=nil};Button("返回陪伴"){finish()}}.padding(10).background(.ultraThinMaterial).foregroundStyle(.red)}
+            }.padding(.horizontal,24).padding(.bottom,12)
+        }.background(.black).preferredColorScheme(.dark).tint(.white).statusBarHidden(true)
+        .interactiveDismissDisabled().task{GameOrientation.setGame(true);await controller.start()}.onDisappear{if !controller.importing && !controller.importingBusy{controller.dispose();GameOrientation.setGame(false)}}.onChange(of:scenePhase){controller.suspend($0 == .background)}
+        .onChange(of:controller.returnRequested){if $0{finish()}}
         .sheet(isPresented:$controller.importing){CharacterDocumentPicker{result in controller.importing=false;do{if let url=try result.get(){controller.install(url)}}catch{controller.error=error.localizedDescription}}}
     }
+    private func finish(){controller.close{GameOrientation.setGame(false);onClose()}}
 }
 private struct CardGameSurface:UIViewRepresentable {let view:WKWebView;func makeUIView(context:Context)->WKWebView{view};func updateUIView(_ uiView:WKWebView,context:Context){}}

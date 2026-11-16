@@ -48,7 +48,7 @@ function startRound(g, random = Math.random) {
   g.fallen=-1; g.revolution=false; g.passes=0; g.exchanges={}; g.log=[];
   const deck=Array.from({length:54},(_,i)=>i);
   for (let i=53;i>0;i--) {const j=Math.floor(random()*(i+1)); [deck[i],deck[j]]=[deck[j],deck[i]];}
-  g.players.forEach(p=>{p.hand=[];p.status='等待';});
+  g.players.forEach(p=>{p.hand=[];p.status='等待';p.lastAction=null;});
   deck.forEach((id,i)=>g.players[(i+g.round-1)%g.players.length].hand.push(id));
   g.players.forEach(p=>p.hand.sort((a,b)=>a%13-b%13 || a-b));
   g.current=g.previous.length ? g.previous.at(-1) : g.players.findIndex(p=>p.hand.includes(13));
@@ -98,7 +98,7 @@ function act(g, seat, action) {
   }
   if(g.phase!=='playing'||g.current!==seat||!active(g,seat))fail('还没轮到你。');
   if(action?.type==='pass') {
-    if(!g.table)fail('领出时不能 PASS。');g.passes++;g.players[seat].status='PASS';log(g,`${g.players[seat].name}：PASS`);
+    if(!g.table)fail('领出时不能 PASS。');g.passes++;g.players[seat].status='PASS';g.players[seat].lastAction={type:'pass'};log(g,`${g.players[seat].name}：PASS`);
     const others=g.players.filter((_,i)=>active(g,i)&&i!==g.leader).length;
     if(g.passes>=others)clear(g,'其他在场玩家全部 PASS，重新领出。');else g.current=next(g,seat);
   } else if(action?.type==='play') {
@@ -107,7 +107,7 @@ function act(g, seat, action) {
     const counter=play.spadeThree && g.table?.joker;
     g.players[seat].hand=g.players[seat].hand.filter(id=>!play.ids.includes(id));
     g.table=play;g.lastPlay=play;g.lastActor=seat;g.leader=seat;g.passes=0;
-    g.players.forEach(p=>{if(p.status==='PASS')p.status='等待';});g.players[seat].status=play.ids.map(label).join(' ');
+    g.players.forEach(p=>{if(p.status==='PASS')p.status='等待';});g.players[seat].status=play.ids.map(label).join(' ');g.players[seat].lastAction={type:'play',play};
     log(g,`${g.players[seat].name}：${g.players[seat].status}`);
     if(play.count===4){g.revolution=!g.revolution;log(g,g.revolution?'革命！3 最大，2 最小；Joker 仍最大。':'反革命！恢复正常牌力。');}
     if(!g.players[seat].hand.length)finish(g,seat);
@@ -169,10 +169,12 @@ class RoomCore {
   constructor({now=Date.now,random=Math.random,crypto,onError=()=>{}}={}) {if(!crypto)throw new Error("Secure crypto provider required");this.token=(bytes=24)=>crypto.token(bytes);this.digest=value=>crypto.hash(String(value));this.equal=(a,b)=>crypto.equal(String(a),String(b));this.rooms=new Map();this.now=now;this.random=random;this.creations=new Map();this.onError=onError;}
   prune() {for(const [code,r] of this.rooms)if(this.now()-r.touched>12*60*60*1000)this.rooms.delete(code);}
   player(r,credential) {const p=r.seats.find(p=>p&&!p.bot&&this.equal(p.token,credential));if(!p)error('座位凭证无效，请使用原设备重连。');p.seen=this.now();return p;}
+  syncClock(r){const g=r.game;if(!g)return;const key=`${g.round}/${g.revision}/${g.phase}/${g.current}`;if(r.turnKey!==key){r.turnKey=key;r.turnDeadline=this.now()+15000;}if(g.phase==='finished'&&r.finishedRound!==g.round){r.finishedRound=g.round;r.seats.forEach((s,i)=>{if(s)s.ready=s.bot||i===r.host;});}}
   publicState(r,p) {
-    r.touched=this.now();
+    r.touched=this.now();this.syncClock(r);
     return {rules:RULES_VERSION,code:r.code,host:r.host,seat:p.seat,revision:r.revision,capacity:r.capacity,difficulty:r.difficulty,
       seats:r.seats.map(s=>s?{seat:s.seat,name:s.name,appearance:s.appearance,bot:s.bot,ready:s.ready,online:s.bot||this.now()-s.seen<20_000}:null),
+      autoPlay:r.autoPlay||Array(r.capacity).fill(false),turnRemaining:r.game?Math.max(0,Math.ceil((r.turnDeadline-this.now())/1000)):15,
       game:r.game?viewFor(r.game,p.seat):null};
   }
   request(input={}) {
@@ -184,7 +186,7 @@ class RoomCore {
       if(![3,4].includes(input.capacity))error('请选择 3 人或 4 人牌桌。');
       let code;do{code=this.token(4).slice(0,6).toUpperCase();}while(this.rooms.has(code));
       const salt=this.token(),r={code,capacity:input.capacity,difficulty:['easy','normal','hard'].includes(input.difficulty)?input.difficulty:'normal',
-        salt,password:this.digest(salt+text(input.password,64)),host:0,seats:Array(input.capacity).fill(null),game:null,touched:this.now(),revision:1,actions:new Map(),joins:new Map(),nextBotAt:0};
+        salt,password:this.digest(salt+text(input.password,64)),host:0,seats:Array(input.capacity).fill(null),autoPlay:Array(input.capacity).fill(false),game:null,touched:this.now(),revision:1,actions:new Map(),joins:new Map(),nextBotAt:0};
       const p={seat:0,name:text(input.name)||'房主',appearance:cleanAppearance(input.appearance),bot:false,ready:true,token:this.token(),seen:this.now()};
       r.seats[0]=p;this.rooms.set(code,r);this.creations.set(requestId,{code,token:p.token});
       if(this.creations.size>200)this.creations.delete(this.creations.keys().next().value);
@@ -208,10 +210,12 @@ class RoomCore {
     if(input.revision!==r.revision)error('牌桌已更新，请同步后重试。');
     switch(op) {
       case 'ready':
-        if(r.game)error('当前牌局已开始。');p.ready=!!input.ready;break;
+        if(r.game&&r.game.phase!=='finished')error('当前牌局已开始。');p.ready=!!input.ready;break;
       case 'appearance':
-        if(r.game&&r.game.phase!=='finished')error('本局结束后可更换角色。');
-        p.appearance=cleanAppearance(input.appearance);p.name=text(input.name)||p.name;break;
+        p.appearance=cleanAppearance(input.appearance);p.name=text(input.name)||p.name;
+        if(r.game){r.game.players[p.seat].name=p.name;r.game.players[p.seat].character=p.appearance.id;}break;
+      case 'auto':
+        if(!r.game||r.game.phase==='finished')error('当前无需托管。');r.autoPlay[p.seat]=!!input.enabled;break;
       case 'start':
         if(p.seat!==r.host)error('只有房主可以开局。');if(r.game)error('已有牌局。');
         if(r.seats.filter(s=>s&&!s.bot).some(s=>!s.ready))error('请等待所有玩家准备。');
@@ -223,6 +227,7 @@ class RoomCore {
       case 'act':if(!r.game)error('牌局尚未开始。');act(r.game,p.seat,input.action);break;
       case 'next':
         if(p.seat!==r.host)error('请由房主开始下一局。');if(!r.game||r.game.phase!=='finished')error('本局尚未结束。');
+        if(r.seats.some((s,i)=>s&&!s.bot&&i!==r.host&&!s.ready))error('请等待所有玩家准备下一局。');
         r.seats.forEach((s,i)=>{r.game.players[i].name=s.name;r.game.players[i].character=s.appearance.id;r.game.players[i].bot=s.bot;});
         startRound(r.game,this.random);break;
       case 'leave':
@@ -235,14 +240,17 @@ class RoomCore {
       default:error('未知房间操作。');
     }
     r.actions.set(dedup,true);if(r.actions.size>512)r.actions.delete(r.actions.keys().next().value);
-    r.revision++;r.nextBotAt=this.now()+700;return {state:this.publicState(r,p)};
+    r.revision++;r.nextBotAt=this.now()+1700;return {state:this.publicState(r,p)};
   }
   tick() {
     for(const r of this.rooms.values()) {
-      const g=r.game;if(!g||this.now()<r.nextBotAt)continue;
+      const g=r.game;if(!g||this.now()<r.nextBotAt)continue;this.syncClock(r);
       try {
-        if(g.phase==='playing'&&r.seats[g.current]?.bot){act(g,g.current,botAction(g,g.current,r.difficulty,this.random));r.revision++;r.nextBotAt=this.now()+850;}
-        if(g.phase==='exchange')for(let i=0;i<r.capacity;i++)if(g.phase==='exchange'&&r.seats[i]?.bot&&g.previous.indexOf(i)<(r.capacity===3?1:2)&&g.previous.indexOf(i)>=0&&!g.exchanges[i]){act(g,i,botAction(g,i,r.difficulty,this.random));r.revision++;}
+        if(g.phase==='playing'){
+          const seat=g.current,timeout=this.now()>=r.turnDeadline;
+          if(r.seats[seat]?.bot||r.autoPlay[seat]||timeout){if(timeout&&!r.seats[seat]?.bot)r.autoPlay[seat]=true;act(g,seat,botAction(g,seat,r.difficulty,this.random));r.revision++;r.nextBotAt=this.now()+1700;this.syncClock(r);}
+        }
+        if(g.phase==='exchange')for(let i=0;i<r.capacity;i++)if(g.phase==='exchange'&&(r.seats[i]?.bot||r.autoPlay[i]||this.now()>=r.turnDeadline)&&g.previous.indexOf(i)<(r.capacity===3?1:2)&&g.previous.indexOf(i)>=0&&!g.exchanges[i]){if(!r.seats[i]?.bot&&this.now()>=r.turnDeadline)r.autoPlay[i]=true;act(g,i,botAction(g,i,r.difficulty,this.random));r.revision++;this.syncClock(r);}
       } catch(e) {this.onError(e.message);r.nextBotAt=this.now()+5000;}
     }
   }

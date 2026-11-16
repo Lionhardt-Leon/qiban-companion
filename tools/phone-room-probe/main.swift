@@ -25,7 +25,13 @@ enum AppIdentity {static let storageNamespace="QibanNativeRoomProbe-"+UUID().uui
         let counter=Counter();let imported=try library.install(fixture){done,_ in counter.set(done)};progress=counter.value()
         try check(imported.characters==1 && imported.images==1 && progress==1,"actual ImageIO art import and progress")
         let catalog=try library.catalog();try check(catalog.count==1,"actual imported art catalog")
-        do{_ = try library.install(bad);throw CompanionError.message("Unsafe art pack accepted")}catch{try check(try library.catalog().count==1,"failed import preserves installed art")}
+        var rejected=false
+        do{_ = try library.install(bad)}catch{rejected=true}
+        try check(rejected && (try library.catalog().count)==1,"failed import rejects unsafe entries and preserves installed art")
+        let themeResult=try library.install(URL(fileURLWithPath:args[6]))
+        let themes=try library.themeCatalog()
+        try check(themeResult.characters==1 && themeResult.images==1 && themes.count==1,"schema 2 original theme with AAC imports alongside legacy art")
+        try check((themes[0]["images"] as? [String:String])?.count==11,"original image roles exposed to native bridge")
         let chat=ChatModuleServer(root:root,port:UInt16(args[4])!),game=ChatModuleServer(root:root,port:UInt16(args[5])!,artRoot:library.artRoot)
         try await chat.start();try await game.start()
         let (chatHTML,chatStatus)=try await fetch(chat.pageURL), (gameHTML,gameStatus)=try await fetch(game.pageURL)
@@ -34,6 +40,14 @@ enum AppIdentity {static let storageNamespace="QibanNativeRoomProbe-"+UUID().uui
         let (_,jsStatus)=try await fetch(game.pageURL.deletingLastPathComponent().appendingPathComponent("app.mjs"));try check(jsStatus==200,"actual game module served")
         let portrait=catalog[0]["portrait"] as! String
         let (png,pngStatus)=try await fetch(game.pageURL.deletingLastPathComponent().appendingPathComponent(portrait));try check(pngStatus==200 && png.prefix(4)==Data([137,80,78,71]),"imported art is reachable on game port")
+        let audioPath=(themes[0]["audio"] as! [String:String])["music/main"]!
+        let audioURL=game.pageURL.deletingLastPathComponent().appendingPathComponent(audioPath)
+        var rangeRequest=URLRequest(url:audioURL);rangeRequest.setValue("bytes=0-1",forHTTPHeaderField:"Range")
+        let (rangeBytes,rangeResponse)=try await URLSession.shared.data(for:rangeRequest)
+        try check(rangeBytes.count==2 && (rangeResponse as? HTTPURLResponse)?.statusCode==206 && rangeResponse.mimeType=="audio/mp4","WebKit AAC byte range and MIME served by native listener")
+        rangeRequest.setValue("bytes=999999-",forHTTPHeaderField:"Range")
+        let (invalidRange,invalidResponse)=try await URLSession.shared.data(for:rangeRequest)
+        try check(invalidRange.isEmpty && (invalidResponse as? HTTPURLResponse)?.statusCode==416,"unsatisfiable audio ranges return 416")
         let (_,unknown)=try await fetch(game.pageURL.deletingLastPathComponent().appendingPathComponent("missing.html"));try check(unknown==404,"missing resource stays 404")
         chat.stop();game.stop()
 

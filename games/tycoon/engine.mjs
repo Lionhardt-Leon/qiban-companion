@@ -45,7 +45,7 @@ export function startRound(g, random = Math.random) {
   g.fallen=-1; g.revolution=false; g.passes=0; g.exchanges={}; g.log=[];
   const deck=Array.from({length:54},(_,i)=>i);
   for (let i=53;i>0;i--) {const j=Math.floor(random()*(i+1)); [deck[i],deck[j]]=[deck[j],deck[i]];}
-  g.players.forEach(p=>{p.hand=[];p.status='等待';});
+  g.players.forEach(p=>{p.hand=[];p.status='等待';p.lastAction=null;});
   deck.forEach((id,i)=>g.players[(i+g.round-1)%g.players.length].hand.push(id));
   g.players.forEach(p=>p.hand.sort((a,b)=>a%13-b%13 || a-b));
   g.current=g.previous.length ? g.previous.at(-1) : g.players.findIndex(p=>p.hand.includes(13));
@@ -95,7 +95,7 @@ export function act(g, seat, action) {
   }
   if(g.phase!=='playing'||g.current!==seat||!active(g,seat))fail('还没轮到你。');
   if(action?.type==='pass') {
-    if(!g.table)fail('领出时不能 PASS。');g.passes++;g.players[seat].status='PASS';log(g,`${g.players[seat].name}：PASS`);
+    if(!g.table)fail('领出时不能 PASS。');g.passes++;g.players[seat].status='PASS';g.players[seat].lastAction={type:'pass'};log(g,`${g.players[seat].name}：PASS`);
     const others=g.players.filter((_,i)=>active(g,i)&&i!==g.leader).length;
     if(g.passes>=others)clear(g,'其他在场玩家全部 PASS，重新领出。');else g.current=next(g,seat);
   } else if(action?.type==='play') {
@@ -104,7 +104,7 @@ export function act(g, seat, action) {
     const counter=play.spadeThree && g.table?.joker;
     g.players[seat].hand=g.players[seat].hand.filter(id=>!play.ids.includes(id));
     g.table=play;g.lastPlay=play;g.lastActor=seat;g.leader=seat;g.passes=0;
-    g.players.forEach(p=>{if(p.status==='PASS')p.status='等待';});g.players[seat].status=play.ids.map(label).join(' ');
+    g.players.forEach(p=>{if(p.status==='PASS')p.status='等待';});g.players[seat].status=play.ids.map(label).join(' ');g.players[seat].lastAction={type:'play',play};
     log(g,`${g.players[seat].name}：${g.players[seat].status}`);
     if(play.count===4){g.revolution=!g.revolution;log(g,g.revolution?'革命！3 最大，2 最小；Joker 仍最大。':'反革命！恢复正常牌力。');}
     if(!g.players[seat].hand.length)finish(g,seat);

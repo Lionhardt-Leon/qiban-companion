@@ -51,4 +51,25 @@ try {
   r=await fetch(base+'/mcp',{headers:{Authorization:'Bearer test-service-key',Accept:'text/event-stream'}});assert.equal(r.status,405);checks++;
   r=await fetch(base+'/');assert.equal(r.status,200);assert((await r.text()).includes('app.mjs'));checks++;
 }finally{await new Promise(r=>server.close(r));}
-console.log(JSON.stringify({checks,success:true,scope:'rules, multi-round bots, private rooms, retry/reconnect, HTTP and MCP; no phone/UU validation'}));
+check('turn clock does not extend on polling and timed-out humans enter auto play',()=>{
+  let clock=1000;const s=new RoomService({now:()=>clock,random}),h=s.request({op:'create',capacity:3,name:'Host',requestId:'timer-room'});
+  s.request({op:'start',code:h.state.code,token:h.token,revision:h.state.revision,actionId:'timer-start',fillBots:true});
+  const r=s.rooms.get(h.state.code);r.game.current=0;r.game.table=null;r.game.revision++;s.syncClock(r);
+  const deadline=r.turnDeadline;clock+=8000;const state=s.request({op:'state',code:r.code,token:h.token}).state;
+  assert.equal(state.turnRemaining,7);assert.equal(r.turnDeadline,deadline);const before=r.game.players[0].hand.length;
+  clock=deadline+1;s.tick();assert(r.autoPlay[0]);assert(r.game.players[0].hand.length<before);
+  const rev=r.revision;s.request({op:'auto',code:r.code,token:h.token,revision:rev,actionId:'retake',enabled:false});assert.equal(r.autoPlay[0],false);
+});
+check('finished friends must ready again; appearance changes keep the owned hand',()=>{
+  const s=new RoomService({random}),h=s.request({op:'create',capacity:3,name:'Host',requestId:'ready-again'}),code=h.state.code;
+  const f=s.request({op:'join',code,password:'',name:'Friend',requestId:'ready-friend'});
+  let r=s.rooms.get(code);s.request({op:'ready',code,token:f.token,revision:r.revision,actionId:'friend-ready',ready:true});
+  s.request({op:'start',code,token:h.token,revision:r.revision,actionId:'start-again',fillBots:true});
+  const hand=[...r.game.players[1].hand];s.request({op:'appearance',code,token:f.token,revision:r.revision,actionId:'new-role',name:'Friend',appearance:{id:'new-role',name:'New role'}});
+  assert.deepEqual(r.game.players[1].hand,hand);assert.equal(r.game.players[1].character,'new-role');
+  r.game.phase='finished';r.game.order=[0,1,2];r.game.revision++;s.syncClock(r);assert.equal(r.seats[1].ready,false);
+  assert.throws(()=>s.request({op:'next',code,token:h.token,revision:r.revision,actionId:'too-soon'}));
+  s.request({op:'ready',code,token:f.token,revision:r.revision,actionId:'friend-ready-again',ready:true});
+  s.request({op:'next',code,token:h.token,revision:r.revision,actionId:'next-again'});assert.equal(r.game.round,2);
+});
+console.log(JSON.stringify({checks,success:true,scope:'rules, rooms, timed auto play, next-round readiness, HTTP and MCP; no phone/UU validation'}));

@@ -2,6 +2,7 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 @main struct QibanCompanionApp: App {
+    @UIApplicationDelegateAdaptor(CompanionAppDelegate.self) private var appDelegate
     @StateObject private var store = LocalStore()
     @StateObject private var speech = CompanionSpeech()
     init() {
