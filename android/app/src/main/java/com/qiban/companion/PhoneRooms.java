@@ -27,7 +27,7 @@ public final class PhoneRooms implements AutoCloseable {
             return withInfo(result);
         }).get(15,TimeUnit.SECONDS);
     }
-    public PhoneRooms(){owner.scheduleAtFixedRate(()->{if(engine!=null)try{engine.tick();}catch(RuntimeException ignored){}},250,250,TimeUnit.MILLISECONDS);}
+    public PhoneRooms(){owner.scheduleWithFixedDelay(()->{if(engine!=null)try{engine.tick();}catch(RuntimeException ignored){}},250,250,TimeUnit.MILLISECONDS);}
     public JSONObject command(JSONObject input) throws Exception {return owner.submit(()->{if(engine==null)throw new IOException("本机没有房间。");return engine.request(input);}).get(12,TimeUnit.SECONDS);}
     private JSONObject withInfo(JSONObject result)throws Exception{return result.put("hostInfo",info());}
     public JSONObject info() throws Exception {

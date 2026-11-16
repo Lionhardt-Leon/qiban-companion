@@ -31,6 +31,7 @@ jobs:
         run: |
           npm install --global pnpm@11.25.0
           pnpm install --frozen-lockfile --ignore-scripts
+          python3 tools/build-ios-android-contract.py
           node tools/build-android-web.mjs
           python3 tools/build-card-native.py
           node tools/build-card-android.mjs
@@ -47,7 +48,7 @@ jobs:
           path.chmod(0o600)
           with open(os.environ['GITHUB_ENV'],'a') as output:output.write('QIBAN_KEYSTORE='+str(path)+'\n')
           PY
-      - name: Build signed arm64 Android 8+ APK
+      - name: Build signed arm64 Android 11+ APK
         env:
           QIBAN_STORE_PASSWORD: ${{ secrets.QIBAN_ANDROID_STORE_PASSWORD }}
         run: gradle -p android :app:assembleRelease --console=plain
@@ -61,6 +62,6 @@ jobs:
         run: |
           SHA=${GITHUB_SHA:0:7}
           TAG="qiban-android-${SHA}-${GITHUB_RUN_NUMBER}"
-          gh release create "$TAG" --draft --target "$GITHUB_SHA" --title "Qiban Android ${SHA}" --notes 'Signed arm64 mobile preview. Android 8+; physical iOS/Android and UU routing still require device verification.'
+          gh release create "$TAG" --draft --target "$GITHUB_SHA" --title "Qiban Android ${SHA}" --notes 'Signed arm64 mobile preview. Android 11+; physical iOS/Android and UU routing still require device verification.'
           cp android/app/build/outputs/apk/release/app-release.apk QibanCompanion-Android.apk
           gh release upload "$TAG" QibanCompanion-Android.apk Android-build-verification.json android-signature.txt

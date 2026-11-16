@@ -13,7 +13,8 @@ for name,(url,digest) in deps.items():
     if not path.exists():urllib.request.urlretrieve(url,path)
     assert hashlib.sha256(path.read_bytes()).hexdigest()==digest
 classes=work/'classes';classes.mkdir(exist_ok=True);package=root/'android/app/src/main/java/com/qiban/companion';cp=os.pathsep.join(str(work/name) for name in deps)
-subprocess.run([javac,'-encoding','UTF-8','--release','17','-cp',cp,'-d',str(classes),*[str(package/name) for name in ['RoomEngine.java','PhoneRooms.java','ArchiveStore.java','FilesSupport.java','SpokenDialogue.java']],str(root/'tools/mobile-probe/NativeProbe.java')],check=True)
+subprocess.run([javac,'-encoding','UTF-8','--release','17','-cp',cp,'-d',str(classes),*[str(package/name) for name in ['RoomEngine.java','PhoneRooms.java','ArchiveStore.java','FilesSupport.java','SpokenDialogue.java','PersonaPrompt.java','IOSPromptText.java','DialogueDecision.java']],str(root/'tools/mobile-probe/NativeProbe.java'),str(root/'tools/mobile-probe/NativePromptProbe.java')],check=True)
+subprocess.run([java,'-cp',str(classes)+os.pathsep+cp,'com.qiban.companion.NativePromptProbe'],check=True)
 sample=(root/'tools/tts-native/speech-dialogue-cases.swift').read_text(encoding='utf-8');legacy,explicit=sample.split('let explicitExamples:')
 def extract(s):
     string=r'"(?:\\.|[^"\\])*"'

@@ -24,6 +24,6 @@ with zipfile.ZipFile(args.apk) as archive:
         assert align,name;libraries[name]={'sha256':hashlib.sha256(data).hexdigest(),'loadAlignment':min(align)};required.discard(name.rsplit('/',1)[-1])
     assert not required,required
     assert not any(n.endswith(('.qvoice','.qcards','.qchat','.snowbreak','.p12','.jks')) for n in names)
-report={'apk':args.apk.name,'bytes':args.apk.stat().st_size,'sha256':hashlib.sha256(args.apk.read_bytes()).hexdigest(),'abi':'arm64-v8a','minimumAndroid':'8.0 / API 26','sharedOriginalTable':True,'sharedSnowbreakRenderer':True,'nativeLibraries':libraries,'weightsAndOriginalArtIncluded':False,'physicalDeviceVerified':False,'uuRoutingVerified':False}
+report={'apk':args.apk.name,'bytes':args.apk.stat().st_size,'sha256':hashlib.sha256(args.apk.read_bytes()).hexdigest(),'abi':'arm64-v8a','minimumAndroid':'11 / API 30','sharedOriginalTable':True,'sharedSnowbreakRenderer':True,'nativeLibraries':libraries,'speakerModelsAndGameArtIncluded':False,'publicPerceptionModelIncluded':True,'physicalDeviceVerified':False,'uuRoutingVerified':False}
 if args.report:args.report.write_text(json.dumps(report,indent=2),encoding='utf-8')
 print(json.dumps(report,ensure_ascii=False))
