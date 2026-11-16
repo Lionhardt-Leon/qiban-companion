@@ -29,7 +29,7 @@ jobs:
       - name: Build shared renderer and authoritative phone engine
         run: |
           npm install --global pnpm@11.25.0
-          pnpm install --frozen-lockfile
+          pnpm install --frozen-lockfile --ignore-scripts
           node tools/build-android-web.mjs
           python3 tools/build-card-native.py
           node tools/build-card-android.mjs
