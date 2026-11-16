@@ -68,6 +68,7 @@ struct SpeechSettingsView:View {
                 Section {Text("音色设置为全局设置。更换模型或人设不会自动改用另一种声音。原作自带的互动原声片段由角色的“原声”开关单独控制，可关闭以避免与配音混用；双语角色包的原声会跟随所选语言。语言选择影响 AI 后续回复；离线合成不代表 AI 对话也改为本地运行。")
                     .font(.caption).foregroundStyle(.secondary)}
             }.navigationTitle("离线语音").navigationBarTitleDisplayMode(.inline)
+                .preferredColorScheme(.dark).tint(Color(red:0.71,green:0.69,blue:1))
         }
         .onAppear {if !loaded {draft=store.archive.settings.speech ?? SpeechPreferences();loaded=true}}
         .onChange(of:draft.enabled) {value in

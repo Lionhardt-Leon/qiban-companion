@@ -36,7 +36,9 @@ jobs:
           python3 tools/build-card-native.py
           node tools/build-card-android.mjs
       - name: Check new session persistence and native room protocol
-        run: python3 tools/check-mobile-native.py
+        run: |
+          python3 tools/check-mobile-native.py
+          node tools/check-chat-contacts.mjs
       - name: Restore private release signing identity
         env:
           QIBAN_ANDROID_KEYSTORE: ${{ secrets.QIBAN_ANDROID_KEYSTORE }}

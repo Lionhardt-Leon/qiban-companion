@@ -55,11 +55,11 @@ import UniformTypeIdentifiers
             do {if let url=try result.get(){controller.install(url)}else{Task{await controller.start()}}}catch{controller.error=error.localizedDescription}
         }}
         .sheet(item:$controller.pane,onDismiss:{if controller.ready{controller.refresh()}}) {pane in
-            switch pane {
+            Group {switch pane {
             case .api:SettingsView(onClose:{controller.pane=nil})
             case .speech:SpeechSettingsView().safeAreaInset(edge:.top){HStack{Spacer();Button("完成"){controller.pane=nil}.padding()}}
             case .persona:PersonaView(modelKey:"native",modelName:"即时通讯",actions:[],onClose:{controller.pane=nil},initialCardID:controller.selectedCardID,applyToModel:false)
-            }
+            }}.preferredColorScheme(.dark).tint(Color(red:0.71,green:0.69,blue:1))
         }
         .sheet(item:$controller.exportFile,onDismiss:{controller.finishExport(saved:false)}) {file in ChatExportPicker(url:file.url){controller.finishExport(saved:$0)}}
     }

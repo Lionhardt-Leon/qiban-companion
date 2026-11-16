@@ -132,7 +132,7 @@ files['qiban_boot.js']="""try {await window.QibanNative.initialize(); await impo
 catch(error) {document.body.textContent='通讯模块启动失败：'+error.message;if(window.QibanNative?.available)await window.QibanNative.call('pageError',{message:error.message});}
 """.encode('utf-8')
 files['src/js/qiban_native.js']=(ROOT/'chat-adapter/native.js').read_bytes()
-for name,target in [('identity.js','qiban_identity.js'),('message-ops.js','qiban_message_ops.js'),('message-actions.js','qiban_messages.js'),('session-ops.js','qiban_session_ops.js'),('sessions.js','qiban_sessions.js')]:
+for name,target in [('identity.js','qiban_identity.js'),('contact-repair.js','qiban_contact_repair.js'),('message-ops.js','qiban_message_ops.js'),('message-actions.js','qiban_messages.js'),('session-ops.js','qiban_session_ops.js'),('sessions.js','qiban_sessions.js')]:
     files['src/js/'+target]=(ROOT/'chat-adapter'/name).read_bytes()
 files['qiban_ios.css']=(ROOT/'chat-adapter/ios.css').read_bytes()
 files['LICENSE.txt']=files['LICENSE']
@@ -158,7 +158,7 @@ for path in (ROOT/'chat-adapter').glob('*'):
     if path.is_file():site['source/adapters/'+path.name]=path.read_bytes()
 site['source/README.txt']=notice.encode('utf-8')
 manifest={'schema':'qiban-chat-module/1','revision':REVISION,'upstream':UPSTREAM,'license':'GPL-3.0','files':{name:hashlib.sha256(data).hexdigest() for name,data in site.items()}}
-out=ROOT/'dist/Fritia-Chat-Mobile-v4.qchat'
+out=ROOT/'dist/Fritia-Chat-Mobile-v5.qchat'
 out.parent.mkdir(parents=True,exist_ok=True)
 with zipfile.ZipFile(out,'w',compression=zipfile.ZIP_STORED) as z:
     def write(name,data):
@@ -170,5 +170,5 @@ digest=hashlib.sha256(out.read_bytes()).hexdigest()
 native=ROOT/'ios/Sources/ChatModuleLibrary.swift'
 native.write_text(re.sub(r'static let packageSHA256 = "[^"]+"','static let packageSHA256 = "'+digest+'"',native.read_text(encoding='utf-8')),encoding='utf-8')
 report={'file':str(out),'bytes':out.stat().st_size,'sha256':digest,'files':len(site)+1,'upstreamRevision':REVISION,'upstreamZipSHA256':hashlib.sha256(archive.read_bytes()).hexdigest(),'originalAssetsPubliclyUploaded':False,'licenseAndSourceIncluded':True}
-(ROOT/'dist/Chat-Module-v4-manifest.json').write_text(json.dumps(report,ensure_ascii=False,indent=2),encoding='utf-8')
+(ROOT/'dist/Chat-Module-v5-manifest.json').write_text(json.dumps(report,ensure_ascii=False,indent=2),encoding='utf-8')
 print(json.dumps(report,ensure_ascii=True))

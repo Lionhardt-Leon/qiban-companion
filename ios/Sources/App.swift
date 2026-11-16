@@ -280,6 +280,7 @@ struct SettingsView: View {
                         .font(.footnote).foregroundStyle(.secondary)
                 }
             }.navigationTitle("设置").navigationBarTitleDisplayMode(.inline)
+                .preferredColorScheme(.dark).tint(Color(red:0.71,green:0.69,blue:1))
                 .toolbar {if let close=onClose {ToolbarItem(placement:.confirmationAction) {Button("完成",action:close)}}}
                 .onAppear {
                     settings = store.archive.settings

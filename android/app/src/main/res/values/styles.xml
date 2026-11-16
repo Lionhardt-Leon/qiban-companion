@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Home forms and WebView select popups share the iOS settings palette.
+         The communications WebView retains its separate light context. -->
+    <style name="QibanHomeTheme" parent="android:style/Theme.Material.NoActionBar">
+        <item name="android:colorAccent">#B5B0FF</item>
+        <item name="android:windowBackground">#100D12</item>
+        <item name="android:colorBackground">#100D12</item>
+        <item name="android:textColorPrimary">#F6F3FA</item>
+        <item name="android:textColorSecondary">#C9C3D2</item>
+        <item name="android:windowLightStatusBar">false</item>
+    </style>
+</resources>

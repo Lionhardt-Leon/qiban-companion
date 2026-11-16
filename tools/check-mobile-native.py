@@ -7,7 +7,7 @@ java=str(args.java_home/'bin/java.exe') if args.java_home else shutil.which('jav
 work=root/'research/mobile-native-check';work.mkdir(exist_ok=True,parents=True)
 deps={
  'rhino.jar':('https://repo.maven.apache.org/maven2/org/mozilla/rhino/1.9.1/rhino-1.9.1.jar','12dbb224cea124a5d32968722e8eb161c967bf15f3c9a795d1b05592b1147975'),
- 'json.jar':('https://repo.maven.apache.org/maven2/org/json/json/20250517/json-20250517.jar','3ea61b2a06e31edf1c91134fe9106b0ebb16628be169f3db75bc7a2b06b45796')}
+ 'android-json.jar':('https://repo.maven.apache.org/maven2/com/vaadin/external/google/android-json/0.0.20131108.vaadin1/android-json-0.0.20131108.vaadin1.jar','dfb7bae2f404cfe0b72b4d23944698cb716b7665171812a0a4d0f5926c0fac79')}
 for name,(url,digest) in deps.items():
     path=work/name
     if not path.exists():urllib.request.urlretrieve(url,path)

@@ -2,6 +2,7 @@
 import {loadAppStore,saveAppStore,normalizeCharacterRecord} from './storage.js';
 import {getSettings,saveSettings} from './settings.js';
 import {signature,reconcileMessages,decorateIdentities} from './qiban_identity.js';
+import {repairContactBindings,recoveredContactID} from './qiban_contact_repair.js';
 
 const KEY='fritia_qiban_mirrors',HIDDEN='fritia_qiban_hidden_contacts',NATIVE='fritia_qiban_native_archive';
 let profile=null,seen=new Set(),timer=0,syncing=null,dirty=false,applyingIdentities=false;
@@ -20,7 +21,16 @@ export async function initQibanChat() {
     const nativeID=message?.meta?.qibanNativeId || old.nativeIDs?.[messageID] || messageID;
     mirrors[conversationID]={...old,deletedNativeIDs:[...new Set([...(old.deletedNativeIDs || []),nativeID])],pendingRemovedIDs:[...new Set([...(old.pendingRemovedIDs || []),nativeID])]};localStorage.setItem(KEY,JSON.stringify(mirrors));
   };
-  let store=loadAppStore();const active=store.activeConversationId,mirrors=read(KEY,{});
+  let store=loadAppStore(),mirrors=read(KEY,{});
+  const repair=repairContactBindings(store,mirrors);
+  if(repair.changed){
+    const backup='fritia_qiban_contact_repair_backup_v1';
+    if(!localStorage.getItem(backup))localStorage.setItem(backup,JSON.stringify({store,mirrors,nativeArchive:localStorage.getItem(NATIVE),selected:read('fritia_qiban_selected_sessions',{})}));
+    store=repair.store;mirrors=repair.mirrors;
+    localStorage.setItem('fritia_qiban_selected_sessions',JSON.stringify({...read('fritia_qiban_selected_sessions',{}),...repair.selected}));
+    window.QibanNative.notice(`已修复 ${repair.count} 个角色的独立绑定，已开启干净的新对话。升级前的消息仍保存在历史对话和本机备份中。`);
+  }
+  const active=store.activeConversationId;
   for(const contact of profile.contacts) {
     if(hidden.has(contact.id))continue;
     const previous=store.characters.find(item=>item.id===contact.id);
@@ -32,7 +42,7 @@ export async function initQibanChat() {
     const session=sessions[sessionIndex];
     let conversation=store.conversations.find(item=>item.type==='private'&&item.memberIds[0]===card.id&&item.qibanSessionId===session.id);
     if(!conversation&&sessionIndex===0)conversation=store.conversations.find(item=>item.type==='private'&&item.memberIds[0]===card.id&&!item.qibanSessionId);
-    if(!conversation){const id=session.externalID || (sessionIndex===0?'private:'+card.id:'private:'+session.id);conversation={id,type:'private',title:card.name,avatar:card.avatar,memberIds:[card.id],createdAt:session.createdAt||Date.now(),updatedAt:session.updatedAt||Date.now()};store.conversations.unshift(conversation);store.messages[id]=[];}
+    if(!conversation){let id=card.id===recoveredContactID?'recovered:'+session.id:session.externalID || (sessionIndex===0?'private:'+card.id:'private:'+session.id);if(store.conversations.some(c=>c.id===id))id='private:'+crypto.randomUUID();conversation={id,type:'private',title:card.name,avatar:card.avatar,memberIds:[card.id],createdAt:session.createdAt||Date.now(),updatedAt:session.updatedAt||Date.now()};store.conversations.unshift(conversation);store.messages[id]=[];}
     conversation.qibanSessionId=session.id;
     if(!conversation.qibanThreadTitle || conversation.qibanThreadTitle==='新对话' || conversation.qibanThreadTitle===mirrors[conversation.id]?.sessionTitle)conversation.qibanThreadTitle=session.title||'原有对话';
     if(!mirrors[conversation.id]&&sessionIndex===0&&mirrors[card.id])mirrors[conversation.id]={...mirrors[card.id]};

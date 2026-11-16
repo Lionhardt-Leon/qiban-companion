@@ -16,6 +16,8 @@ final class FilesSupport {
     static String sha(File file)throws Exception {MessageDigest d=MessageDigest.getInstance("SHA-256");try(InputStream in=new FileInputStream(file)){byte[] b=new byte[65536];int n;while((n=in.read(b))!=-1)d.update(b,0,n);}return RoomEngine.hex(d.digest());}
     static void deleteTree(File path,File boundary)throws Exception {File real=path.getCanonicalFile(),base=boundary.getCanonicalFile();if(!real.toPath().startsWith(base.toPath())||real.equals(base))throw new IOException("删除路径越界。");File[] list=real.listFiles();if(list!=null)for(File f:list)deleteTree(f,base);if(real.exists()&&!real.delete())throw new IOException("无法移除临时文件。");}
     static JSONObject copy(JSONObject j)throws JSONException{return new JSONObject(j.toString());}
+    // Android's optString converts JSONObject.NULL to the literal "null".
+    static String string(JSONObject j,String key){return j.isNull(key)?"":j.optString(key,"");}
     static JSONObject object(JSONObject p,String k)throws JSONException{JSONObject v=p.optJSONObject(k);if(v==null){v=new JSONObject();p.put(k,v);}return v;}
     static JSONArray array(JSONObject p,String k)throws JSONException{JSONArray v=p.optJSONArray(k);if(v==null){v=new JSONArray();p.put(k,v);}return v;}
 }
