@@ -16,7 +16,7 @@
   };
   const bytes = value => Uint8Array.from(atob(value), c => c.charCodeAt(0));
   async function call(command, fields = {}) {
-    if (!available) throw new Error('此功能需要栖伴 iOS 本地容器。');
+    if (!available) throw new Error('此功能需要栖伴移动端本地容器。');
     return handler.postMessage({ command, ...fields });
   }
   function notice(text) {
@@ -62,7 +62,7 @@
     const req = input instanceof Request ? new Request(input, init) : new Request(new URL(String(input), location.href), init);
     const url = new URL(req.url);
     if (!['http:','https:'].includes(url.protocol) || url.origin === location.origin) return rawFetch(req);
-    if (['127.0.0.1','localhost'].includes(url.hostname) && url.port === '17373') throw new Error('iOS 不运行 stdio／npx，请改填电脑或服务器上的远程 HTTP MCP 地址。');
+    if (['127.0.0.1','localhost'].includes(url.hostname) && url.port === '17373') throw new Error('移动端不运行 stdio／npx，请改填电脑或服务器上的远程 HTTP MCP 地址。');
     if (req.signal.aborted) throw new DOMException('Aborted','AbortError');
     const body = ['GET','HEAD'].includes(req.method) ? null : new Uint8Array(await req.arrayBuffer());
     if (body?.length > 32*1024*1024) throw new Error('单次上传超过32MB，请缩小附件或分批同步。');
@@ -143,7 +143,7 @@
       if(character?.qibanId && profile?.contacts?.some(item=>item.qibanId===character.qibanId))return (character.prompt || '')+(profile?.bodyNotice || '')+'\n'+(profile?.speechFormat || '');
       return (profile?.globalPrompt || '')+'\n【当前角色】\n'+(character?.prompt || '')+'\n'+(profile?.speechFormat || '');
     },
-    nativeMemory(character,mode){if(mode!=='private')return '';const item=profile?.contacts?.find(item=>item.id===character?.id);return (item?.memories ? '【本体已有的本角色私聊记忆】\n'+item.memories : '')+(character?.id===profile?.activeId && profile?.appearance ? '\n【进入通讯时的载体状态，当前模型已暂停】\n'+profile.appearance : '');},
+    nativeMemory(character,mode){if(mode!=='private')return '';const item=profile?.contacts?.find(item=>item.id===character?.id);const current=this.currentConversation?.(),memories=item?.sessions?.find(s=>s.id===current?.qibanSessionId)?.memories || '';return (memories ? '【本体已有的本段对话记忆】\n'+memories : '')+(character?.id===profile?.activeId && profile?.appearance ? '\n【进入通讯时的载体状态，当前模型已暂停】\n'+profile.appearance : '');},
     async flush(){await window.QibanNative.flushStorage?.();},
   };
 })();

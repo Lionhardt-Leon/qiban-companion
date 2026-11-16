@@ -19,6 +19,9 @@ struct ChatContactChange:Decodable {
     let promptEdited:Bool
     let messages:[ChatSharedMessage]
     let removedIds:[String]
+    let sessionID:String?
+    let conversationID:String?
+    let sessionTitle:String?
 }
 
 enum ChatIdentifiers {
@@ -34,8 +37,11 @@ extension LocalStore {
         guard storageReady else {throw CompanionError.message("本地存储未就绪，无法打开通讯模块。")}
         if archive.settings.personas==nil {
             var next=archive;let library=PersonaLibrary.migrating(next.settings.persona)
-            next.settings.personas=library;next.schemaVersion=2;next.personaSessionKey=library.defaultCardID?.uuidString
+            next.settings.personas=library;next.schemaVersion=max(next.schemaVersion,2);next.personaSessionKey=library.defaultCardID?.uuidString
             try commit(next)
+        }
+        if archive.conversationSessions==nil || archive.settings.personas!.cards.contains(where:{archive.activeSessionIDs?[$0.id.uuidString]==nil}) {
+            var next=archive;next.prepareConversationSessions();try commit(next)
         }
     }
     func chatContactSnapshot(_ card:PersonaCard)->[String:Any] {
@@ -45,7 +51,10 @@ extension LocalStore {
         let session=chatSession(card.id)
         return ["id":archive.chatContactOrigins?[card.id.uuidString] ?? "qiban_"+card.id.uuidString,"qibanId":card.id.uuidString,"name":card.name,"description":card.title,
                 "prompt":rendered,"examples":"","source":"qiban","tags":["App人设"],
-                "memories":session.memories,"resetToken":archive.chatResetTokens?[card.id.uuidString] ?? "0"]
+                "memories":session.memories,"resetToken":archive.chatResetTokens?[card.id.uuidString] ?? "0",
+                "sessions":(archive.conversationSessions ?? []).filter{$0.personaKey==card.id.uuidString}.map{meta->[String:Any] in
+                    ["id":meta.id,"title":meta.title,"createdAt":meta.createdAt.timeIntervalSince1970*1000,"updatedAt":max(meta.updatedAt,archive.sessionContents(meta.id).messages.last?.createdAt ?? meta.updatedAt).timeIntervalSince1970*1000,"active":archive.activeSessionIDs?[card.id.uuidString]==meta.id,"externalID":meta.externalID as Any? ?? NSNull(),"memories":archive.sessionContents(meta.id).memories]
+                }]
     }
     func chatBootstrap() throws -> [String:Any] {
         try prepareChatSharing();let library=archive.settings.personas!
@@ -64,9 +73,11 @@ extension LocalStore {
         if archive.personaSessionKey==id.uuidString {return PersonaConversation(messages:archive.messages,memories:archive.memories,diary:archive.diary)}
         return archive.personaConversations?[id.uuidString] ?? PersonaConversation()
     }
-    func chatMessages(cardID:String,offset:Int)->[String:Any] {
+    func chatMessages(cardID:String,offset:Int,sessionID:String?=nil)->[String:Any] {
         guard let id=UUID(uuidString:cardID),archive.settings.personas?.cards.contains(where:{$0.id==id})==true else{return ["messages":[],"more":false]}
-        let list=chatSession(id).messages;let start=max(0,min(list.count,offset)),end=min(list.count,start+200)
+        let target=sessionID ?? archive.activeSessionIDs?[id.uuidString]
+        guard let target=target,archive.conversationSessions?.contains(where:{$0.id==target && $0.personaKey==id.uuidString})==true else{return ["messages":[],"more":false]}
+        let list=archive.sessionContents(target).messages;let start=max(0,min(list.count,offset)),end=min(list.count,start+200)
         let user=archive.settings.personas?.userName ?? "你"
         let name=archive.settings.personas?.cards.first(where:{$0.id==id})?.name ?? "伙伴"
         let speaker=archive.chatContactOrigins?[id.uuidString] ?? "qiban_"+id.uuidString
@@ -81,7 +92,7 @@ extension LocalStore {
         }
         return ["messages":result,"more":end<list.count,"next":end]
     }
-    func syncChatContact(_ change:ChatContactChange) throws -> [String:Any] {
+    func syncChatContact(_ change:ChatContactChange,active:Bool=false) throws -> [String:Any] {
         guard !busy,change.messages.count<=300,change.removedIds.count<=300,change.name.count<=120,
               Set(change.messages.map(\.id)).count==change.messages.count,
               change.prompt.count<=PersonaLimits.promptCharacters,change.examples.count<=PersonaLimits.fieldCharacters,
@@ -99,9 +110,27 @@ extension LocalStore {
             card.examples=change.examples
         }
         if let index=index {library.cards[index]=card}else{library.cards.append(card)}
-        next.settings.personas=library;next.schemaVersion=2
+        next.settings.personas=library;next.schemaVersion=max(next.schemaVersion,2)
         if next.chatContactOrigins==nil {next.chatContactOrigins=[:]};next.chatContactOrigins?[id.uuidString]=change.id
-        var session=chatSession(id)
+        next.prepareConversationSessions()
+        let sessionID=change.sessionID ?? next.activeSessionIDs?[id.uuidString]
+        guard let sessionID=sessionID,UUID(uuidString:sessionID) != nil,(change.conversationID?.count ?? 0)<=100,(change.sessionTitle?.count ?? 0)<=120 else{throw CompanionError.message("历史对话标识无效。")}
+        var replacedEmptyDefault=false
+        if index==nil,let old=next.activeSessionIDs?[id.uuidString],old != sessionID,next.sessionContents(old).messages.isEmpty {
+            next.conversationSessions?.removeAll{$0.id==old};next.activeSessionIDs?.removeValue(forKey:id.uuidString);next.sessionHistories?.removeValue(forKey:old)
+            replacedEmptyDefault=true
+        }
+        if let meta=next.conversationSessions?.first(where:{$0.id==sessionID}) {
+            guard meta.personaKey==id.uuidString else{throw CompanionError.message("历史对话与角色不匹配。")}
+        } else {
+            next.conversationSessions?.append(ConversationSession(id:sessionID,personaKey:id.uuidString,title:change.sessionTitle?.isEmpty==false ? change.sessionTitle!:"新对话",externalID:change.conversationID));next.sessionHistories?[sessionID]=PersonaConversation()
+        }
+        if let pos=next.conversationSessions?.firstIndex(where:{$0.id==sessionID}) {
+            if let title=change.sessionTitle,!title.isEmpty{next.conversationSessions?[pos].title=title}
+            if let externalID=change.conversationID{next.conversationSessions?[pos].externalID=externalID}
+        }
+        if replacedEmptyDefault{next.activeSessionIDs?[id.uuidString]=sessionID;next.sessionHistories?.removeValue(forKey:sessionID)}
+        var session=next.sessionContents(sessionID)
         let removed=Set(change.removedIds.map{ChatIdentifiers.uuid("message:"+change.id+":"+$0)})
         let removedNative=Set(change.removedIds.compactMap(UUID.init(uuidString:)))
         session.messages.removeAll{removed.contains($0.id) || removedNative.contains($0.id)}
@@ -113,14 +142,14 @@ extension LocalStore {
             else {positions[messageID]=session.messages.count;session.messages.append(message)}
         }
         session.messages.sort{$0.createdAt<$1.createdAt}
-        if next.personaSessionKey==id.uuidString {next.messages=session.messages}
-        else {if next.personaConversations==nil {next.personaConversations=[:]};next.personaConversations?[id.uuidString]=session}
+        next.setSessionContents(session,id:sessionID)
+        if active {try next.selectSession(sessionID)}
         try commit(next)
         let messageIDs=Dictionary(uniqueKeysWithValues:change.messages.map{($0.id,(UUID(uuidString:$0.id) ?? ChatIdentifiers.uuid("message:"+change.id+":"+$0.id)).uuidString)})
-        return ["linked":true,"qibanId":id.uuidString,"messageIDs":messageIDs]
+        return ["linked":true,"qibanId":id.uuidString,"sessionID":sessionID,"messageIDs":messageIDs]
     }
     func saveChatPersonas(_ library:PersonaLibrary) throws {
         guard !busy else{throw CompanionError.message("请先等待本体回复完成。")};try library.validate()
-        var next=archive;next.settings.personas=library;next.schemaVersion=2;try commit(next)
+        var next=archive;next.settings.personas=library;next.schemaVersion=max(next.schemaVersion,2);try commit(next)
     }
 }

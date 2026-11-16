@@ -16,9 +16,9 @@ export async function initQibanChat() {
   window.QibanNative.markMessageRemoved=(conversationID,messageID)=>{
     const store=loadAppStore(),conversation=store.conversations.find(item=>item.id===conversationID);
     if(conversation?.type!=='private')return;
-    const mirrors=read(KEY,{}),id=conversation.memberIds[0],old=mirrors[id] || {},message=(store.messages[conversationID] || []).find(item=>item.id===messageID);
+    const mirrors=read(KEY,{}),id=conversation.memberIds[0],old=mirrors[conversationID] || mirrors[id] || {},message=(store.messages[conversationID] || []).find(item=>item.id===messageID);
     const nativeID=message?.meta?.qibanNativeId || old.nativeIDs?.[messageID] || messageID;
-    mirrors[id]={...old,deletedNativeIDs:[...new Set([...(old.deletedNativeIDs || []),nativeID])],pendingRemovedIDs:[...new Set([...(old.pendingRemovedIDs || []),nativeID])]};localStorage.setItem(KEY,JSON.stringify(mirrors));
+    mirrors[conversationID]={...old,deletedNativeIDs:[...new Set([...(old.deletedNativeIDs || []),nativeID])],pendingRemovedIDs:[...new Set([...(old.pendingRemovedIDs || []),nativeID])]};localStorage.setItem(KEY,JSON.stringify(mirrors));
   };
   let store=loadAppStore();const active=store.activeConversationId,mirrors=read(KEY,{});
   for(const contact of profile.contacts) {
@@ -27,12 +27,19 @@ export async function initQibanChat() {
     const card=normalizeCharacterRecord({...previous,...contact,avatar:previous?.avatar || 'src/_logo/emoji/chat.svg',createdAt:previous?.createdAt || Date.now(),updatedAt:Date.now()});
     const index=store.characters.findIndex(item=>item.id===card.id);
     if(index<0)store.characters.unshift(card);else store.characters[index]=card;
-    let conversation=store.conversations.find(item=>item.type==='private' && item.memberIds[0]===card.id);
-    if(!conversation){conversation={id:'private:'+card.id,type:'private',title:card.name,avatar:card.avatar,memberIds:[card.id],createdAt:Date.now(),updatedAt:Date.now()};store.conversations.unshift(conversation);store.messages[conversation.id]=[];}
-    const reconciled=await reconcileMessages(store.messages[conversation.id] || [],card.id,mirrors[card.id]);
+    const sessions=contact.sessions?.length?contact.sessions:[{id:crypto.randomUUID(),title:'原有对话',active:true}];
+    for(let sessionIndex=0;sessionIndex<sessions.length;sessionIndex++) {
+    const session=sessions[sessionIndex];
+    let conversation=store.conversations.find(item=>item.type==='private'&&item.memberIds[0]===card.id&&item.qibanSessionId===session.id);
+    if(!conversation&&sessionIndex===0)conversation=store.conversations.find(item=>item.type==='private'&&item.memberIds[0]===card.id&&!item.qibanSessionId);
+    if(!conversation){const id=session.externalID || (sessionIndex===0?'private:'+card.id:'private:'+session.id);conversation={id,type:'private',title:card.name,avatar:card.avatar,memberIds:[card.id],createdAt:session.createdAt||Date.now(),updatedAt:session.updatedAt||Date.now()};store.conversations.unshift(conversation);store.messages[id]=[];}
+    conversation.qibanSessionId=session.id;
+    if(!conversation.qibanThreadTitle || conversation.qibanThreadTitle==='新对话' || conversation.qibanThreadTitle===mirrors[conversation.id]?.sessionTitle)conversation.qibanThreadTitle=session.title||'原有对话';
+    if(!mirrors[conversation.id]&&sessionIndex===0&&mirrors[card.id])mirrors[conversation.id]={...mirrors[card.id]};
+    const reconciled=await reconcileMessages(store.messages[conversation.id] || [],card.id,mirrors[conversation.id]);
     let list=reconciled.messages;const nativeIDs=reconciled.nativeIDs;
-    const signatures={...(mirrors[card.id]?.signatures || {})};
-    if(mirrors[card.id]?.resetToken!==undefined && mirrors[card.id].resetToken!==contact.resetToken) {
+    const signatures={...(mirrors[conversation.id]?.signatures || {})};
+    if(mirrors[conversation.id]?.resetToken!==undefined && mirrors[conversation.id].resetToken!==(session.resetToken||contact.resetToken||'0')) {
       list=[];
       const memory=read('fritia_long_term_memory',null);
       if(memory) {
@@ -45,9 +52,9 @@ export async function initQibanChat() {
     }
     let offset=0,more=true;
     while(more) {
-      const result=await window.QibanNative.call('messages',{id:contact.qibanId,offset});
+      const result=await window.QibanNative.call('messages',{id:contact.qibanId,sessionID:session.id,offset});
       for(const message of result.messages) {
-        if((mirrors[card.id]?.deletedNativeIDs || []).includes(message.id))continue;
+        if((mirrors[conversation.id]?.deletedNativeIDs || []).includes(message.id))continue;
         const existing=list.find(item=>item.id===message.id || item.meta?.qibanNativeId===message.id);
         if(existing) {
           const local=JSON.stringify([existing.text,existing.meta?.qibanSpokenJapanese,existing.meta?.qibanSpokenChinese]);
@@ -58,8 +65,9 @@ export async function initQibanChat() {
       offset=result.next;more=result.more;
     }
     list.sort((a,b)=>a.createdAt-b.createdAt);store.messages[conversation.id]=list;
-    mirrors[card.id]={...mirrors[card.id],qibanId:contact.qibanId,resetToken:contact.resetToken,prompt:contact.prompt,name:contact.name,ids:list.map(item=>item.id),signatures,nativeIDs};
+    mirrors[conversation.id]={...mirrors[conversation.id],qibanId:contact.qibanId,cardID:card.id,sessionID:session.id,sessionTitle:conversation.qibanThreadTitle,resetToken:(session.resetToken||contact.resetToken||'0'),prompt:contact.prompt,name:contact.name,ids:list.map(item=>item.id),signatures,nativeIDs};
   }
+    }
   store.activeConversationId=store.conversations.some(item=>item.id===active) ? active : store.conversations.find(item=>item.memberIds[0]===profile.activeId)?.id || store.activeConversationId;
   localStorage.setItem(KEY,JSON.stringify(mirrors));localStorage.setItem(NATIVE,profile.nativeArchive);
   configureProviders();
@@ -120,11 +128,12 @@ async function synchronize() {
 }
 async function syncPass() {
   const store=loadAppStore(),mirrors=read(KEY,{});let linkedAny=false;
-  for(const card of store.characters) {
-    const conversation=store.conversations.find(item=>item.type==='private' && item.memberIds[0]===card.id);
-    const list=(conversation ? store.messages[conversation.id] : []) || [];
+  for(const conversation of store.conversations.filter(item=>item.type==='private')) {
+    const card=store.characters.find(c=>c.id===conversation.memberIds[0]);if(!card)continue;
+    if(!conversation.qibanSessionId)conversation.qibanSessionId=crypto.randomUUID();
+    const list=store.messages[conversation.id]||[];
     const valid=list.filter(item=>['user','assistant'].includes(item.role) && item.status!=='typing' && item.status!=='error' && !item.meta?.toolMode);
-    const allIDs=new Set(list.map(item=>item.id)),old=mirrors[card.id] || {};
+    const allIDs=new Set(list.map(item=>item.id)),old=mirrors[conversation.id] || {};
     const removed=[...new Set([...(old.ids || []).filter(id=>!allIDs.has(id)),...(old.pendingRemovedIDs || [])])];
     const promptEdited=old.prompt!==undefined ? old.prompt!==card.prompt : !card.qibanId;
     const changed=valid.filter(item=>old.signatures?.[item.id]!==signature(item));
@@ -132,13 +141,13 @@ async function syncPass() {
     let linked=null;const signatures={...old.signatures},nativeIDs={...old.nativeIDs};
     for(let batch=0;batch<batches;batch++) {
       const messages=changed.slice(batch*200,batch*200+200).map(item=>({id:item.id,role:item.role,text:item.text,createdAt:item.createdAt,spokenJapanese:item.meta?.qibanSpokenJapanese || null,spokenChinese:item.meta?.qibanSpokenChinese ?? null}));
-      if(!messages.length && !removed.length && card.name===old.name && !promptEdited && old.qibanId)continue;
-      linked=await window.QibanNative.call('syncContact',{active:store.activeConversationId===conversation?.id,contact:{id:card.id,qibanId:card.qibanId || old.qibanId || null,name:card.name,prompt:card.prompt || '',examples:card.examples || '',promptEdited,messages,removedIds:removed.slice(batch*200,batch*200+200)}});
+      if(!messages.length && !removed.length && card.name===old.name && old.active===(store.activeConversationId===conversation.id) && old.sessionTitle===conversation.qibanThreadTitle && !promptEdited && old.qibanId)continue;
+      linked=await window.QibanNative.call('syncContact',{active:store.activeConversationId===conversation?.id,contact:{id:card.id,sessionID:conversation.qibanSessionId,conversationID:conversation.id,sessionTitle:conversation.qibanThreadTitle&&conversation.qibanThreadTitle!=='新对话'?conversation.qibanThreadTitle:(list.find(m=>m.role==='user'&&m.text)?.text?.slice(0,36)||'新对话'),qibanId:card.qibanId || old.qibanId || null,name:card.name,prompt:card.prompt || '',examples:card.examples || '',promptEdited,messages,removedIds:removed.slice(batch*200,batch*200+200)}});
       if(!linked.linked)break;
       for(const message of messages){signatures[message.id]=JSON.stringify([message.text,message.spokenJapanese || undefined,message.spokenChinese ?? undefined]);nativeIDs[message.id]=linked.messageIDs[message.id];}
     }
     if(linked?.linked){
-      const newest=read(KEY,{});newest[card.id]={...newest[card.id],qibanId:linked.qibanId,resetToken:old.resetToken || '0',prompt:card.prompt,name:card.name,ids:valid.map(item=>item.id),signatures,nativeIDs,pendingRemovedIDs:(newest[card.id]?.pendingRemovedIDs || []).filter(id=>!removed.includes(id))};
+      const newest=read(KEY,{});newest[conversation.id]={...newest[conversation.id],qibanId:linked.qibanId,cardID:card.id,sessionID:linked.sessionID || conversation.qibanSessionId,active:store.activeConversationId===conversation.id,sessionTitle:conversation.qibanThreadTitle,resetToken:old.resetToken || '0',prompt:card.prompt,name:card.name,ids:valid.map(item=>item.id),signatures,nativeIDs,pendingRemovedIDs:(newest[conversation.id]?.pendingRemovedIDs || []).filter(id=>!removed.includes(id))};
       localStorage.setItem(KEY,JSON.stringify(newest));linkedAny=true;
     }
   }

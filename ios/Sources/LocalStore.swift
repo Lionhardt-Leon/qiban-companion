@@ -107,8 +107,14 @@ enum APIKeyStore {
         }
     }
 
-    func commit(_ next: LocalArchive) throws {
+    func commit(_ value: LocalArchive) throws {
         guard storageReady else { throw CompanionError.message("本地存储未就绪，未覆盖原数据。") }
+        var next=value
+        if let owner=next.personaSessionKey,let id=next.activeSessionIDs?[owner],let index=next.conversationSessions?.firstIndex(where:{$0.id==id}) {
+            next.conversationSessions?[index].mood=next.moods?[owner]
+            if let last=next.messages.last{next.conversationSessions?[index].updatedAt=last.createdAt}
+            if next.conversationSessions?[index].title=="新对话",let first=next.messages.first(where:{$0.role=="user"}){next.conversationSessions?[index].title=String(first.displayContent.prefix(36))}
+        }
         try next.validate()
         let data = try JSONEncoder().encode(next)
         try data.write(to: file, options: [.atomic, .completeFileProtection])
@@ -139,7 +145,7 @@ enum APIKeyStore {
             card.description="你通过屏幕上的芬妮婚皮模型陪伴用户。当前服饰、姿势和动作结果以应用每轮提供的身体状态为准；婚纱内衣版仍穿有内衣，不是裸体。不要把其他角色的身份、服饰或经历当作自己的。"
             library.cards.append(card);library.modelBindings["fenny"]=card.id
             if next.personaSessionKey == nil {next.personaSessionKey=library.defaultCardID?.uuidString}
-            next.schemaVersion=2;next.settings.personas=library
+            next.schemaVersion=max(next.schemaVersion,2);next.settings.personas=library
             do {try commit(next)}catch{self.error=error.localizedDescription;return}
         }
         if let card = archive.settings.personas?.card(for:modelKey),archive.personaSessionKey != card.id.uuidString {
@@ -152,7 +158,7 @@ enum APIKeyStore {
         guard !busy,storageReady else {throw CompanionError.message("请等待当前回复完成后保存人设。")}
         guard ["native","enya","fenny"].contains(modelKey),library.cards.contains(where:{$0.id == selected}) else {throw CompanionError.message("角色卡或伙伴映射无效。")}
         var library = library;library.modelBindings[modelKey] = selected;try library.validate()
-        var next = archive;next.schemaVersion = 2;next.settings.personas = library
+        var next = archive;next.schemaVersion = max(next.schemaVersion,2);next.settings.personas = library
         // New cards must start empty even when chosen on the very first migration save.
         if next.personaSessionKey == nil {next.personaSessionKey = library.defaultCardID?.uuidString}
         var checkContext = context;checkContext.modelKey = modelKey
@@ -274,6 +280,7 @@ enum APIKeyStore {
     func cancel() {
         requestTask?.cancel(); requestID = nil; requestTask = nil; busy = false; dialogueAction = nil;replyForSpeech=nil; pendingImage = nil;pendingExtraImages = [];pendingSearch=false
     }
+    func resetConversationIdentity(){conversationID=UUID();dialogueAction=nil;replyForSpeech=nil;error=nil}
     func discardCameraFrame() { if pendingImage?.source == .camera {pendingImage = nil};pendingExtraImages.removeAll{$0.source == .camera} }
     func saveSpeech(_ preferences:SpeechPreferences) throws {
         guard !busy else {throw CompanionError.message("请等待当前回复完成后切换配音。")}
@@ -287,19 +294,7 @@ enum APIKeyStore {
         preferences.enabled=enabled;next.settings.speech=preferences;try commit(next)
     }
     func restartConversation() throws {
-        var next = archive
-        next.messages = [];next.memories = "";next.moods?.removeValue(forKey:moodKey)
-        if next.chatResetTokens == nil {next.chatResetTokens=[:]}
-        next.chatResetTokens?[currentCard?.id.uuidString ?? "legacy"] = UUID().uuidString
-        if let key = next.personaSessionKey {next.personaConversations?.removeValue(forKey:key)}
-        // Preserve a local recovery snapshot; it never enters the new API context.
-        guard storageReady else {throw CompanionError.message("本地存储未就绪，未清除资料。")}
-        try export().write(to:directory.appendingPathComponent("before-new-conversation-\(UUID().uuidString).json"),options:[.atomic,.completeFileProtection])
-        cancel()
-        try commit(next)
-        conversationID = UUID()
-        availableActions = [];error = nil
-        context = CompanionContext(modelKey:context.modelKey)
+        try newConversation()
     }
     func saveMemories(_ text: String) throws {
         var next = archive; next.memories = text; try commit(next)

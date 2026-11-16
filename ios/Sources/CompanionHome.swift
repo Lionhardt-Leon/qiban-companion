@@ -2,7 +2,7 @@ import SwiftUI
 import SceneKit
 
 private enum HomeSheet: String, Identifiable {
-    case settings, character, api, history, diary, memory, embodiment, snowbreak, persona, speech, messenger, games
+    case settings, character, api, history, diary, memory, embodiment, snowbreak, persona, speech, messenger, games, sessions
     var id: String { rawValue }
 }
 
@@ -218,6 +218,7 @@ struct CompanionHome: View {
             case .character: withClose { CharacterPreview() }
             case .api: SettingsView(onClose:{sheet = nil})
             case .history: withClose { ConversationView() }
+            case .sessions: ConversationSessionsView()
             case .diary: withClose { DiaryView() }
             case .memory: withClose { MemoryView() }
             case .embodiment: withClose { EmbodimentSettingsView() }
@@ -473,6 +474,7 @@ struct CompanionHome: View {
                 RestartConversationButton {
                     senses.suspend();speech.stop();pendingMotionRevision = nil;draft = "";attachedImage = nil
                 }
+                Button{sheet = .sessions}label:{Label("历史对话／切换对话",systemImage:"bubble.left.and.text.bubble.right")}
                 VStack(alignment: .leading, spacing: 10) {
                     Text("我的伙伴").foregroundStyle(.secondary)
                     VStack(spacing: 16) {

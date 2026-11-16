@@ -89,6 +89,7 @@ enum ChatNativePane:String,Identifiable {case persona,api,speech;var id:String{r
     }
     func refresh() {Task{try? await emit(["type":"refresh"]);webView?.reload()}}
     func setAppSpeech(_ enabled:Bool){appTTSMode=enabled;stopSpeech();Task{try? await emit(["type":"ttsMode","enabled":enabled])}}
+    func conversationMenu(new:Bool){Task{do{stopSpeech();guard let view=webView else{return};_ = try await view.callAsyncJavaScript("if(!window.QibanNative?.conversationSessions)throw Error('请导入新版通讯模块'); await window.QibanNative.conversationSessions(action);",arguments:["action":new ? "new":"history"],in:nil,contentWorld:.page)}catch{self.error=error.localizedDescription}}}
     func openPane(_ value:ChatNativePane) {
         Task {
             do {if let view=webView {_=try await view.callAsyncJavaScript("if(window.QibanNative) await window.QibanNative.flush();",arguments:[:],in:nil,contentWorld:.page)};cancelRequests();stopSpeech();pane=value}
@@ -123,10 +124,10 @@ enum ChatNativePane:String,Identifiable {case persona,api,speech;var id:String{r
         case "restoreNativeArchive":
             guard let text=body["archive"] as? String else{throw CompanionError.message("备份不含本体资料。")}
             cancelRequests();stopSpeech();try store.restore(Data(text.utf8));return ["restored":true]
-        case "messages":return store.chatMessages(cardID:body["id"] as? String ?? "",offset:body["offset"] as? Int ?? 0)
+        case "messages":return store.chatMessages(cardID:body["id"] as? String ?? "",offset:body["offset"] as? Int ?? 0,sessionID:body["sessionID"] as? String)
         case "syncContact":
             let data=try JSONSerialization.data(withJSONObject:body["contact"] ?? [:]);guard data.count<=16*1024*1024 else{throw CompanionError.message("单次人设同步超过16MB。")}
-            let result=try store.syncChatContact(JSONDecoder().decode(ChatContactChange.self,from:data))
+            let result=try store.syncChatContact(JSONDecoder().decode(ChatContactChange.self,from:data),active:body["active"] as? Bool ?? false)
             if body["active"] as? Bool==true,let id=result["qibanId"] as? String{selectedCardID=UUID(uuidString:id)}
             return result
         case "fetch":

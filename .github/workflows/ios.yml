@@ -28,6 +28,12 @@ jobs:
         run: python3 tools/check-spoken-dialogue.py
       - name: Check native game route, art import and phone room
         run: python3 tools/probe-phone-rooms.py
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Check mobile session persistence and iOS/Android interoperability
+        run: python3 tools/check-mobile-native.py --with-swift
       - name: Check communications message operations
         if: inputs.run_tests
         run: node tools/check-chat-messages.mjs

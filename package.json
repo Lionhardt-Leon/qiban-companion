@@ -1,1 +1,1 @@
-{"name":"qiban-local-renderer-tools","private":true,"type":"module","scripts":{"build:web":"node tools/build-snowbreak-web.mjs"},"devDependencies":{"esbuild":"0.28.2"}}
+{"name":"qiban-local-renderer-tools","private":true,"type":"module","scripts":{"build:web":"node tools/build-snowbreak-web.mjs"},"devDependencies":{"@babel/core":"7.28.5","@babel/plugin-transform-classes":"7.28.4","@babel/preset-env":"7.28.5","esbuild":"0.28.2"}}

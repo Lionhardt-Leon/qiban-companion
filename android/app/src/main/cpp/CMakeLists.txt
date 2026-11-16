@@ -1,0 +1,7 @@
+cmake_minimum_required(VERSION 3.20)
+project(QibanAndroid LANGUAGES C CXX)
+include(${ROOT}/android/.native/paths.cmake)
+add_subdirectory(${ROOT}/tools/tts-native ${CMAKE_BINARY_DIR}/frontend)
+add_library(qiban_g2p SHARED jni.cpp)
+target_link_libraries(qiban_g2p PRIVATE QibanG2P)
+target_link_options(qiban_g2p PRIVATE -Wl,-z,max-page-size=16384)

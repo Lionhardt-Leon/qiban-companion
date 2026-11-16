@@ -12,7 +12,7 @@ export function initQibanMessageActions(context){
   if(!window.QibanNative?.available)return;
   hooks=context;
   window.QibanNative.isDraftStore=isDraft;window.QibanNative.saveDraftStore=keepDraft;
-  window.QibanNative.memoryIDs=store=>isDraft(store) ? Object.values(store.messages).flat().map(item=>item.id):null;
+  window.QibanNative.memoryIDs=store=>isDraft(store)?Object.values(store.messages).flat().map(item=>item.id):(store.messages[store.activeConversationId]||[]).map(item=>item.id);
   window.QibanNative.limitMemory=restrictMemoryReferences;
   window.QibanNative.applyIdentityUpdates=()=>saveAppStore(hooks.getStore());
   document.addEventListener('qiban-stop-web-speech',()=>hooks.stopPlayback());

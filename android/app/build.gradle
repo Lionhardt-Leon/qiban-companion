@@ -1,0 +1,46 @@
+plugins { id 'com.android.application' }
+def root = rootProject.projectDir.parentFile
+def chatSource = new File(root, 'ios/Sources/ChatModuleLibrary.swift').text
+def chatDigest = (chatSource =~ /packageSHA256\s*=\s*"([a-f0-9]{64})"/)[0][1]
+android {
+    namespace 'com.qiban.companion'
+    compileSdk 36
+    buildToolsVersion '36.0.0'
+    if (!project.hasProperty('javaOnly')) { ndkVersion '28.2.13676358' }
+    defaultConfig {
+        applicationId 'com.qiban.companion'
+        minSdk 26
+        targetSdk 36
+        versionCode 50
+        versionName '0.30.0'
+        buildConfigField 'String', 'CHAT_SHA256', '"' + chatDigest + '"'
+        ndk { abiFilters 'arm64-v8a' }
+        if (!project.hasProperty('javaOnly')) { externalNativeBuild { cmake { arguments '-DANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=ON', '-DROOT=' + root.absolutePath.replace('\\','/'); cppFlags '-std=c++17' } } }
+    }
+    buildFeatures { buildConfig true }
+    compileOptions { sourceCompatibility JavaVersion.VERSION_17; targetCompatibility JavaVersion.VERSION_17; coreLibraryDesugaringEnabled true }
+    if (!project.hasProperty('javaOnly')) { externalNativeBuild { cmake { path file('src/main/cpp/CMakeLists.txt'); version '3.22.1' } } }
+    signingConfigs {
+        release {
+            if (System.getenv('QIBAN_KEYSTORE')) {
+                storeFile file(System.getenv('QIBAN_KEYSTORE')); storeType 'PKCS12'
+                storePassword System.getenv('QIBAN_STORE_PASSWORD'); keyAlias 'qiban'
+                keyPassword System.getenv('QIBAN_STORE_PASSWORD')
+            }
+        }
+    }
+    buildTypes { release { minifyEnabled false; signingConfig signingConfigs.release } }
+    packaging { jniLibs { useLegacyPackaging false }; resources.excludes += ['META-INF/INDEX.LIST','META-INF/DEPENDENCIES'] }
+    sourceSets.main.assets.srcDirs += ['../../ios/WebAssets','../../games']
+    testOptions { unitTests.returnDefaultValues = true }
+    lint { abortOnError true; disable 'TypographyDashes','TypographyQuotes','SetTextI18n','UnusedResources','ObsoleteSdkInt' }
+}
+dependencies {
+    implementation 'androidx.webkit:webkit:1.14.0'
+    implementation 'org.mozilla:rhino:1.9.1'
+    implementation 'com.microsoft.onnxruntime:onnxruntime-android:1.24.2'
+    implementation 'com.google.mlkit:image-labeling:17.0.9'
+    coreLibraryDesugaring 'com.android.tools:desugar_jdk_libs:2.1.5'
+    testImplementation 'junit:junit:4.13.2'
+    testImplementation 'org.json:json:20250517'
+}

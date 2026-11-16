@@ -21,6 +21,9 @@ import UniformTypeIdentifiers
                     Label("TTS",systemImage:controller.speechEnabled ? "speaker.wave.2":"speaker.slash")
                 }.accessibilityLabel(controller.speechEnabled ? "关闭 TTS 语音":"开启 TTS 语音").accessibilityIdentifier("chatSpeechToggle")
                 Menu {
+                    Button("开启新对话"){controller.conversationMenu(new:true)}.disabled(!controller.ready)
+                    Button("历史对话／切换对话"){controller.conversationMenu(new:false)}.disabled(!controller.ready)
+                    Divider()
                     Button("系统提示词／用户与 AI 人设"){controller.openPane(.persona)}
                     Button("App 对话与独立接口"){controller.openPane(.api)}
                     Button("App 中／日配音与 TTS"){controller.openPane(.speech)}

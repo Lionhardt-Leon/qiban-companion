@@ -165,14 +165,14 @@ struct RestartConversationButton:View {
     @State private var confirming = false
     var onReset:() -> Void = {}
     var body:some View {
-        Button {confirming = true} label:{Label("重新开始对话",systemImage:"arrow.counterclockwise")}
+        Button {confirming = true} label:{Label("开启新对话",systemImage:"plus.bubble")}
             .accessibilityIdentifier("restartConversation")
-            .confirmationDialog("重新开始当前角色的对话？",isPresented:$confirming,titleVisibility:.visible) {
-                Button("清除聊天和记忆",role:.destructive) {
+            .confirmationDialog("开启一段新对话？",isPresented:$confirming,titleVisibility:.visible) {
+                Button("新建并保留当前对话") {
                     do {try store.restartConversation();onReset()} catch {store.error = error.localizedDescription}
                 }
                 Button("取消",role:.cancel) {}
-            } message:{Text("清除当前角色的聊天上下文和记忆，并停止正在生成的回复。保留人设、日记、模型、API 设置及其他角色记录；本机自动保留恢复快照。")}
+            } message:{Text("当前对话会保存在历史列表，随时可切换回来。新对话使用独立的消息、记忆与日记。")}
     }
 }
 

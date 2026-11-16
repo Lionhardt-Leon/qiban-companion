@@ -1,0 +1,63 @@
+name: Qiban Companion Android
+on:
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.13'
+      - uses: android-actions/setup-android@v3
+      - name: Prepare SDK and source-only frontend
+        run: |
+          sdkmanager 'platforms;android-36' 'build-tools;36.0.0' 'ndk;28.2.13676358' 'cmake;3.22.1'
+          python3 tools/fetch-g2p-android.py
+      - name: Build shared renderer and authoritative phone engine
+        run: |
+          npm install --global pnpm@11.25.0
+          pnpm install --frozen-lockfile
+          node tools/build-android-web.mjs
+          python3 tools/build-card-native.py
+          node tools/build-card-android.mjs
+      - name: Check new session persistence and native room protocol
+        run: python3 tools/check-mobile-native.py
+      - name: Restore private release signing identity
+        env:
+          QIBAN_ANDROID_KEYSTORE: ${{ secrets.QIBAN_ANDROID_KEYSTORE }}
+        run: |
+          python3 - <<'PY'
+          import os,base64,pathlib
+          path=pathlib.Path(os.environ['RUNNER_TEMP'])/'qiban-release.p12'
+          path.write_bytes(base64.b64decode(os.environ['QIBAN_ANDROID_KEYSTORE'],validate=True))
+          path.chmod(0o600)
+          with open(os.environ['GITHUB_ENV'],'a') as output:output.write('QIBAN_KEYSTORE='+str(path)+'\n')
+          PY
+      - name: Build signed arm64 Android 8+ APK
+        env:
+          QIBAN_STORE_PASSWORD: ${{ secrets.QIBAN_ANDROID_STORE_PASSWORD }}
+        run: gradle -p android :app:assembleRelease --console=plain
+      - name: Verify signature, payload and native page alignment
+        run: |
+          "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose --print-certs android/app/build/outputs/apk/release/app-release.apk | tee android-signature.txt
+          python3 tools/verify-android-delivery.py android/app/build/outputs/apk/release/app-release.apk --report Android-build-verification.json
+      - name: Save signed APK to private draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          SHA=${GITHUB_SHA:0:7}
+          TAG="qiban-android-${SHA}-${GITHUB_RUN_NUMBER}"
+          gh release create "$TAG" --draft --target "$GITHUB_SHA" --title "Qiban Android ${SHA}" --notes 'Signed arm64 mobile preview. Android 8+; physical iOS/Android and UU routing still require device verification.'
+          cp android/app/build/outputs/apk/release/app-release.apk QibanCompanion-Android.apk
+          gh release upload "$TAG" QibanCompanion-Android.apk Android-build-verification.json android-signature.txt

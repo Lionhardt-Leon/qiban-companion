@@ -39,6 +39,12 @@ patch('src/js/main.js','autoShow: true','autoShow: !window.QibanNative?.availabl
 patch('src/js/main.js',"if ('serviceWorker' in navigator", "if (!window.QibanNative?.available && 'serviceWorker' in navigator")
 patch('src/js/runtime_env.js',"  const userAgent =", "  if (window.QibanNative?.available) return createRuntimeEnvironment(RUNTIME_ENV_TYPES.WEBVIEW, 'packaged', readLocationInfo());\n  const userAgent =")
 patch('src/js/storage.js',"    source: clampText(raw.source || 'custom', 40),", "    source: clampText(raw.source || 'custom', 40),\n    qibanId: clampText(raw.qibanId, 80),")
+patch('src/js/storage.js','    unread: Math.max(0, Math.floor(Number(raw.unread) || 0))', '''    unread: Math.max(0, Math.floor(Number(raw.unread) || 0)),
+    qibanSessionId: clampText(raw.qibanSessionId,80),
+    qibanThreadTitle: clampText(raw.qibanThreadTitle,120),
+    qibanThreadRoot: clampText(raw.qibanThreadRoot,100)''')
+patch('src/js/storage.js','export function ensurePrivateConversation(store, character) {', '''export function ensurePrivateConversation(store, character) {
+  const preferred=window.QibanNative?.preferredConversation?.(store,character.id);if(preferred)return preferred;''')
 patch('src/js/storage.js','prompt: clampText(raw.prompt, 60000)','prompt: clampText(raw.prompt, 4000000)')
 patch('src/js/storage.js','examples: clampText(raw.examples, 30000)','examples: clampText(raw.examples, 2000000)')
 patch('src/js/storage.js','text: clampText(raw.text, 12000)','text: clampText(raw.text, 100000)')
@@ -53,9 +59,14 @@ for path in ['src/js/chat_engine.js','src/js/tool_chat_engine.js']:
     patch(path,'const memoryMessage = await buildLongTermMemoryMessage({','const memoryMessage = await buildLongTermMemoryMessage({\n    qibanMessageIds:window.QibanNative?.memoryIDs?.(store),')
 patch('src/js/long_term_memory.js','    if (result.memories.length === 0 && result.edges.length === 0) return null;', '    const limited=window.QibanNative?.limitMemory?.(result,loadRawStore(),options.qibanMessageIds);\n    if(limited)Object.assign(result,limited);\n    if (result.memories.length === 0 && result.edges.length === 0) return null;')
 patch('src/js/tts_engine.js','response = await fetch(request.url, request.init);',"response = await fetch(request.url,{...request.init,...(window.QibanNative?.available ? {signal:window.QibanNative.ttsSignal()}:{})});")
-files['src/js/ui.js']=b"import {initQibanMessageActions,decorateQibanMessage} from './qiban_messages.js';\n"+files['src/js/ui.js']
+files['src/js/ui.js']=b"import {initQibanSessions} from './qiban_sessions.js';\nimport {initQibanMessageActions,decorateQibanMessage} from './qiban_messages.js';\n"+files['src/js/ui.js']
 patch('src/js/ui.js','  state.store = loadAppStore();',"""  state.store = loadAppStore();
+  initQibanSessions({getStore:()=>state.store,isBusy:()=>pendingConversationReplies>0 || Boolean(state.activeToolRun),replace:updateStore,select:id=>selectConversation(id,true)});
   initQibanMessageActions({getStore:()=>state.store,isBusy:()=>pendingConversationReplies>0 || Boolean(state.activeToolRun),changeBusy:delta=>{pendingConversationReplies=Math.max(0,pendingConversationReplies+delta);},refresh:()=>renderAll(),stopPlayback:()=>stopVoicePlayback(),chatSettings:key=>buildCharacterChatSettings(key)});""")
+patch('src/js/ui.js','function selectConversation(id) {', '''function selectConversation(id,qibanExact=false) {
+  if(!qibanExact)id=window.QibanNative?.resolveConversation?.(state.store,id)||id;''')
+patch('src/js/ui.js','const conversations = [...state.store.conversations].sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));','const conversations = [...(window.QibanNative?.visibleConversations?.(state.store) || state.store.conversations)].sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));')
+patch('src/js/ui.js','  state.store = store || loadAppStore();\n  renderAll();','  state.store = store || loadAppStore();\n  window.QibanNative?.rememberConversation?.();\n  renderAll();')
 patch('src/js/ui.js','function commitOutgoingMessage(text, attachments = []) {',"""function commitOutgoingMessage(text, attachments = []) {
   if(window.QibanNative?.available && pendingConversationReplies>0){window.QibanNative.notice('请等待当前回复完成，输入内容已保留。');return null;}""")
 patch('src/js/ui.js',"    speakerName: '分析员',","    speakerName: window.QibanProfile?.userName || '你',")
@@ -121,7 +132,7 @@ files['qiban_boot.js']="""try {await window.QibanNative.initialize(); await impo
 catch(error) {document.body.textContent='通讯模块启动失败：'+error.message;if(window.QibanNative?.available)await window.QibanNative.call('pageError',{message:error.message});}
 """.encode('utf-8')
 files['src/js/qiban_native.js']=(ROOT/'chat-adapter/native.js').read_bytes()
-for name,target in [('identity.js','qiban_identity.js'),('message-ops.js','qiban_message_ops.js'),('message-actions.js','qiban_messages.js')]:
+for name,target in [('identity.js','qiban_identity.js'),('message-ops.js','qiban_message_ops.js'),('message-actions.js','qiban_messages.js'),('session-ops.js','qiban_session_ops.js'),('sessions.js','qiban_sessions.js')]:
     files['src/js/'+target]=(ROOT/'chat-adapter'/name).read_bytes()
 files['qiban_ios.css']=(ROOT/'chat-adapter/ios.css').read_bytes()
 files['LICENSE.txt']=files['LICENSE']
@@ -147,7 +158,7 @@ for path in (ROOT/'chat-adapter').glob('*'):
     if path.is_file():site['source/adapters/'+path.name]=path.read_bytes()
 site['source/README.txt']=notice.encode('utf-8')
 manifest={'schema':'qiban-chat-module/1','revision':REVISION,'upstream':UPSTREAM,'license':'GPL-3.0','files':{name:hashlib.sha256(data).hexdigest() for name,data in site.items()}}
-out=ROOT/'dist/Fritia-Chat-iOS-v3.qchat'
+out=ROOT/'dist/Fritia-Chat-Mobile-v4.qchat'
 out.parent.mkdir(parents=True,exist_ok=True)
 with zipfile.ZipFile(out,'w',compression=zipfile.ZIP_STORED) as z:
     def write(name,data):
@@ -159,5 +170,5 @@ digest=hashlib.sha256(out.read_bytes()).hexdigest()
 native=ROOT/'ios/Sources/ChatModuleLibrary.swift'
 native.write_text(re.sub(r'static let packageSHA256 = "[^"]+"','static let packageSHA256 = "'+digest+'"',native.read_text(encoding='utf-8')),encoding='utf-8')
 report={'file':str(out),'bytes':out.stat().st_size,'sha256':digest,'files':len(site)+1,'upstreamRevision':REVISION,'upstreamZipSHA256':hashlib.sha256(archive.read_bytes()).hexdigest(),'originalAssetsPubliclyUploaded':False,'licenseAndSourceIncluded':True}
-(ROOT/'dist/Chat-Module-v3-manifest.json').write_text(json.dumps(report,ensure_ascii=False,indent=2),encoding='utf-8')
+(ROOT/'dist/Chat-Module-v4-manifest.json').write_text(json.dumps(report,ensure_ascii=False,indent=2),encoding='utf-8')
 print(json.dumps(report,ensure_ascii=True))

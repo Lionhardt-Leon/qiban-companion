@@ -22,7 +22,7 @@ target_include_directories(QibanG2P PUBLIC ${CMAKE_CURRENT_SOURCE_DIR} PRIVATE
  ${DEPS}/cppjieba/include ${DEPS}/SRELL ${DEPS}/utfcpp/source
  ${DEPS}/fmt/include ${DEPS}/json/include ${BOOST_HEADERS})
 target_link_libraries(QibanG2P PRIVATE cpp-pinyin openjtalk hts_engine_API)
-if(NOT CMAKE_SYSTEM_NAME STREQUAL "iOS")
+if(NOT CMAKE_SYSTEM_NAME STREQUAL "iOS" AND NOT ANDROID)
  add_executable(qiban-g2p-probe probe.cpp)
  target_include_directories(qiban-g2p-probe PRIVATE ${GSV}/include)
  target_link_libraries(qiban-g2p-probe PRIVATE QibanG2P)

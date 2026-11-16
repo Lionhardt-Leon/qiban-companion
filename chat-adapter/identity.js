@@ -25,14 +25,15 @@ export async function reconcileMessages(list,contactID,mirror={}){
   return {messages:result,nativeIDs};
 }
 export function decorateIdentities(store,mirrors,userName){
-  const characters=store.characters.map(card=>({...card,qibanId:card.qibanId || mirrors[card.id]?.qibanId}));
+  const characters=store.characters.map(card=>({...card,qibanId:card.qibanId || (mirrors[card.id] || Object.values(mirrors).find(m=>m.cardID===card.id))?.qibanId}));
+  const conversations=store.conversations.map(c=>c.type==='private'&&mirrors[c.id]?.sessionID?{...c,qibanSessionId:mirrors[c.id].sessionID}:c);
   const messages={...store.messages};
   for(const conversation of store.conversations){
-    const mirror=conversation.type==='private' ? mirrors[conversation.memberIds[0]]:null;
+    const mirror=conversation.type==='private' ? (mirrors[conversation.id] || mirrors[conversation.memberIds[0]]):null;
     messages[conversation.id]=(messages[conversation.id] || []).map(message=>{
       const nativeID=message.meta?.qibanNativeId || mirror?.nativeIDs?.[message.id];
       return {...message,...(message.role==='user' ? {speakerId:'player',speakerName:userName || '你'}:{}),meta:{...message.meta,...(nativeID ? {qibanNativeId:nativeID}:{})}};
     });
   }
-  return {...store,characters,messages};
+  return {...store,characters,conversations,messages};
 }
