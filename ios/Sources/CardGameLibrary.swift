@@ -69,6 +69,11 @@ struct CardGameLibrary {
         guard ["qiban-card-art/1","qiban-card-art/2"].contains(manifest.schema),Self.validID(manifest.id),manifest.title.count<=100,manifest.characters.count<=200,!manifest.characters.isEmpty,
               manifest.files.count+1==archive.entries.count,manifest.files.count<=1800,
               Set(manifest.characters.map(\.id)).count==manifest.characters.count else{throw CompanionError.message("立绘包索引无效。")}
+        if manifest.theme==nil,
+           let currentBytes=try? Data(contentsOf:artRoot.appendingPathComponent(manifest.id).appendingPathComponent("catalog.json")),
+           let current=try? JSONDecoder().decode(CardArtManifest.self,from:currentBytes),current.theme != nil {
+            throw CompanionError.message("已安装完整原版视听包，无需再导入旧版 P5 立绘包。原来的牌桌、音效和立绘已保留。")
+        }
         for c in manifest.characters {
             var paths=[c.portrait];paths += [c.avatar].compactMap{$0};paths += Array((c.states ?? [:]).values)
             paths += c.layers ?? [];paths += Array((c.stateLayers ?? [:]).values).flatMap{$0}

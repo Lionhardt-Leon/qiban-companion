@@ -16,6 +16,8 @@ with tempfile.TemporaryDirectory(prefix='qiban-phone-probe-') as tmp:
  theme_manifest={**manifest,'schema':'qiban-card-art/2','id':'original-probe','theme':{'id':'p5-original','revision':1,'width':1600,'height':900,'images':{role:image for role in roles},'audio':{'music/main':audio_path},'musicLoop':0},'files':{**manifest['files'],audio_path:hashlib.sha256(audio).hexdigest()}}
  with zipfile.ZipFile(work/'theme.qcards','w',compression=zipfile.ZIP_STORED) as z:
   z.writestr('catalog.json',json.dumps(theme_manifest));z.writestr(image,png);z.writestr(audio_path,audio)
+ downgrade={**manifest,'id':'original-probe'}
+ with zipfile.ZipFile(work/'downgrade.qcards','w',compression=zipfile.ZIP_STORED) as z:z.writestr('catalog.json',json.dumps(downgrade));z.writestr(image,png)
  cmd=['swiftc','-swift-version','5','-parse-as-library','-o',str(work/'probe'),'-framework','Network','-framework','JavaScriptCore','-framework','ImageIO','-framework','Security',str(root/'ios/Sources/ChatModuleServer.swift'),str(root/'ios/Sources/PhoneCardRooms.swift'),str(root/'ios/Sources/CardGameLibrary.swift'),str(root/'ios/Sources/VoicePackage.swift'),str(root/'tools/phone-room-probe/main.swift')]
  subprocess.run(cmd,check=True,cwd=root)
  # The build host may already use app-default ports; use two distinct OS-chosen free
@@ -24,4 +26,4 @@ with tempfile.TemporaryDirectory(prefix='qiban-phone-probe-') as tmp:
  for sock in sockets:sock.bind(('127.0.0.1',0))
  ports=[str(sock.getsockname()[1]) for sock in sockets]
  for sock in sockets:sock.close()
- subprocess.run([str(work/'probe'),str(root/'games/tycoon'),str(work/'valid.qcards'),str(work/'bad.qcards'),*ports,str(work/'theme.qcards')],check=True,cwd=root,timeout=40)
+ subprocess.run([str(work/'probe'),str(root/'games/tycoon'),str(work/'valid.qcards'),str(work/'bad.qcards'),*ports,str(work/'theme.qcards'),str(work/'downgrade.qcards')],check=True,cwd=root,timeout=40)

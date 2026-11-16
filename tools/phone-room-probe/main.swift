@@ -32,6 +32,9 @@ enum AppIdentity {static let storageNamespace="QibanNativeRoomProbe-"+UUID().uui
         let themes=try library.themeCatalog()
         try check(themeResult.characters==1 && themeResult.images==1 && themes.count==1,"schema 2 original theme with AAC imports alongside legacy art")
         try check((themes[0]["images"] as? [String:String])?.count==11,"original image roles exposed to native bridge")
+        var downgradeRejected=false
+        do{_ = try library.install(URL(fileURLWithPath:args[7]))}catch{downgradeRejected=true}
+        try check(downgradeRejected && (try library.themeCatalog().count)==1,"legacy portrait re-import cannot remove an installed complete theme")
         let chat=ChatModuleServer(root:root,port:UInt16(args[4])!),game=ChatModuleServer(root:root,port:UInt16(args[5])!,artRoot:library.artRoot)
         try await chat.start();try await game.start()
         let (chatHTML,chatStatus)=try await fetch(chat.pageURL), (gameHTML,gameStatus)=try await fetch(game.pageURL)
