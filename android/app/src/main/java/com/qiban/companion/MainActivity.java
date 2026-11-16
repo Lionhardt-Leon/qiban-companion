@@ -75,13 +75,13 @@ public final class MainActivity extends Activity {
         if(!views.remove(name,failed))return;
         content.removeView(failed);failed.destroy();
         if(name.equals("home")){modelRevision++;modelNonce="";availableActions=new JSONArray();bodyState=new JSONObject();stageEditing=false;clearTouches();}
-        if(destroyed||!surface.equals(name)||recoveringRenderer)return;
+        if(destroyed||suspended||!surface.equals(name)||recoveringRenderer)return;
         network.cancelAll();conversation.cancel();speech.stop();sensors.pause();recoveringRenderer=true;
         // Several WebViews can share a renderer. Remove all affected views before
         // rebuilding the active surface; a background home callback must not
         // navigate away from a game that was being opened.
         content.postDelayed(()->{
-            recoveringRenderer=false;if(destroyed)return;
+            recoveringRenderer=false;if(destroyed||suspended)return;
             long now=SystemClock.elapsedRealtime();
             if(lastRendererRecovery!=0&&now-lastRendererRecovery<10000){
                 LinearLayout box=new LinearLayout(this);box.setOrientation(LinearLayout.VERTICAL);box.setGravity(Gravity.CENTER);box.setPadding(dp(24),dp(24),dp(24),dp(24));box.setBackgroundColor(Color.rgb(35,29,45));
@@ -267,7 +267,7 @@ public final class MainActivity extends Activity {
     @android.annotation.SuppressLint("GestureBackNavigation")
     @Override public void onBackPressed(){handleBack();}
     @Override protected void onPause(){super.onPause();suspended=true;if(speech!=null)speech.stop();if(network!=null)network.cancelAll();if(sensors!=null)sensors.pause();if(conversation!=null)conversation.cancel();for(var e:views.entrySet()){script(e.getKey(),"window.QibanAndroid?.suspend();");script(e.getKey(),e.getKey().equals("game")?"window.QibanCards?.suspend()":e.getKey().equals("home")?"window.QibanHome?.suspend()":"window.QibanNative?.flush().catch(()=>{})");e.getValue().onPause();}}
-    @Override protected void onResume(){super.onResume();suspended=false;WebView w=views.get(surface);if(w!=null)w.onResume();if(surface.equals("home")){script("home","window.QibanHome?.resume()");if(sensors!=null)sensors.resume();}if(surface.equals("game"))script("game","window.QibanCards?.resume()");if(store!=null)applyHardwareBudget();}
+    @Override protected void onResume(){super.onResume();suspended=false;WebView w=views.get(surface);if(w==null&&store!=null){show(surface);return;}if(w!=null)w.onResume();if(surface.equals("home")){script("home","window.QibanHome?.resume()");if(sensors!=null)sensors.resume();}if(surface.equals("game"))script("game","window.QibanCards?.resume()");if(store!=null)applyHardwareBudget();}
     @Override protected void onDestroy(){destroyed=true;if(pendingMediaPermission!=null)pendingMediaPermission.deny();interactionQueue.shutdownNow();for(CompletableFuture<Void> f:acknowledgements.values())f.cancel(true);if(conversation!=null)conversation.close();if(sensors!=null)sensors.close();if(network!=null)network.cancelAll();if(speech!=null)speech.close();if(discovery!=null)discovery.close();if(rooms!=null)rooms.close();stopService(new Intent(this,RoomHostService.class));for(WebView w:views.values())w.destroy();for(Write w:writes.values())try{w.out.close();w.file.delete();}catch(IOException ignored){}io.shutdownNow();streams.shutdownNow();super.onDestroy();}
     private static final class Write {final File file;final FileOutputStream out;final String name;final long size;long bytes;Write(File f,FileOutputStream o,String n,long s){file=f;out=o;name=n;size=s;}}
 }
