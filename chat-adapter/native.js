@@ -119,9 +119,9 @@ function configureProviders() {
 
 function onStore(event) {
   const store=event.detail || loadAppStore(),toSpeak=[];
-  for(const list of Object.values(store.messages))for(const message of list) {
+  for(const [conversationID,list] of Object.entries(store.messages))for(const message of list) {
     if(!seen.has(playKey(message)) && message.role==='user')window.QibanNative.stopAllSpeech().catch(()=>{});
-    if(window.QibanNative.appSpeechEnabled() && !seen.has(playKey(message)) && message.role==='assistant' && message.status==='sent' && !message.meta?.qibanRegenerating && message.text && !message.meta?.qibanSpokenJapanese)toSpeak.push(message);
+    if(!window.QibanNative.galOwnsSpeech?.(conversationID) && window.QibanNative.appSpeechEnabled() && !seen.has(playKey(message)) && message.role==='assistant' && message.status==='sent' && !message.meta?.qibanRegenerating && message.text && !message.meta?.qibanSpokenJapanese)toSpeak.push(message);
     if(message.status!=='typing')seen.add(playKey(message));
   }
   let queue=Promise.resolve();

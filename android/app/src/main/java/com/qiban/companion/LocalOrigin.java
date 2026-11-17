@@ -13,6 +13,8 @@ final class LocalOrigin {
         String path=raw.startsWith("/")?raw.substring(1):raw;if(path.isEmpty())path="index.html";if(!FilesSupport.safe(path))return error(403,"路径无效");
         InputStream input;String filename=path;
         if(path.equals("android-bridge.js"))input=context.getAssets().open("mobile/android-bridge.js");
+        else if(path.startsWith("presentation-data/")){File f=FilesSupport.child(new PortraitLibrary(packs.root).root,path.substring(18));if(!PortraitLibrary.dataPath(path.substring(18)))return error(403,"2D 路径无效");input=new FileInputStream(f);}
+        else if(path.startsWith("presentation/")){input=context.getAssets().open("stage2d/"+path.substring(13));}
         else if(surface.equals("chat")){if(!packs.hasChat())return error(409,"请导入随本版 App 提供的通讯 .qchat 模块。");File f=FilesSupport.child(new File(packs.chat,"site"),path);if(!f.isFile())return error(404,"资源不存在："+path);input=new FileInputStream(f);}
         else if(surface.equals("game")){if(path.startsWith("tycoon/art/")){File f=FilesSupport.child(packs.art,path.substring(11));input=new FileInputStream(f);}else input=context.getAssets().open(path.startsWith("tycoon/")?path:"tycoon/"+path);}
         else if(path.startsWith("package/")){String name=path.substring(8);if(!name.equals("generic.json")&&!name.matches("staged-[a-f0-9-]+\\.json")&&!name.matches("(?:Enya|Fenny|staged-[a-f0-9-]+)\\.snowbreak"))return error(403,"模型路径无效");input=new FileInputStream(FilesSupport.child(packs.models,name));}

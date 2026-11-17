@@ -136,8 +136,19 @@ enum APIKeyStore {
         next.messages = restored.messages;next.memories = restored.memories;next.diary = restored.diary
         next.personaSessionKey = key;next.personaConversations = sessions
     }
+    func activatePortrait(id:String,name:String) {
+        let key="portrait:"+id
+        guard PersonaLibrary.validModelKey(key) else{return}
+        if archive.settings.personas?.modelBindings[key]==nil {
+            var next=archive;var library=next.settings.personas ?? PersonaLibrary.migrating(next.settings.persona)
+            if let card=library.cards.first(where:{$0.name==name}){library.modelBindings[key]=card.id}
+            else {guard library.cards.count<50 else{error="人设卡已满，请先在设置中整理。";return};var card=PersonaCard();card.title=name+" · 2D";card.name=name;card.description="你是"+name+"，通过屏幕上的2D剧情立绘与用户面对面。遵守用户已设置的人设；不编造共同经历，动作以素材支持的表情和动画为准。";library.cards.append(card);library.modelBindings[key]=card.id}
+            next.settings.personas=library;do{try commit(next)}catch{self.error=error.localizedDescription;return}
+        }
+        activateCompanion(key)
+    }
     func activateCompanion(_ modelKey:String) {
-        guard ["native","enya","fenny"].contains(modelKey) else {return}
+        guard PersonaLibrary.validModelKey(modelKey) else {return}
         if context.modelKey != modelKey {cancel()}
         if modelKey == "fenny",archive.settings.personas?.modelBindings["fenny"] == nil {
             var next=archive;var library=next.settings.personas ?? PersonaLibrary.migrating(next.settings.persona)
@@ -156,7 +167,7 @@ enum APIKeyStore {
     }
     func savePersonas(_ library:PersonaLibrary,selected:UUID,modelKey:String) throws {
         guard !busy,storageReady else {throw CompanionError.message("请等待当前回复完成后保存人设。")}
-        guard ["native","enya","fenny"].contains(modelKey),library.cards.contains(where:{$0.id == selected}) else {throw CompanionError.message("角色卡或伙伴映射无效。")}
+        guard PersonaLibrary.validModelKey(modelKey),library.cards.contains(where:{$0.id == selected}) else {throw CompanionError.message("角色卡或伙伴映射无效。")}
         var library = library;library.modelBindings[modelKey] = selected;try library.validate()
         var next = archive;next.schemaVersion = max(next.schemaVersion,2);next.settings.personas = library
         // New cards must start empty even when chosen on the very first migration save.

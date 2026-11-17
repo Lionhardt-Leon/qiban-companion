@@ -11,8 +11,8 @@ android {
         applicationId 'com.qiban.companion'
         minSdk 30
         targetSdk 36
-        versionCode 52
-        versionName '0.30.2'
+        versionCode 53
+        versionName '0.31.0'
         buildConfigField 'String', 'CHAT_SHA256', '"' + chatDigest + '"'
         ndk { abiFilters 'arm64-v8a' }
         if (!project.hasProperty('javaOnly')) { externalNativeBuild { cmake { arguments '-DANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=ON', '-DROOT=' + root.absolutePath.replace('\\','/'); cppFlags '-std=c++17' } } }

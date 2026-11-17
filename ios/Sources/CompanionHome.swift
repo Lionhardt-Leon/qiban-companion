@@ -2,7 +2,7 @@ import SwiftUI
 import SceneKit
 
 private enum HomeSheet: String, Identifiable {
-    case settings, character, api, history, diary, memory, embodiment, snowbreak, persona, speech, messenger, games, sessions
+    case settings, character, api, history, diary, memory, embodiment, snowbreak, persona, speech, messenger, games, sessions, portraits
     var id: String { rawValue }
 }
 
@@ -12,6 +12,7 @@ struct CompanionHome: View {
     @Environment(\.scenePhase) private var scenePhase
     @StateObject private var stage = CompanionStage()
     @StateObject private var snowbreak = SnowbreakStage()
+    @StateObject private var portrait = PortraitStage()
     @StateObject private var senses = CompanionSenses()
     @StateObject private var camera = RearCamera()
     @State private var preparingSend = false
@@ -47,32 +48,38 @@ struct CompanionHome: View {
     private static let sourceActionLabels:[String:String] = ["snowbreak_home_jealous":"芬妮 · 吃醋","snowbreak_home_marry":"芬妮 · 婚礼互动","snowbreak_home_sigh":"芬妮 · 叹气","snowbreak_home_stage":"芬妮 · 主页展示","snowbreak_home_stand":"芬妮 · 站立待机","snowbreak_home_login":"看板娘 · 登录招呼","snowbreak_home_invite":"看板娘 · 邀请","snowbreak_home_shy":"看板娘 · 害羞","snowbreak_home_check":"看板娘 · 检查","snowbreak_home_kiss":"看板娘 · 亲吻","snowbreak_show_02":"互动展示 02","snowbreak_show_03":"互动展示 03","snowbreak_show_04":"互动展示 04","snowbreak_show_05":"互动展示 05","snowbreak_sequence":"完整展示片段","snowbreak_idle_01":"互动待机变化 01","snowbreak_idle_02":"互动待机变化 02","snowbreak_head":"头部原作反应","snowbreak_left":"左手原作反应","snowbreak_right":"右手原作反应","enya_yuki_hello":"学习 Yuki · 挥手","enya_yuki_Yes":"学习 Yuki · 点头","enya_yuki_No":"学习 Yuki · 摇头","enya_yuki_Peace_hand":"学习 Yuki · 比 V","enya_yuki_dance_90bpm":"站立舞蹈 · 90 BPM","enya_yuki_dance_120bpm":"站立舞蹈 · 120 BPM","enya_yuki_f_vibe_dance_60_bpm_002":"站立舞蹈 · 60 BPM"]
     private func sourceActionLabel(_ id:String)->String {DialogueMotion.fennyScenes.first{$0.id == id}?.label ?? Self.sourceActionLabels[id] ?? id}
     private var isSnowbreak:Bool { engine == "snowbreak" }
+    private var isPortrait:Bool {engine == "portrait"}
     private var interactionModeLabel:String {snowbreak.characterID == "Fenny" ? "皮肤互动":"皮肤互动（坐姿）"}
-    private var availableActions:[String] { isSnowbreak ? snowbreak.dialogueActions : stage.dialogueActions }
+    private var availableActions:[String] { isPortrait ? portrait.actions : isSnowbreak ? snowbreak.dialogueActions : stage.dialogueActions }
     private var modelEditing:Bool {isSnowbreak ? snowbreak.isEditing:nativeEditing}
-    private var currentRevision:Int { isSnowbreak ? snowbreak.interactionRevision : stage.interactionRevision }
-    private var activeAction:String? { isSnowbreak ? snowbreak.activeAction : stage.activeAction }
-    private var modelKey:String {isSnowbreak ? snowbreak.modelKey:"native"}
-    private var modelLabel:String {isSnowbreak ? snowbreak.characterName:stage.name}
+    private var currentRevision:Int { isPortrait ? portrait.interactionRevision : isSnowbreak ? snowbreak.interactionRevision : stage.interactionRevision }
+    private var activeAction:String? { isPortrait ? portrait.activeAction : isSnowbreak ? snowbreak.activeAction : stage.activeAction }
+    private var modelKey:String {isPortrait ? portrait.modelKey : isSnowbreak ? snowbreak.modelKey:"native"}
+    private var modelLabel:String {isPortrait ? portrait.name : isSnowbreak ? snowbreak.characterName:stage.name}
     private func companionContext(_ origin:String) -> CompanionContext {
         CompanionContext(modelKey:modelKey,modelName:modelLabel,
-                         mode:isSnowbreak ? (snowbreak.companionMode == "standing" ? "看板娘站立":"皮肤互动场景（以身体实况为准）"):"本地角色展示",
-                         activeAction:activeAction ?? "待机",origin:origin,bodyStatus:(modelEditing ? "手动编辑中，自动动作暂停；":"")+(isSnowbreak ? snowbreak.bodyState:stage.bodyState).summary+"；最近屏幕互动："+recentTouchSummary)
+                         mode:isPortrait ? "2D剧情立绘面对面":isSnowbreak ? (snowbreak.companionMode == "standing" ? "看板娘站立":"皮肤互动场景（以身体实况为准）"):"本地角色展示",
+                         activeAction:activeAction ?? "待机",origin:origin,bodyStatus:(modelEditing ? "手动编辑中，自动动作暂停；":"")+(isPortrait ? portrait.bodyState : isSnowbreak ? snowbreak.bodyState:stage.bodyState).summary+"；最近屏幕互动："+recentTouchSummary)
     }
     private func stopReading(){waitingBodyAction=nil;touchTicket=UUID();pendingTouches.removeAll();speech.stop();senses.resumeAfterPlayback()}
-    private func stopAction() {waitingBodyAction=nil; if isSnowbreak { snowbreak.stop() } else { stage.stopAction() } }
-    private func performMotion(_ event:DialogueActionEvent){if isSnowbreak{snowbreak.play(event.action,withVoice:false,automatic:true)}else{stage.performDialogueAction(event.action,motion:event.motion)}}
+    private func stopAction() {waitingBodyAction=nil; if isPortrait {portrait.stop()} else if isSnowbreak { snowbreak.stop() } else { stage.stopAction() } }
+    private func performMotion(_ event:DialogueActionEvent){if isPortrait{portrait.play(event.action)}else if isSnowbreak{snowbreak.play(event.action,withVoice:false,automatic:true)}else{stage.performDialogueAction(event.action,motion:event.motion)}}
     private func greetIfReady(){guard isSnowbreak,sheet==nil,scenePhase == .active,!greetedModels.contains(modelKey),let action=CompanionBehavior.greeting(actions:availableActions,mode:snowbreak.companionMode) else{return};greetedModels.insert(modelKey);if isSnowbreak{snowbreak.play(action,withVoice:snowbreakVoice,automatic:true)}else{stage.performDialogueAction(action)}}
     private func resumeStage() {
         store.activateCompanion(modelKey)
-        if isSnowbreak { stage.stop();snowbreak.resume();greetIfReady() }
-        else { snowbreak.pause();Task { await stage.refresh();stage.start() } }
+        if isPortrait {stage.stop();snowbreak.pause();portrait.pause();portrait.resume();if let selected=portrait.selected{store.activatePortrait(id:selected.id,name:selected.name)}}
+        else if isSnowbreak {portrait.pause();stage.stop();snowbreak.resume();greetIfReady() }
+        else {portrait.pause();snowbreak.pause();Task { await stage.refresh();stage.start() } }
     }
 
     var body: some View {
         ZStack {
             background.ignoresSafeArea()
-            if isSnowbreak {
+            if isPortrait {
+                PortraitCharacterView(stage:portrait).ignoresSafeArea().accessibilityIdentifier("portraitScene")
+                if let error=portrait.error{VStack{Text(error);Button("重新载入"){portrait.select(portrait.selectedID)}}.padding(20).background(.ultraThinMaterial,in:RoundedRectangle(cornerRadius:18))}
+                else if !portrait.ready {ProgressView("正在加载官方2D角色…")}
+            } else if isSnowbreak {
                 SnowbreakCharacterView(stage:snowbreak).id("snowbreak-renderer").ignoresSafeArea().accessibilityIdentifier("snowbreakScene")
                 if let error = snowbreak.error {
                     VStack { Text(error);Button("返回原伙伴") { engine = "native" } }.padding(24).background(.ultraThinMaterial,in:RoundedRectangle(cornerRadius:20))
@@ -113,7 +120,8 @@ struct CompanionHome: View {
                             Button("查看当前身体状态"){showingBodyState = true}
                             Button("心情与行为状态"){showingMood=true}
                             Button(senses.environment ? "停止环境聆听" : "环境声音反馈（本机）") { speech.stop();senses.toggleEnvironment() }
-                            if isSnowbreak {
+                            if isPortrait {ForEach(portrait.actions,id:\.self){id in Button(id){portrait.play(id)}}}
+                            else if isSnowbreak {
                                 ForEach(snowbreak.savedCharacters,id:\.self){id in Button(id == "Fenny" ? "切换到芬妮婚皮":"切换到恩雅护士"){snowbreak.selectCharacter(id)}}
                                 if snowbreak.characterID == "Fenny" {
                                     Button(snowbreak.companionOutfit == "normal" ? "✓ 原婚纱":"原婚纱"){snowbreak.selectVariant(outfit:"normal")}
@@ -193,7 +201,7 @@ struct CompanionHome: View {
         .sheet(isPresented:$showingBodyState) {
             BodyStatusInspector {
                 if isSnowbreak {await snowbreak.refreshBodyState()}
-                return (isSnowbreak ? snowbreak.bodyState:stage.bodyState).summary
+                return (isPortrait ? portrait.bodyState : isSnowbreak ? snowbreak.bodyState:stage.bodyState).summary
             }
         }
         .sheet(isPresented:$photoPicker) {ChatPhotoPicker {result in photoPicker = false;do{if let image = try result.get(){attachedImage = image}}catch{store.error = error.localizedDescription}}}
@@ -222,6 +230,7 @@ struct CompanionHome: View {
             case .diary: withClose { DiaryView() }
             case .memory: withClose { MemoryView() }
             case .embodiment: withClose { EmbodimentSettingsView() }
+            case .portraits:withClose {PortraitImportView(stage:portrait,onSelect:{engine="portrait"})}
             case .snowbreak: withClose { SnowbreakImportView(stage:snowbreak) }
             case .persona: PersonaView(modelKey:modelKey,modelName:modelLabel,actions:availableActions,onClose:{sheet = nil})
             case .speech: withClose {SpeechSettingsView()}
@@ -229,7 +238,7 @@ struct CompanionHome: View {
             case .games: CardGameView(store:store,onClose:{sheet=nil})
             }
         }
-        .onChange(of: sheet) { if $0 != nil { clearTouches();camera.stop();senses.suspend();speech.stop();stage.stop();snowbreak.pause() } }
+        .onChange(of: sheet) { if $0 != nil { clearTouches();camera.stop();senses.suspend();speech.stop();stage.stop();snowbreak.pause();portrait.pause() } }
         .onChange(of:camera.enabled) { value in if !value { store.discardCameraFrame() } }
         .onChange(of:senses.utterance?.id) { _ in
             guard let event=senses.utterance,!store.busy else{return};send(event.text,origin:"语音转录")
@@ -252,7 +261,7 @@ struct CompanionHome: View {
         .onChange(of:store.conversationID) {_ in waitingBodyAction=nil;speech.stop();clearTouches()}
         .onChange(of:store.archive.settings.speech) {_ in speech.stop();snowbreak.setOriginalLanguage(store.archive.settings.speech?.language ?? "zh")}
         .onChange(of:store.archive.settings.services) {_ in waitingBodyAction=nil;clearTouches();speech.stop();senses.stop();if store.archive.settings.services?.search.enabled != true {useSearch=false}}
-        .onChange(of:speech.mouthLevel) {value in if isSnowbreak {snowbreak.setSpeechLevel(value)}else{stage.setSpeechLevel(value)}}
+        .onChange(of:speech.mouthLevel) {value in if isPortrait {portrait.setSpeechLevel(value)}else if isSnowbreak {snowbreak.setSpeechLevel(value)}else{stage.setSpeechLevel(value)}}
         .onChange(of:touchAI) {if !$0 {clearTouches()};snowbreak.setTouchPolicy($0 && !store.archive.settings.endpoint.isEmpty)}
         .onChange(of:store.archive.settings.endpoint) {_ in snowbreak.setTouchPolicy(touchAI && !store.archive.settings.endpoint.isEmpty)}
         .onChange(of:store.dialogueAction?.id){_ in
@@ -275,6 +284,7 @@ struct CompanionHome: View {
         .onChange(of:snowbreak.touch?.id) { _ in
             guard isSnowbreak,let touch=snowbreak.touch else{return};queueTouch(touch.message)
         }
+        .onChange(of:portrait.selectedID){_ in if isPortrait{speech.stop();resumeStage()}}
         .onChange(of:engine) { _ in clearTouches();pendingMotionRevision = nil;nativeEditing = false;resumeStage() }
         .onChange(of:nativePresentation) { value in stage.setPresentation(value);value.save() }
         .onChange(of:showBackground) { value in snowbreak.sceneVisible(value) }
@@ -285,9 +295,9 @@ struct CompanionHome: View {
         .onReceive(NotificationCenter.default.publisher(for:ProcessInfo.thermalStateDidChangeNotification)){_ in snowbreak.applyHardwareBudget();stage.applyHardwareBudget()}
         .onReceive(NotificationCenter.default.publisher(for:Notification.Name.NSProcessInfoPowerStateDidChange)){_ in snowbreak.applyHardwareBudget();stage.applyHardwareBudget()}
         .task { resumeStage() }
-        .onDisappear { localVisionTicket=UUID();localVisionBusy=false;waitingBodyAction=nil;clearTouches();camera.stop();senses.suspend();speech.stop();stage.stop();snowbreak.pause() }
+        .onDisappear { localVisionTicket=UUID();localVisionBusy=false;waitingBodyAction=nil;clearTouches();camera.stop();senses.suspend();speech.stop();stage.stop();snowbreak.pause();portrait.pause() }
         .onChange(of: scenePhase) { phase in
-            if phase == .active, sheet == nil { resumeStage() } else { clearTouches();camera.stop();senses.suspend();speech.stop();stage.stop();snowbreak.pause() }
+            if phase == .active, sheet == nil { resumeStage() } else { clearTouches();camera.stop();senses.suspend();speech.stop();stage.stop();snowbreak.pause();portrait.pause() }
         }
     }
 
@@ -416,7 +426,7 @@ struct CompanionHome: View {
             } catch { store.error = error.localizedDescription;senses.replyFailed() }
         }
     }
-    private func ownPortrait() async throws -> CameraFrame {if isSnowbreak{return try await snowbreak.portrait()};return try stage.portrait()}
+    private func ownPortrait() async throws -> CameraFrame {if isPortrait{return try await portrait.portrait()};if isSnowbreak{return try await snowbreak.portrait()};return try stage.portrait()}
     private func performBody(_ command:BodyCommand) async {
         if isSnowbreak {_ = await snowbreak.executeBody(command)}
         else {_ = stage.executeBody(command);try? await Task.sleep(nanoseconds:850_000_000)}
@@ -482,6 +492,7 @@ struct CompanionHome: View {
                         Text(store.currentCard?.name ?? modelLabel).font(.title.bold())
                         Picker("当前伙伴",selection:$engine) {
                             Text("本地伙伴").tag("native")
+                            if !portrait.models.isEmpty {Text("官方 2D · "+portrait.name).tag("portrait")}
                             if snowbreak.library.hasCurrent || isSnowbreak { Text(snowbreak.characterName).tag("snowbreak") }
                         }
                         if isSnowbreak { Toggle(snowbreak.characterName+"原声",isOn:$snowbreakVoice).tint(.green) }
@@ -515,6 +526,8 @@ struct CompanionHome: View {
                     Label("音乐 · 接入中", systemImage: "music.note").frame(maxWidth: .infinity, alignment: .leading).foregroundStyle(.secondary).padding(16)
                 }.modifier(SettingsCard())
                 VStack(spacing: 0) {
+                    settingsRow("官方2D立绘／3D展示切换",icon:"person.crop.rectangle"){sheet = .portraits}
+                    Divider().padding(.leading,50)
                     settingsRow("导入尘白角色", icon:"person.crop.rectangle.stack") { sheet = .snowbreak }
                     Divider().padding(.leading,50)
                     if !isSnowbreak { settingsRow("身体、触碰与光照", icon: "sun.max") { sheet = .embodiment } }

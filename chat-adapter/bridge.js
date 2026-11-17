@@ -77,7 +77,9 @@
   async function receive(event) {
     if(event.type==='stopWebSpeech'){stopWebSpeech();return;}
     if(event.type==='ttsState'){if(profile)profile.speechEnabled=event.enabled;if(!event.enabled)stopWebSpeech();document.dispatchEvent(new CustomEvent('qiban-tts-state',{detail:event}));return;}
+    if(event.type==='level'){document.dispatchEvent(new CustomEvent('qiban-speech-level',{detail:event}));return;}
     if (event.type==='speech') {
+      document.dispatchEvent(new CustomEvent('qiban-speech-state',{detail:event}));
       speechState=event;
       if(event.status?.startsWith('语音失败'))notice(event.status);
       document.querySelectorAll('.voice-bubble').forEach(node=>node.classList.toggle('is-playing',event.busy && node.dataset.voiceMessageId===event.id));
@@ -140,8 +142,8 @@
     },
     voiceAttachment(text){return {id:'qiban-voice-'+crypto.randomUUID(),type:'audio',name:'App 全局配音',mime:'audio/x-qiban',path:'qiban-speech:'+encodeURIComponent(JSON.stringify({text})),source:'tts-reply',duration:Math.max(1,Math.ceil(text.length/5))};},
     characterPrompt(character){
-      if(character?.qibanId && profile?.contacts?.some(item=>item.qibanId===character.qibanId))return (character.prompt || '')+(profile?.bodyNotice || '')+'\n'+(profile?.speechFormat || '');
-      return (profile?.globalPrompt || '')+'\n【当前角色】\n'+(character?.prompt || '')+'\n'+(profile?.speechFormat || '');
+      if(character?.qibanId && profile?.contacts?.some(item=>item.qibanId===character.qibanId))return (character.prompt || '')+(profile?.bodyNotice || '')+'\n'+(profile?.speechFormat || '')+(window.QibanNative.galContext?.(character)||'');
+      return (profile?.globalPrompt || '')+'\n【当前角色】\n'+(character?.prompt || '')+'\n'+(profile?.speechFormat || '')+(window.QibanNative.galContext?.(character)||'');
     },
     nativeMemory(character,mode){if(mode!=='private')return '';const item=profile?.contacts?.find(item=>item.id===character?.id);const current=this.currentConversation?.(),memories=item?.sessions?.find(s=>s.id===current?.qibanSessionId)?.memories || '';return (memories ? '【本体已有的本段对话记忆】\n'+memories : '')+(character?.id===profile?.activeId && profile?.appearance ? '\n【进入通讯时的载体状态，当前模型已暂停】\n'+profile.appearance : '');},
     async flush(){await window.QibanNative.flushStorage?.();},

@@ -6,6 +6,7 @@ import UniformTypeIdentifiers
     @StateObject private var controller:ChatModuleController
     @Environment(\.scenePhase) private var scenePhase
     @State private var importing=false
+    @StateObject private var portraits=PortraitStage()
     init(store:LocalStore,speech:CompanionSpeech,appearance:String="",onClose:@escaping()->Void) {
         let controller=ChatModuleController(store:store,speech:speech,appearance:appearance);controller.onClose=onClose
         _controller=StateObject(wrappedValue:controller)
@@ -21,6 +22,8 @@ import UniformTypeIdentifiers
                     Label("TTS",systemImage:controller.speechEnabled ? "speaker.wave.2":"speaker.slash")
                 }.accessibilityLabel(controller.speechEnabled ? "关闭 TTS 语音":"开启 TTS 语音").accessibilityIdentifier("chatSpeechToggle")
                 Menu {
+                    Button("面对面对话"){controller.openGal()}.disabled(!controller.ready)
+                    Button("导入官方2D动态立绘"){controller.openPane(.portrait)}
                     Button("开启新对话"){controller.conversationMenu(new:true)}.disabled(!controller.ready)
                     Button("历史对话／切换对话"){controller.conversationMenu(new:false)}.disabled(!controller.ready)
                     Divider()
@@ -56,6 +59,7 @@ import UniformTypeIdentifiers
         }}
         .sheet(item:$controller.pane,onDismiss:{if controller.ready{controller.refresh()}}) {pane in
             Group {switch pane {
+            case .portrait:PortraitImportView(stage:portraits).safeAreaInset(edge:.top){HStack{Spacer();Button("完成"){controller.pane=nil}.padding()}}
             case .api:SettingsView(onClose:{controller.pane=nil})
             case .speech:SpeechSettingsView().safeAreaInset(edge:.top){HStack{Spacer();Button("完成"){controller.pane=nil}.padding()}}
             case .persona:PersonaView(modelKey:"native",modelName:"即时通讯",actions:[],onClose:{controller.pane=nil},initialCardID:controller.selectedCardID,applyToModel:false)

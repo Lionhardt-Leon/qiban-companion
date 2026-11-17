@@ -14,6 +14,7 @@ final class PackLibrary {
     PackLibrary(File root){this.root=root;chat=new File(root,"chat");art=new File(root,"art");voice=new File(root,"voice");models=new File(root,"models");state=new File(root,"chat-state");root.mkdirs();state.mkdirs();models.mkdirs();art.mkdirs();}
     boolean hasChat(){try{return FilesSupport.text(new File(chat,"package.sha256"),100).equals(BuildConfig.CHAT_SHA256);}catch(Exception e){return false;}}
     JSONObject install(File input,String name,java.util.function.Consumer<String> progress)throws Exception {
+        if(name.toLowerCase(Locale.ROOT).endsWith(".qstage"))return new PortraitLibrary(root).install(input);
         String lower=name.toLowerCase(Locale.ROOT);if(lower.endsWith(".snowbreak")){
             if(input.length()>128L*1024*1024||input.length()<22)throw new IOException("角色包须完整且不超过128MB。");
             try(ZipFile zip=new ZipFile(input)){JSONObject manifest=readJSON(zip,"manifest.json",2*1024*1024);if(!List.of("snowbreak-collection/1","snowbreak-skin/1").contains(manifest.optString("schema")))throw new IOException("不支持的角色包版本。");}

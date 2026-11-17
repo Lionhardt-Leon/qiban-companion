@@ -43,11 +43,12 @@ struct PersonaLibrary: Codable, Equatable {
         let id = modelBindings[model] ?? defaultCardID
         return cards.first { $0.id == id }
     }
+    static func validModelKey(_ key:String)->Bool {["native","enya","fenny"].contains(key) || key.range(of:"^portrait:[A-Za-z0-9_-]{1,80}/[A-Za-z0-9_-]{1,80}$",options:.regularExpression) != nil}
     func validate() throws {
         let ids = Set(cards.map(\.id))
         guard (1...50).contains(cards.count),ids.count == cards.count,
               defaultCardID.map({ids.contains($0)}) == true,
-              modelBindings.keys.allSatisfy({["native","enya","fenny"].contains($0)}),
+              modelBindings.keys.allSatisfy({Self.validModelKey($0)}),
               modelBindings.values.allSatisfy({ids.contains($0)}),
               [systemPrompt,userDescription,bodyStyle].allSatisfy({$0.count <= PersonaLimits.fieldCharacters}),userName.count <= 120 else {
             throw CompanionError.message("人设库格式无效，最多保存 50 张角色卡。")

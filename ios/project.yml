@@ -30,8 +30,8 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: $(COMPAT_APP_BUNDLE)
-        MARKETING_VERSION: "0.30.1"
-        CURRENT_PROJECT_VERSION: "51"
+        MARKETING_VERSION: "0.31.0"
+        CURRENT_PROJECT_VERSION: "53"
         GENERATE_INFOPLIST_FILE: YES
     dependencies:
       - package: ONNXRuntime
@@ -68,6 +68,11 @@ targets:
         LSSupportsOpeningDocumentsInPlace: true
         UILaunchScreen: {}
         UTExportedTypeDeclarations:
+          - UTTypeIdentifier: com.qiban.portraitstage
+            UTTypeDescription: 栖伴2D动态立绘素材包
+            UTTypeConformsTo: [public.data, public.archive]
+            UTTypeTagSpecification:
+              public.filename-extension: [qstage]
           - UTTypeIdentifier: com.qiban.cardart
             UTTypeDescription: 栖伴牌桌立绘包
             UTTypeConformsTo: [public.data, public.archive]

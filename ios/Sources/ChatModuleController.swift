@@ -5,7 +5,7 @@ import Combine
 import AVFoundation
 
 struct ChatFileExport:Identifiable {let id=UUID();let url:URL}
-enum ChatNativePane:String,Identifiable {case persona,api,speech;var id:String{rawValue}}
+enum ChatNativePane:String,Identifiable {case persona,api,speech,portrait;var id:String{rawValue}}
 
 @MainActor final class ChatModuleController:NSObject,ObservableObject,WKScriptMessageHandlerWithReply,WKNavigationDelegate {
     @Published var status=""
@@ -26,6 +26,7 @@ enum ChatNativePane:String,Identifiable {case persona,api,speech;var id:String{r
     private var requests:[String:Task<Void,Never>]=[:]
     private var observation:AnyCancellable?
     private var settingsObservation:AnyCancellable?
+    private var mouthObservation:AnyCancellable?
     private var sessionID=UUID()
     private var suspended=false
     private var exportContinuation:CheckedContinuation<[String:Any],Error>?
@@ -43,7 +44,7 @@ enum ChatNativePane:String,Identifiable {case persona,api,speech;var id:String{r
         error=nil;status="正在打开本地通讯…";let ticket=sessionID
         do {
             try store.prepareChatSharing();try FileManager.default.createDirectory(at:temp,withIntermediateDirectories:true)
-            let server=ChatModuleServer(root:library.site);self.server=server;try await server.start()
+            let server=ChatModuleServer(root:library.site,presentationRoot:PortraitLibrary().directory);self.server=server;try await server.start()
             guard sessionID==ticket else {server.stop();return}
             let content=WKUserContentController();content.addScriptMessageHandler(self,contentWorld:.page,name:"qibanChat")
             let config=WKWebViewConfiguration();config.userContentController=content;config.websiteDataStore = .default()
@@ -54,6 +55,7 @@ enum ChatNativePane:String,Identifiable {case persona,api,speech;var id:String{r
             observation=speech.$busy.combineLatest(speech.$status).sink{[weak self] busy,status in
                 Task{@MainActor [weak self] in try? await self?.emit(["type":"speech","busy":busy,"status":status,"id":self?.currentSpeechID ?? ""])}
             }
+            mouthObservation=speech.$mouthLevel.sink{[weak self] level in Task{@MainActor [weak self] in try? await self?.emit(["type":"level","value":level])}}
             settingsObservation=store.$archive.map{($0.settings.speech ?? SpeechPreferences()).isEnabled}.removeDuplicates().sink{[weak self] enabled in
                 Task{@MainActor [weak self] in guard let self=self else{return};self.speechEnabled=enabled;if !enabled{self.stopSpeech()};try? await self.emit(["type":"ttsState","enabled":enabled])}
             }
@@ -80,7 +82,7 @@ enum ChatNativePane:String,Identifiable {case persona,api,speech;var id:String{r
         }
     }
     func dispose() {
-        sessionID=UUID();cancelRequests();stopSpeech();observation=nil;settingsObservation=nil
+        sessionID=UUID();cancelRequests();stopSpeech();observation=nil;settingsObservation=nil;mouthObservation=nil
         webView?.configuration.userContentController.removeScriptMessageHandler(forName:"qibanChat",contentWorld:.page)
         webView?.stopLoading();webView?.navigationDelegate=nil;webView=nil;ready=false;server?.stop();server=nil
         finishExport(saved:false)
@@ -89,6 +91,7 @@ enum ChatNativePane:String,Identifiable {case persona,api,speech;var id:String{r
     }
     func refresh() {Task{try? await emit(["type":"refresh"]);webView?.reload()}}
     func setAppSpeech(_ enabled:Bool){appTTSMode=enabled;stopSpeech();Task{try? await emit(["type":"ttsMode","enabled":enabled])}}
+    func openGal(){Task{do{guard let view=webView else{return};_ = try await view.callAsyncJavaScript("if(!window.QibanNative?.openGal)throw Error('请导入v6通讯模块');await window.QibanNative.openGal();",arguments:[:],in:nil,contentWorld:.page)}catch{self.error=error.localizedDescription}}}
     func conversationMenu(new:Bool){Task{do{stopSpeech();guard let view=webView else{return};_ = try await view.callAsyncJavaScript("if(!window.QibanNative?.conversationSessions)throw Error('请导入新版通讯模块'); await window.QibanNative.conversationSessions(action);",arguments:["action":new ? "new":"history"],in:nil,contentWorld:.page)}catch{self.error=error.localizedDescription}}}
     func openPane(_ value:ChatNativePane) {
         Task {
@@ -108,6 +111,8 @@ enum ChatNativePane:String,Identifiable {case persona,api,speech;var id:String{r
     }
     private func execute(_ command:String,body:[String:Any]) async throws -> Any {
         switch command {
+        case "presentationCatalog":return try PortraitLibrary().catalog()
+        case "importPortraits":stopSpeech();pane = .portrait;return ["opened":true]
         case "ready":status="";return ["ready":true]
         case "pageError":status="";error=body["message"] as? String ?? "通讯模块启动失败。";return ["shown":true]
         case "bootstrap":

@@ -59,8 +59,9 @@ for path in ['src/js/chat_engine.js','src/js/tool_chat_engine.js']:
     patch(path,'const memoryMessage = await buildLongTermMemoryMessage({','const memoryMessage = await buildLongTermMemoryMessage({\n    qibanMessageIds:window.QibanNative?.memoryIDs?.(store),')
 patch('src/js/long_term_memory.js','    if (result.memories.length === 0 && result.edges.length === 0) return null;', '    const limited=window.QibanNative?.limitMemory?.(result,loadRawStore(),options.qibanMessageIds);\n    if(limited)Object.assign(result,limited);\n    if (result.memories.length === 0 && result.edges.length === 0) return null;')
 patch('src/js/tts_engine.js','response = await fetch(request.url, request.init);',"response = await fetch(request.url,{...request.init,...(window.QibanNative?.available ? {signal:window.QibanNative.ttsSignal()}:{})});")
-files['src/js/ui.js']=b"import {initQibanSessions} from './qiban_sessions.js';\nimport {initQibanMessageActions,decorateQibanMessage} from './qiban_messages.js';\n"+files['src/js/ui.js']
+files['src/js/ui.js']=b"import {initQibanGal} from './qiban_gal.js';\nimport {initQibanSessions} from './qiban_sessions.js';\nimport {initQibanMessageActions,decorateQibanMessage} from './qiban_messages.js';\n"+files['src/js/ui.js']
 patch('src/js/ui.js','  state.store = loadAppStore();',"""  state.store = loadAppStore();
+  initQibanGal({getStore:()=>state.store,isBusy:()=>pendingConversationReplies>0 || Boolean(state.activeToolRun),send:text=>{const committed=commitOutgoingMessage(text);if(!committed)return false;updateStore(committed.store);continueConversationAfterOutgoing(committed);return true;},selectCharacter:id=>{const card=getCharacterById(state.store.characters,id);if(!card)throw Error('角色不存在');const conversation=ensurePrivateConversation(state.store,card);updateStore(loadAppStore());selectConversation(conversation.id,true);return conversation;}});
   initQibanSessions({getStore:()=>state.store,isBusy:()=>pendingConversationReplies>0 || Boolean(state.activeToolRun),replace:updateStore,select:id=>selectConversation(id,true)});
   initQibanMessageActions({getStore:()=>state.store,isBusy:()=>pendingConversationReplies>0 || Boolean(state.activeToolRun),changeBusy:delta=>{pendingConversationReplies=Math.max(0,pendingConversationReplies+delta);},refresh:()=>renderAll(),stopPlayback:()=>stopVoicePlayback(),chatSettings:key=>buildCharacterChatSettings(key)});""")
 patch('src/js/ui.js','function selectConversation(id) {', '''function selectConversation(id,qibanExact=false) {
@@ -127,12 +128,14 @@ patch('src/js/deepseek_web.js','export function isDeepSeekWebAvailable(provider)
 patch('src/js/announcements.js',"export const ANNOUNCEMENT_URL = 'https://chat.fritia.online/api/downloads/fritia-online-source/public/announcement.json?token=cyandust_workshop';","export const ANNOUNCEMENT_URL = new URL('src/public/announcement.json',location.href).href;")
 # The native container does not fetch upstream announcements or self-update.
 files['src/public/announcement.json']=b'{}'
+files['qiban_gal.css']=(ROOT/'chat-adapter/gal.css').read_bytes()
+patch('index.html','</head>','<link rel="stylesheet" href="qiban_gal.css">\n</head>')
 files['qiban_bridge.js']=(ROOT/'chat-adapter/bridge.js').read_bytes()
 files['qiban_boot.js']="""try {await window.QibanNative.initialize(); await import('./src/js/main.js');}
 catch(error) {document.body.textContent='通讯模块启动失败：'+error.message;if(window.QibanNative?.available)await window.QibanNative.call('pageError',{message:error.message});}
 """.encode('utf-8')
 files['src/js/qiban_native.js']=(ROOT/'chat-adapter/native.js').read_bytes()
-for name,target in [('identity.js','qiban_identity.js'),('contact-repair.js','qiban_contact_repair.js'),('message-ops.js','qiban_message_ops.js'),('message-actions.js','qiban_messages.js'),('session-ops.js','qiban_session_ops.js'),('sessions.js','qiban_sessions.js')]:
+for name,target in [('identity.js','qiban_identity.js'),('contact-repair.js','qiban_contact_repair.js'),('message-ops.js','qiban_message_ops.js'),('message-actions.js','qiban_messages.js'),('session-ops.js','qiban_session_ops.js'),('sessions.js','qiban_sessions.js'),('gal.js','qiban_gal.js'),('gal-state.js','qiban_gal_state.js')]:
     files['src/js/'+target]=(ROOT/'chat-adapter'/name).read_bytes()
 files['qiban_ios.css']=(ROOT/'chat-adapter/ios.css').read_bytes()
 files['LICENSE.txt']=files['LICENSE']
@@ -151,6 +154,9 @@ This module is independent of the native renderer and does not relicense
 third-party models or authorize redistribution of game resources.
 '''
 site={('site/'+name):data for name,data in files.items() if name in ['index.html','favicon.ico','manifest.webmanifest','LICENSE.txt'] or name.startswith('src/') or name.startswith('qiban_')}
+for path in (ROOT/'web/stage2d').glob('*.mjs'):
+    site['site/stage2d/'+path.name]=path.read_bytes()
+    site['source/stage2d/'+path.name]=path.read_bytes()
 site['site/UPSTREAM.txt']=notice.encode('utf-8')
 site['source/upstream.zip']=archive.read_bytes()
 site['source/build-chat-module.py']=Path(__file__).read_bytes()
@@ -158,11 +164,11 @@ for path in (ROOT/'chat-adapter').glob('*'):
     if path.is_file():site['source/adapters/'+path.name]=path.read_bytes()
 site['source/README.txt']=notice.encode('utf-8')
 manifest={'schema':'qiban-chat-module/1','revision':REVISION,'upstream':UPSTREAM,'license':'GPL-3.0','files':{name:hashlib.sha256(data).hexdigest() for name,data in site.items()}}
-out=ROOT/'dist/Fritia-Chat-Mobile-v5.qchat'
+out=ROOT/'dist/Fritia-Chat-Mobile-v6.qchat'
 out.parent.mkdir(parents=True,exist_ok=True)
 with zipfile.ZipFile(out,'w',compression=zipfile.ZIP_STORED) as z:
     def write(name,data):
-        info=zipfile.ZipInfo(name,date_time=(2026,11,15,0,0,0));info.external_attr=0o100644<<16
+        info=zipfile.ZipInfo(name,date_time=(2026,11,17,0,0,0));info.external_attr=0o100644<<16
         z.writestr(info,data)
     write('module.json',json.dumps(manifest,ensure_ascii=False,sort_keys=True).encode('utf-8'))
     for name,data in sorted(site.items()):write(name,data)
