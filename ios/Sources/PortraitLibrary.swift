@@ -58,6 +58,10 @@ struct PortraitLibrary {
             }
             let target=staging.appendingPathComponent(entry.path);try FileManager.default.createDirectory(at:target.deletingLastPathComponent(),withIntermediateDirectories:true);try data.write(to:target,options:[.atomic,.completeFileProtection])
         }
+        for model in m.models {
+            let data=try Data(contentsOf:staging.appendingPathComponent(model.directory+"/"+model.skeleton))
+            guard let json=try JSONSerialization.jsonObject(with:data) as? [String:Any],let info=json["skeleton"] as? [String:Any],(info["spine"] as? String ?? "").hasPrefix("3.8."),let bones=json["bones"] as? [Any],bones.count<=1500,let slots=json["slots"] as? [Any],slots.count<=1200 else{throw CompanionError.message("2D 骨骼版本或规模不兼容。")}
+        }
         try bytes.write(to:staging.appendingPathComponent("stage.json"),options:[.atomic,.completeFileProtection])
         let target=directory.appendingPathComponent(m.id,isDirectory:true),old=directory.appendingPathComponent(".previous-"+UUID().uuidString,isDirectory:true),exists=FileManager.default.fileExists(atPath:target.path)
         if exists{try FileManager.default.moveItem(at:target,to:old)}

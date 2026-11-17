@@ -78,6 +78,7 @@ struct CompanionHome: View {
             if isPortrait {
                 PortraitCharacterView(stage:portrait).ignoresSafeArea().accessibilityIdentifier("portraitScene")
                 if let error=portrait.error{VStack{Text(error);Button("重新载入"){portrait.select(portrait.selectedID)}}.padding(20).background(.ultraThinMaterial,in:RoundedRectangle(cornerRadius:18))}
+                else if portrait.models.isEmpty {VStack(spacing:16){Text("导入官方2D动态立绘素材");Button("选择 .qstage 素材包"){sheet = .portraits}}}
                 else if !portrait.ready {ProgressView("正在加载官方2D角色…")}
             } else if isSnowbreak {
                 SnowbreakCharacterView(stage:snowbreak).id("snowbreak-renderer").ignoresSafeArea().accessibilityIdentifier("snowbreakScene")

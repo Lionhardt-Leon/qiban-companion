@@ -1,0 +1,12 @@
+import assert from 'node:assert/strict';
+import {Skeleton,parseAtlas,bezierMix,clipMesh} from '../web/stage2d/skeleton.mjs';
+import {emptyWorld,addNote,notesFor,visit,matchingModel} from '../chat-adapter/gal-state.js';
+const atlas=parseAtlas('page.png\nsize: 64,64\nformat: RGBA8888\nfilter: Linear,Linear\nrepeat: none\nface\n  rotate: false\n  xy: 0,0\n  size: 64,64\n  orig: 64,64\n  offset: 0,0\n  index: -1\n');
+const data={skeleton:{spine:'3.8.86'},bones:[{name:'root'},{name:'head',parent:'root',x:10}],slots:[{name:'face',bone:'head',attachment:'face'}],skins:[{name:'default',attachments:{face:{face:{type:'mesh',uvs:[0,0,1,0,0,1],triangles:[0,1,2],vertices:[0,0,4,0,0,4]}}}}],animations:{move:{bones:{head:{translate:[{x:0,time:0},{x:10,time:1}]}}},rest:{}}};
+const skeleton=new Skeleton(data,atlas);skeleton.pose('move',.5);assert.equal(skeleton.meshes()[0].positions[0],15);skeleton.pose('rest',0);assert.equal(skeleton.meshes()[0].positions[0],10,'new clips reset the setup pose');
+assert.equal(bezierMix(.5,'stepped'),0);assert.ok(Math.abs(bezierMix(.5,[.25,.25,.75,.75])-.5)<.001);
+const clipped=clipMesh({positions:[-1,-1,3,-1,-1,3],uvs:[0,0,1,0,0,1],triangles:[0,1,2],clip:[0,0,1,0,1,1,0,1]});assert.ok(clipped.positions.length>0);for(const p of clipped.positions)assert.ok(p>=-1e-7&&p<=1+1e-7,'clip geometry is bounded');
+let world=emptyWorld();world=addNote(world,{characterId:'enya',conversationId:'one',text:'明天见',kind:'promise',sourceMessageId:'m1'});assert.equal(notesFor(world,'enya','one').length,1);assert.equal(notesFor(world,'fenny','one').length,0);assert.equal(notesFor(world,'enya','two').length,0);assert.equal(addNote(world,{characterId:'enya',conversationId:'one',text:'明天见',kind:'promise',sourceMessageId:'m1'}).notes.length,1);
+world=visit(world,{id:'enya'},'quarters','one',1);assert.equal(world.locations.enya.zone,'quarters');assert.equal(world.scenes.one,'quarters');assert.equal(world.notes.length,1);assert.throws(()=>visit(world,{id:'enya'},'../','one'));
+assert.equal(matchingModel({id:'a',name:'恩雅'},[{id:'sp11',name:'恩雅'}],world).id,'sp11');world.bindings.a='sp8';assert.equal(matchingModel({id:'a',name:'恩雅'},[{id:'sp11',name:'恩雅'},{id:'sp8',name:'芬妮'}],world).id,'sp8');
+console.log(JSON.stringify({checks:12,setupPoseReset:true,curves:true,clipping:true,sessionAndCharacterIsolation:true,modelBinding:true}));

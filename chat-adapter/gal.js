@@ -11,7 +11,7 @@ function state(){const store=hooks.getStore(),conversation=store.conversations.f
 function persist(next=world){saveWorld(next);world=next;}
 function avatar(c){const raw=c?.avatar;return typeof raw==='string'?raw:raw?.dataUrl||'';}
 function scene(zone){return catalog.scenes.find(s=>s.id.endsWith('/'+zone)||s.id===zone);}
-function setScene(zone){if(!root)return;const s=scene(zone);$('.qgal-background').style.backgroundImage=s?'url('+JSON.stringify(new URL(s.path,location.href).href)+')':'';$('.qgal-scene').textContent=ZONES.find(z=>z[0]===zone)?.[2]||s?.name||'面对面';}
+function setScene(zone){if(!root)return;root.dataset.roomTheme=zone==='quarters'?(world.dorms[current.character.id]?.theme||'day'):'day';const s=scene(zone);$('.qgal-background').style.backgroundImage=s?'url('+JSON.stringify(new URL(s.path,location.href).href)+')':'';$('.qgal-scene').textContent=ZONES.find(z=>z[0]===zone)?.[2]||s?.name||'面对面';}
 export function initQibanGal(context){
   if(!native()?.available)return;hooks=context;
   native().presentationChanged=async()=>{catalog=await call('presentationCatalog');if(root)await showModel();};
@@ -51,8 +51,11 @@ async function open(){
   player=new PortraitPlayer($('canvas'),{onStatus:text=>{if(root)$('.qgal-load').textContent=text;}});
   const loc=world.scenes[s.conversation.id]||localLocation(s.character,world).zone;setScene(loc);await showModel();refresh();
 }
-async function close(){
-  if(!root)return;clearTimeout(typingTimer);clearTimeout(autoTimer);++loadTicket;await native().stopAllSpeech();player?.dispose();player=null;closeDialog();root.remove();root=null;current=null;selectedMessage=null;document.body.classList.remove('qiban-gal-open');
+let closeTask=null;
+function close(){
+  if(closeTask)return closeTask;if(!root)return Promise.resolve();
+  const oldRoot=root,oldPlayer=player;closeDialog();root=null;player=null;current=null;selectedMessage=null;++loadTicket;clearTimeout(typingTimer);clearTimeout(autoTimer);oldPlayer?.dispose();oldRoot.remove();document.body.classList.remove('qiban-gal-open');
+  closeTask=native().stopAllSpeech().finally(()=>{closeTask=null;});return closeTask;
 }
 async function showModel(){
   const ticket=++loadTicket,model=matchingModel(current.character,catalog.models,world);$('canvas').hidden=!model;$('.qgal-static').hidden=Boolean(model);
