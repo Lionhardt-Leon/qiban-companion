@@ -5,10 +5,9 @@ import hashlib,io,json,os,shutil,subprocess,sys,tempfile,urllib.request,urllib.e
 root=Path(__file__).resolve().parents[1];generated=root/'ios/Generated';target=generated/'QibanG2P.xcframework'
 def notices():
     parts=[(target/'THIRD-PARTY-NOTICES.txt').read_text(encoding='utf-8')]
-    for name in ['LICENSE','ThirdPartyNotices.txt']:
-        url='https://raw.githubusercontent.com/microsoft/onnxruntime/v1.24.2/'+name
-        with urllib.request.urlopen(url,timeout=60) as response:
-            parts.append('\nMicrosoft ONNX Runtime 1.24.2 / '+name+'\n'+response.read().decode('utf-8'))
+    url='https://raw.githubusercontent.com/xieanranya/onnxruntime-swift-package-manager/1.24.2/LICENSE'
+    with urllib.request.urlopen(url,timeout=60) as response:
+        parts.append('\nMicrosoft ONNX Runtime 1.24.2 / LICENSE\n'+response.read().decode('utf-8'))
     (generated/'SPEECH-LICENSES.txt').write_text('\n\n'.join(parts),encoding='utf-8')
 if target.exists():
     metadata=target/'BUILD-INFO.json'

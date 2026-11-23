@@ -4,7 +4,7 @@ options:
     iOS: "16.0"
 packages:
   ONNXRuntime:
-    url: https://github.com/microsoft/onnxruntime-swift-package-manager
+    url: https://github.com/xieanranya/onnxruntime-swift-package-manager
     exactVersion: "1.24.2"
 settings:
   base:
