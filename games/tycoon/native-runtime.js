@@ -231,7 +231,8 @@ class RoomCore {
         r.seats.forEach((s,i)=>{r.game.players[i].name=s.name;r.game.players[i].character=s.appearance.id;r.game.players[i].bot=s.bot;});
         startRound(r.game,this.random);break;
       case 'leave':
-        if(r.game&&r.game.phase!=='finished'){p.bot=true;p.ready=true;delete p.token;r.game.players[p.seat].bot=true;}
+        // After the first deal, scores and exchanges belong to fixed seat indices.
+        if(r.game){p.bot=true;p.ready=true;delete p.token;r.game.players[p.seat].bot=true;}
         else r.seats[p.seat]=null;
         if(p.seat===r.host)r.host=r.seats.findIndex(s=>s&&!s.bot);
         r.revision++;r.actions.set(dedup,true);

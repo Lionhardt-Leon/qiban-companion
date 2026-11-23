@@ -248,7 +248,10 @@ struct SettingsView: View {
                 Section {NavigationLink {ServiceSettingsView()} label:{Label("独立功能接口",systemImage:"network")}.accessibilityIdentifier("independentServices")
                     Text("分别配置识图、联网搜索、TTS 和语音识别。未启用的功能沿用原设置。") .font(.caption).foregroundStyle(.secondary)}
                 Section {
-                    TextField("HTTPS 接口地址", text: $settings.endpoint)
+                    TextField("HTTPS 接口地址", text: Binding(get:{settings.endpoint},set:{ address in
+                        if APIKeyStore.identity(address) != APIKeyStore.identity(settings.endpoint) { key = "" }
+                        settings.endpoint = address
+                    }))
                         .keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
                     SecureField("API Key（本地服务可留空）", text: $key)
                         .textInputAutocapitalization(.never).autocorrectionDisabled()
@@ -284,7 +287,7 @@ struct SettingsView: View {
                 .toolbar {if let close=onClose {ToolbarItem(placement:.confirmationAction) {Button("完成",action:close)}}}
                 .onAppear {
                     settings = store.archive.settings
-                    do { key = try APIKeyStore.read(); keyReady = true }
+                    do { key = try store.mainKey(); keyReady = true }
                     catch { keyReady = false; store.error = error.localizedDescription }
                 }
                 .onChange(of: settings.endpoint) { _ in saved = false }
@@ -300,9 +303,14 @@ struct SettingsView: View {
                         let url = try result.get()
                         let granted = url.startAccessingSecurityScopedResource()
                         defer { if granted { url.stopAccessingSecurityScopedResource() } }
-                        let size = try url.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
-                        guard size <= 50_000_000 else { throw CompanionError.message("备份超过 50MB。") }
-                        pendingImport = try Data(contentsOf: url)
+                        if let size = try url.resourceValues(forKeys: [.fileSizeKey]).fileSize {
+                            try LocalStore.checkBackupSize(size)
+                        }
+                        let file = try FileHandle(forReadingFrom: url)
+                        defer { try? file.close() }
+                        let data = try file.read(upToCount: LocalStore.backupByteLimit + 1) ?? Data()
+                        try LocalStore.checkBackupSize(data.count)
+                        pendingImport = data
                     } catch { store.error = error.localizedDescription }
                 }
                 .confirmationDialog("恢复将替换当前聊天、记忆、日记和设置。接口地址改变时会清除旧密钥，需重新填写。", isPresented: Binding(
@@ -312,7 +320,7 @@ struct SettingsView: View {
                         do {
                             try store.restore(data)
                             settings = store.archive.settings
-                            key = try APIKeyStore.read()
+                            key = try store.mainKey()
                             saved = false
                         }
                         catch { store.error = error.localizedDescription }

@@ -30,8 +30,8 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: $(COMPAT_APP_BUNDLE)
-        MARKETING_VERSION: "0.31.0"
-        CURRENT_PROJECT_VERSION: "53"
+        MARKETING_VERSION: "0.31.1"
+        CURRENT_PROJECT_VERSION: "54"
         GENERATE_INFOPLIST_FILE: YES
     dependencies:
       - package: ONNXRuntime

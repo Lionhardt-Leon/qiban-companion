@@ -97,47 +97,76 @@ import simd
     }
     private func applyBodyPresentation(){var value = presentation;value.yaw = ((value.yaw+bodyYaw+180).truncatingRemainder(dividingBy:360)+360).truncatingRemainder(dividingBy:360)-180;scene?.rootNode.childNodes.first(where:{$0.camera == nil})?.simdTransform = value.transform(base:displayBase,center:displayCenter,height:displayHeight)}
 
-    func refresh() async {
-        let library = CharacterLibrary()
-        guard library.hasCurrent, !loading else { return }
+    private var loadGeneration = UUID()
+    private var pendingDecode: Task<LoadedCharacter, Error>?
+    private var decodeOwner: UUID?
+
+    private let library: CharacterLibrary
+    private let decodeCharacter: @Sendable (URL) throws -> LoadedCharacter
+
+    init(library: CharacterLibrary = CharacterLibrary(),
+         decode: @escaping @Sendable (URL) throws -> LoadedCharacter = { try CharacterLoader.load(url:$0) }) {
+        self.library = library
+        self.decodeCharacter = decode
+    }
+
+    @discardableResult func resume() -> Task<Void,Never>? {
+        let library = self.library, decodeCharacter = self.decodeCharacter
+        guard library.hasCurrent, !loading else { return nil }
         let modified = try? library.currentURL.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate
-        if scene != nil, modified == stamp { return }
+        if scene != nil, modified == stamp { start(); return nil }
         stop()
         loading = true; error = nil
-        defer { loading = false }
-        do {
-            let result = try await Task.detached(priority: .userInitiated) {
-                try CharacterLoader.load(url: library.currentURL)
-            }.value
-            let cameras = result.scene.rootNode.childNodes.filter { $0.camera != nil }
-            if let camera = cameras.first, let model = result.scene.rootNode.childNodes.first(where: { $0.camera == nil }) {
-                let bounds = model.boundingBox
-                let height = max(bounds.max.y - bounds.min.y, 0.1)
-                camera.camera?.usesOrthographicProjection = true
-                camera.camera?.orthographicScale = Double(height) * 0.43
-                camera.position.y = height * 0.17
-                displayBase = model.simdTransform
-                displayCenter = SIMD3((bounds.min.x+bounds.max.x)/2,(bounds.min.y+bounds.max.y)/2,(bounds.min.z+bounds.max.z)/2)
-                displayHeight = height
+        let ticket = loadGeneration
+        let previous = pendingDecode
+        let decode = Task.detached(priority: .userInitiated) {
+            if let previous { _ = await previous.result }
+            try Task.checkCancellation()
+            return try decodeCharacter(library.currentURL)
+        }
+        pendingDecode = decode
+        decodeOwner = ticket
+        return Task {
+            defer {
+                if decodeOwner == ticket { pendingDecode = nil; decodeOwner = nil }
+                if ticket == loadGeneration { loading = false }
             }
-            result.scene.background.contents = UIColor.clear
-            var images: [String: UIImage] = [:]
-            for (key, value) in result.package?.backgrounds ?? [:] {
-                guard let data = Data(base64Encoded: value), data.count <= 15_000_000,
-                      let image = UIImage(data: data), image.size.width <= 8192, image.size.height <= 8192 else {
-                    throw CompanionError.message("场景背景无效。")
+            do {
+                let result = try await decode.value
+                guard ticket == loadGeneration else { return }
+                let cameras = result.scene.rootNode.childNodes.filter { $0.camera != nil }
+                if let camera = cameras.first, let model = result.scene.rootNode.childNodes.first(where: { $0.camera == nil }) {
+                    let bounds = model.boundingBox
+                    let height = max(bounds.max.y - bounds.min.y, 0.1)
+                    camera.camera?.usesOrthographicProjection = true
+                    camera.camera?.orthographicScale = Double(height) * 0.43
+                    camera.position.y = height * 0.17
+                    displayBase = model.simdTransform
+                    displayCenter = SIMD3((bounds.min.x+bounds.max.x)/2,(bounds.min.y+bounds.max.y)/2,(bounds.min.z+bounds.max.z)/2)
+                    displayHeight = height
                 }
-                images[key] = image
+                result.scene.background.contents = UIColor.clear
+                var images: [String: UIImage] = [:]
+                for (key, value) in result.package?.backgrounds ?? [:] {
+                    guard let data = Data(base64Encoded: value), data.count <= 15_000_000,
+                          let image = UIImage(data: data), image.size.width <= 8192, image.size.height <= 8192 else {
+                        throw CompanionError.message("场景背景无效。")
+                    }
+                    images[key] = image
+                }
+                loaded = result; scene = result.scene; backgrounds = images; stamp = modified
+                actions = result.package?.actions ?? []
+                supportsProcedural = result.skeleton?.rig.limbs.count == 4
+                let morphs = Set(result.package?.parts.flatMap{($0.skin?.morphs ?? $0.morphs ?? []).map(\.name)} ?? [])
+                supportsClosedEyes = morphs.contains("Face.eyeBlinkLeft") && morphs.contains("Face.eyeBlinkRight")
+                StageLighting.install(result.scene,settings: EmbodimentPreferences.lighting())
+                name = result.name.contains("Yuki") ? "Yuki" : result.name
+                setPresentation(presentation)
+                start()
+            } catch {
+                if ticket == loadGeneration { self.error = error.localizedDescription }
             }
-            loaded = result; scene = result.scene; backgrounds = images; stamp = modified
-            actions = result.package?.actions ?? []
-            supportsProcedural = result.skeleton?.rig.limbs.count == 4
-            let morphs = Set(result.package?.parts.flatMap{($0.skin?.morphs ?? $0.morphs ?? []).map(\.name)} ?? [])
-            supportsClosedEyes = morphs.contains("Face.eyeBlinkLeft") && morphs.contains("Face.eyeBlinkRight")
-            StageLighting.install(result.scene,settings: EmbodimentPreferences.lighting())
-            name = result.name.contains("Yuki") ? "Yuki" : result.name
-            setPresentation(presentation)
-        } catch { self.error = error.localizedDescription }
+        }
     }
 
     func start() {
@@ -235,6 +264,9 @@ import simd
         return CharacterTouch(region:hit.id,label:hit.label,kind:kind)
     }
     func stop() {
+        loadGeneration = UUID()
+        pendingDecode?.cancel()
+        loading = false
         interactionRevision += 1; playback?.cancel(); playback = nil; director = ActionDirector()
         procedural = ProceduralDirector(); activeAction = nil; touchStatus = nil
         hands = [];releasingHands = [];handWeight = 0;eyesClosed = false;bodyYaw = 0;targetBodyYaw = 0;applyBodyPresentation()

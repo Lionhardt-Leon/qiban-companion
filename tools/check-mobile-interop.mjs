@@ -27,8 +27,13 @@ async function game(host,client,label){
  const bad=await send({op:'state',code,token:'invalid'},true);okay(!!bad.error,label+' validates private seat credentials');
  let actions=0;for(;actions<500;actions++){const s=await state(0);if(s.game.phase==='finished')break;const seat=s.game.current,own=await state(seat),g=own.game;const moves=legalMoves(g,seat).sort((a,b)=>b.count-a.count||a.rank-b.rank),action=moves.length?{type:'play',ids:moves[0].ids}:{type:'pass'};const input={op:'act',code,token:tokens[seat],revision:own.revision,actionId:randomUUID(),action};const result=await send(input);if(actions===0){const again=await send(input);okay(again.duplicate===true&&again.state.revision===result.state.revision,label+' action retry is idempotent');const stale=await send({...input,actionId:randomUUID()},true);okay(!!stale.error,label+' rejects stale revision');}}
  okay(actions<500&&actions>0,label+' completes full shared-rule game');
- for(let i=1;i<3;i++)await mutate(i,'ready',{ready:true});await mutate(0,'next');const next=await state(0);okay(next.game.round===2&&next.game.phase==='exchange',label+' ready/next enters card exchange');
- for(let i=0;i<3;i++){const s=await state(i);if(s.game.exchangeCount&&!s.game.exchangeSubmitted)await mutate(i,'act',{action:{type:'exchange',ids:s.game.players[i].hand.slice(0,s.game.exchangeCount)}});}
+ const previousOrder=(await state(0)).game.order;
+ await mutate(1,'leave');
+ const departed=await send({op:'state',code,token:tokens[1]},true);
+ okay(!!departed.error,label+' departed seat credential is revoked');
+ await mutate(2,'ready',{ready:true});await mutate(0,'next');const next=await state(0);
+ okay(next.game.round===2&&next.game.previous.join()===previousOrder.join()&&next.game.players[1].bot,label+' settlement exit preserves rank and hands the seat to a bot');
+ for(const i of [0,2]){const s=await state(i);if(s.game.exchangeCount&&!s.game.exchangeSubmitted)await mutate(i,'act',{action:{type:'exchange',ids:s.game.players[i].hand.slice(0,s.game.exchangeCount)}});}
  okay((await state(0)).game.phase==='playing',label+' exchange completes');okay((await state(2)).seat===2,label+' reconnect keeps original private seat');if(host)await host.call({command:'stop'});
  return {label,actions,passed:true};
 }

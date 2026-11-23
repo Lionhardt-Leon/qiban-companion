@@ -218,6 +218,7 @@
   async function refresh() {
     state = await call('bootstrap');
     archive = state.archive;
+    applyTouchPolicy();
     render();
     return state;
   }
@@ -236,23 +237,40 @@
     if(currentPane==='messages'&&document.activeElement?.id!=='history-input')messages();
   }
   function display(message){if(!message)return '';if(message.role==='assistant'){try{const raw=message.content.trim().replace(/^```(?:json)?\s*|\s*```$/g,'');const obj=JSON.parse(raw);if(typeof obj.reply==='string')return obj.reply;}catch{}}return message.content||'';}
+  let modelChange = Promise.resolve();
+  function queueModelChange(work) {
+    const queued = modelChange.then(work);
+    modelChange = queued.catch(() => {});
+    return queued;
+  }
+
   async function loadModel(file) {
     if (!file) return;
     selected = file;
     nonce = crypto.randomUUID();
     ready = false;
+    readyData = null;
     await call('modelNonce', {
       nonce
     });
     $('#empty').hidden = true;
-    $('#model').src = file.startsWith('portrait:')?'/presentation/index.html':'/stage/' + (file.endsWith('.json') ? 'generic.html' : 'index.html');
+    const frame = $('#model');
+    const previous = frame.contentWindow;
+    // Stop the old local stage before navigating to the next heavy asset.
+    try {
+      if (previous?.QibanPortrait) previous.QibanPortrait.player.dispose();
+      else if (previous?.SnowbreakHost) {
+        previous.SnowbreakHost.receive({type:'pause'});
+        previous.SnowbreakHost.receive({type:'dispose'});
+      }
+    } catch (error) {
+      // WebView's own navigation error document can have an opaque origin.
+      if (error.name !== 'SecurityError') throw error;
+    }
+    frame.src = file.startsWith('portrait:')?'/presentation/index.html':'/stage/' + (file.endsWith('.json') ? 'generic.html' : 'index.html');
   }
   function loadStage() {
     if(selected.startsWith('portrait:')){const model=state.portraits?.models?.find(m=>'portrait:'+m.id===selected);if(model)stage({type:'load',model,base:new URL(model.base,location.href).href});else notice('请重新导入官方2D素材包。');return;}
-    stage({
-      type: 'touchPolicy',
-      aiControlled: state.touchAI !== false && Boolean(archive.settings.endpoint)
-    });
     stage({
       type: 'load',
       url: '/package/' + selected,
@@ -282,7 +300,7 @@
     $('#panel-back').hidden=!paneParents[pane];window.QibanUI.hydrate($('#panel-content'));
     if(!$('#panel').open)$('#panel').showModal();$('#panel').scrollTop=0;
   }
-  function close(){visionTicket++;restoreModel();call('homePage',{open:false}).catch(()=>{});if($('#confirmation').open)$('#confirmation').close();$('#panel').close();currentPane='';personaDraft=null;stage({type:'resume'});call('editing',{value:false}).catch(()=>{});}
+  function close(resumeStage=true){visionTicket++;restoreModel();call('homePage',{open:false}).catch(()=>{});if($('#confirmation').open)$('#confirmation').close();$('#panel').close();currentPane='';personaDraft=null;if(resumeStage) stage({type:'resume'});call('editing',{value:false}).catch(()=>{});}
   function restoreModel(){const model=$('#model');if(model.parentElement!==document.body){document.body.prepend(model);model.removeAttribute('style');}}
   function nav(id,title,symbol,summary='',disabled=false){return `<button type="button" ${disabled?'disabled':`data-do="${id}"`} class="nav-row${disabled?' disabled':''}">${icon(symbol)}<span class="row-copy">${escape(title)}${summary?`<small>${escape(summary)}</small>`:''}</span>${disabled?'':icon('chevron.right','chevron')}</button>`;}
   function heading(title){return `<h3 class="section-title">${escape(title)}</h3>`;}
@@ -292,8 +310,8 @@
   function modelName(){return readyData?.displayName||({Enya:'恩雅护士',Fenny:'芬妮婚皮',generic:'本地伙伴'}[state.selectedModel]||'本地伙伴');}
   function settings(){
     const selected=state.selectedModel,prefs=state.preferences||{},snow=['Enya','Fenny'].includes(selected);
-    panel('设置',`<button data-do="close" class="circle" aria-label="返回陪伴">${icon('chevron.left')}</button><h1 class="large-title">设置</h1><div class="grid settings-shortcuts settings-gap">${[['chat','通讯','bubble.left.and.bubble.right'],['game','游戏','suit.spade.fill']].map(([id,t,i])=>`<button data-do="${id}">${icon(i)}${t}</button>`).join('')}</div><button data-do="new-conversation" class="settings-link">${icon('plus.bubble')}开启新对话</button><button data-do="history" class="settings-link settings-gap">${icon('bubble.left.and.bubble.right')}历史对话／切换对话</button><div class="muted" style="margin:0 0 10px">我的伙伴</div><div class="section hero">${icon('person.crop.circle')}<h3>${escape(role().name||modelName())}</h3>${options('current-model','当前伙伴',state.models.map(m=>[m.id,m.name||(m.id==='generic'?'本地伙伴':m.id==='Enya'?'恩雅护士':'芬妮婚皮')]),selected)}${snow?check('source-voice',modelName()+'原声',prefs.snowbreakVoice!==false):''}<button data-do="appearance" class="switch-model full">${icon('arrow.triangle.2.circlepath')}切换 / 导入伙伴</button></div><div class="section group">${check('show-background','显示背景',prefs.showSceneBackground!==false)}${(readyData?.backgrounds||[]).length?options('background-name','场景',readyData.backgrounds.map(n=>[n,({Morning_BG:'清晨',SunnyDay_BG:'晴天',Night_BG:'夜晚'}[n]||n)]),prefs.sceneBackgroundName||'Morning_BG'):''}${nav('','画中画 · 接入中','pip','',true)}${nav('','音乐 · 接入中','music.note','',true)}</div><div class="section group">${nav('snowbreak','导入尘白角色','person.crop.rectangle.stack')}${!snow?nav('embodiment','身体、触碰与光照','sun.max'):`<p class="muted">角色沿用现有 iOS 项目的材质、原作动作与场景打光。</p>`}${nav('api','模型与自定义 API','slider.horizontal.3')}${nav('chat','通讯聊天 · 会话与群聊','bubble.left.and.bubble.right')}${nav('game','游戏 · 大富翁牌桌','suit.spade.fill')}${nav('persona','人设与陪伴','person.text.rectangle')}${nav('speech','离线语音与中／日配音','speaker.wave.2')}${nav('messages','聊天记录','bubble.left.and.bubble.right')}${nav('memories','记忆','heart.text.square')}${nav('diary','日记','book')}</div><p class="muted">本地保存 · 自定义服务<br>人设、聊天与记忆随角色卡保存。语音和后置识图按需开启。</p>`,'settings');
-    $('#current-model').onchange=e=>selectModel(e.target.value);
+    panel('设置',`<button data-do="close" class="circle" aria-label="返回陪伴">${icon('chevron.left')}</button><h1 class="large-title">设置</h1><div class="grid settings-shortcuts settings-gap">${[['chat','通讯','bubble.left.and.bubble.right'],['game','游戏','suit.spade.fill']].map(([id,t,i])=>`<button data-do="${id}">${icon(i)}${t}</button>`).join('')}</div><button data-do="new-conversation" class="settings-link">${icon('plus.bubble')}开启新对话</button><button data-do="history" class="settings-link settings-gap">${icon('bubble.left.and.bubble.right')}历史对话／切换对话</button><div class="muted" style="margin:0 0 10px">我的伙伴</div><div class="section hero">${icon('person.crop.circle')}<h3>${escape(role().name||modelName())}</h3>${options('current-model','当前伙伴',state.models.map(m=>[m.id,m.name||(m.id==='generic'?'本地伙伴':m.id==='Enya'?'恩雅护士':'芬妮婚皮')]),state.selectedModel)}${snow?check('source-voice',modelName()+'原声',prefs.snowbreakVoice!==false):''}<button data-do="appearance" class="switch-model full">${icon('arrow.triangle.2.circlepath')}切换 / 导入伙伴</button></div><div class="section group">${check('show-background','显示背景',prefs.showSceneBackground!==false)}${(readyData?.backgrounds||[]).length?options('background-name','场景',readyData.backgrounds.map(n=>[n,({Morning_BG:'清晨',SunnyDay_BG:'晴天',Night_BG:'夜晚'}[n]||n)]),prefs.sceneBackgroundName||'Morning_BG'):''}${nav('','画中画 · 接入中','pip','',true)}${nav('','音乐 · 接入中','music.note','',true)}</div><div class="section group">${nav('snowbreak','导入尘白角色','person.crop.rectangle.stack')}${!snow?nav('embodiment','身体、触碰与光照','sun.max'):`<p class="muted">角色沿用现有 iOS 项目的材质、原作动作与场景打光。</p>`}${nav('api','模型与自定义 API','slider.horizontal.3')}${nav('chat','通讯聊天 · 会话与群聊','bubble.left.and.bubble.right')}${nav('game','游戏 · 大富翁牌桌','suit.spade.fill')}${nav('persona','人设与陪伴','person.text.rectangle')}${nav('speech','离线语音与中／日配音','speaker.wave.2')}${nav('messages','聊天记录','bubble.left.and.bubble.right')}${nav('memories','记忆','heart.text.square')}${nav('diary','日记','book')}</div><p class="muted">本地保存 · 自定义服务<br>人设、聊天与记忆随角色卡保存。语音和后置识图按需开启。</p>`,'settings');
+    $('#current-model').onchange=e=>{const id=e.target.value;return run(()=>selectModel(id));};
     if($('#source-voice'))$('#source-voice').onchange=e=>run(async()=>{await preference('snowbreakVoice',e.target.checked);stage({type:'voice',enabled:e.target.checked});});
     $('#show-background').onchange=e=>run(async()=>{await preference('showSceneBackground',e.target.checked);stage({type:snow?'scene':'background',visible:e.target.checked,name:prefs.sceneBackgroundName||'Morning_BG'});});
     if($('#background-name'))$('#background-name').onchange=e=>run(async()=>{await preference('sceneBackgroundName',e.target.value);stage({type:'background',visible:$('#show-background').checked,name:e.target.value});});
@@ -316,7 +334,19 @@
   function editMessage(id){const m=archive.messages.find(m=>m.id===id);if(!m)return;editingMessage=id;panel('编辑消息',`<div class="section">${field('message-text','消息正文',display(m),true)}${button('save-message','保存修改','primary')}${button('delete-message','删除该消息','danger')}${button('messages','取消')}</div><p class="muted">保存后可继续对话，或点击消息下的 ↻ 使用修改后的内容重新生成。</p>`,'edit-message');}
   function memories(){panel('记忆',`${heading('希望她记住的事')}<div class="section"><textarea id="memory-text" rows="12">${escape(archive.memories)}</textarea>${button('save-memory','保存记忆')}</div><p class="hint">保存的记忆会随对话发送给你配置的 API。当前由你手动编辑，不会自动提取。人设按人设页限制完整发送，保存的记忆最多注入12000字；实际总上下文容量取决于所选模型和接口。</p>`,'memories');}
   function diary(){panel('日记',`${heading('写下今天')}<div class="section"><textarea id="diary-text" rows="5"></textarea>${button('save-diary','保存日记')}</div>${heading('本地日记')}<div class="section">${archive.diary.map(d=>`<div><p class="muted">${escape(new Date((d.createdAt+978307200)*1000).toLocaleDateString())}</p><div style="white-space:pre-wrap">${escape(d.text)}</div></div>`).join('')||'<p class="muted">还没有日记</p>'}</div>`,'diary');}
-  async function selectModel(id){state=await call('selectModel',{id});archive=state.archive;close();await loadModel(id.startsWith('portrait:')?id:id==='generic'?'generic.json':id+'.snowbreak');}
+  function modelFile(id) {
+    return state.models.find(model => model.id === id)?.file;
+  }
+  function selectModel(id) {
+    return queueModelChange(async () => {
+      state = await call('selectModel', {id});
+      archive = state.archive;
+      const file = modelFile(id);
+      if (!file) throw Error('找不到所选伙伴的资源。');
+      close(false);
+      await loadModel(file);
+    });
+  }
   function appearance(){panel('角色预览',`<div class="character-preview">${icon('person.crop.rectangle.stack')}</div><p class="muted" style="text-align:center">${ready?escape(modelName()):'角色资源迁移预览'}</p><p style="text-align:center">导入角色包或单个网格 JSON。支持拖动旋转、双指缩放。</p>${state.models.length?`<div class="section group">${state.models.map(m=>`<button data-model="${escape(m.id)}" class="nav-row"><span class="row-copy">${escape(m.name||(m.id==='Enya'?'恩雅护士':m.id==='Fenny'?'芬妮婚皮':'本地伙伴'))}</span>${m.id===state.selectedModel?icon('checkmark.circle.fill'):icon('chevron.right')}</button>`).join('')}</div>`:''}${readyData?.frameCount?`<div class="inline">${button('idle-toggle','暂停待机')}${button('idle-rewind','回到开头')}<span class="muted" id="preview-frame">1/${readyData.frameCount}</span></div>`:''}${readyData?.morphs?`<div class="section">${check('expression-blink','自动眨眼',true)}${slider('expression-eyes','闭眼',0,0,1)}${slider('expression-mouth','张嘴',0,0,1)}${slider('expression-smile','微笑',0,0,1)}${button('expression-reset','重置表情')}</div>`:''}<div class="grid">${button('import','选择角色文件','primary')}${button('assets','App 文件夹','bordered')}</div><p class="muted" style="text-align:center">版本 ${escape(state.version)} · 已导入的素材保存在本机</p>`,'appearance');if(ready){const slot=$('.character-preview');slot.replaceChildren($('#model'));$('#model').style.cssText='position:relative;inset:0;width:100%;height:100%;';stage({type:'resume'});if($('#expression-blink'))$('#expression-blink').onchange=e=>stage({type:'expression',value:{autoBlink:e.target.checked}});}}
   function snowbreakImport(){panel('导入尘白角色',`${heading('尘白角色 · 本地移植')}<div class="section"><p>导入本地恩雅／芬妮 .snowbreak 整合包。可用模式、动作、场景和原声由素材包决定。</p>${button('import','选择角色素材包')}${button('assets','App 文件夹')}${state.models.some(m=>m.id!=='generic')?'<p>已保存角色素材，下次启动会从本机加载。</p>':''}</div>${heading('触碰')}<div class="section"><p>导入后可在动作菜单切换已保存的角色、陪伴模式和服饰。显示原作触点可查看当前场景已有的触点；也可通过精细触碰表面标注补充身体分区。</p><p>原 App 内保存的标注不会跨 App 自动读取；模型和原始互动资源可以沿用。</p></div>`,'snowbreak');}
   function embodiment(){const p=state.preferences||{};panel('身体与光照',`${heading('身体反馈')}<div class="section">${check('body-breathing','自然呼吸',p.bodyBreathing!==false)}${check('body-physics','胸部与臀部惯性',p.bodyPhysics!==false)}${slider('body-strength','物理强度',p.bodyStrength??.65,0,1.5)}${check('touch-ai','触碰时让 AI 回应',state.touchAI!==false)}${check('touch-haptics','手机轻振反馈',p.touchHaptics!==false)}<p class="muted">触碰额头、脸颊、手臂等位置可触发反馈。AI 回应使用你配置的 API。</p></div>${heading('打光与着色')}<div class="section"><div class="inline">${button('light-soft','柔和')}${button('light-sunset','夕阳')}${button('light-cool','清冷')}</div>${[['lightAzimuth','主光左右',34,-90,90],['lightElevation','主光高度',38,5,85],['lightKey','主光强度',1,0,1.8],['lightFill','环境补光',.7,.1,1.2],['lightWarmth','冷暖',.12,-1,1],['lightSoftness','阴影柔和度',.18,.02,.5],['lightRim','边缘光',.12,0,.5]].map(([k,t,d,min,max])=>slider(k,t,p[k]??d,min,max)).join('')}<p class="muted">返回主屏后应用。使用角色原贴图、MatCap 和脸部阴影，叠加可调卡通打光。</p>${button('save-embodiment','保存身体与光照','primary')}</div>`,'embodiment');}
@@ -469,10 +499,7 @@
           enabled: $('#touch-ai').checked
         });
         state.touchAI = $('#touch-ai').checked;
-        stage({
-          type: 'touchPolicy',
-          aiControlled: state.touchAI && Boolean(archive.settings.endpoint)
-        });
+        applyTouchPolicy();
         return notice('触摸互动设置已保存。');
       case 'stop-speech':
         return call('stopSpeech');
@@ -499,7 +526,7 @@
     }
   }
   function run(work) {
-    Promise.resolve().then(work).catch(e => notice(e.message));
+    return Promise.resolve().then(work).catch(e => notice(e.message));
   }
   document.addEventListener('click', e => {
     const b = e.target.closest('button');
@@ -509,14 +536,9 @@
     if (b.dataset.do) {
       e.preventDefault();
       run(() => handle(b.dataset.do));
-    } else if(b.dataset.action){run(async()=>{await call('manualAction');close();action(b.dataset.action);});} else if (b.dataset.model) run(async () => {
-      state = await call('selectModel', {
-        id: b.dataset.model
-      });
-      archive = state.archive;
-      close();
-      await loadModel(b.dataset.model === 'generic' ? 'generic.json' : b.dataset.model + '.snowbreak');
-    });else if (b.dataset.selectPersona) run(async () => {
+    } else if(b.dataset.action){run(async()=>{await call('manualAction');close();action(b.dataset.action);});} else if (b.dataset.model) {
+      run(() => selectModel(b.dataset.model));
+    } else if (b.dataset.selectPersona) run(async () => {
       state = await call('selectPersona', {
         id: b.dataset.selectPersona
       });
@@ -567,6 +589,10 @@
   $('#photo-file').onchange=e=>run(()=>photo(e.target.files[0]));
   $('#persona-file').onchange=e=>run(async()=>{const file=e.target.files[0];if(!file)return;if(file.size>50e6)throw Error('角色卡 JSON 超过50MB。');const raw=JSON.parse(await file.text());if(raw.format==='qiban-personas/1'){personaDraft=raw.library;personaID=personaDraft.defaultCardID;}else{const objects=Array.isArray(raw)?raw:raw.cards||[raw];if((personaDraft?.cards.length||lib().cards.length)+objects.length>50)throw Error('角色卡数量超过50张。');if(!personaDraft)personaDraft=structuredClone(lib());for(const item of objects){const o=item.data||item;if(!o.name&&!o.title)throw Error('角色卡缺少 name 或 title。');const c=emptyCard();Object.assign(c,{name:o.name||o.title,title:o.title||o.name,description:o.description||'',personality:o.personality||'',scenario:o.scenario||'',examples:o.mes_example||o.examples||'',systemRules:o.system_prompt||o.systemRules||'',replyRules:o.post_history_instructions||o.replyRules||'',userName:o.userName||'',userDescription:o.userDesc||o.userDescription||'',notes:o.creator_notes||o.notes||'',tags:o.tags||[],firstMessages:o.first_messages||o.firstMessages||[o.first_mes,...(o.alternate_greetings||[])].filter(Boolean)});personaDraft.cards.push(c);personaID=c.id;}}personaTab='AI 人设';personaEditor();$('#persona-notice').textContent='已读入草稿，点击保存后生效。导入不会连接外部资源。';});
   document.addEventListener('input',e=>{if(['expression-eyes','expression-mouth','expression-smile'].includes(e.target.id))stage({type:'expression',value:{[{ 'expression-eyes':'blink','expression-mouth':'mouth','expression-smile':'smile'}[e.target.id]]:Number(e.target.value)}});if(e.target.type==='range'){const out=document.querySelector(`[data-value="${e.target.id}"]`);if(out)out.textContent=Number(e.target.value).toFixed(e.target.step==='.1'?1:2);}const count=document.querySelector(`[data-count="${e.target.id}"]`);if(count)count.textContent=e.target.value.length+' 字';});
+  function applyTouchPolicy() {
+    if (!ready || selected.startsWith('portrait:')) return;
+    stage({type: 'touchPolicy', aiControlled: state.touchAI !== false && Boolean(archive.settings.endpoint)});
+  }
   function applyStagePreferences(){stage({type:'androidPreferences',preferences:state.preferences||{}});stage({type:'voice',enabled:state.preferences?.snowbreakVoice!==false});}
   $('#input').onkeydown = e => {
     if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
@@ -576,7 +602,22 @@
   };
   window.addEventListener('message', e => {
     if (e.origin !== location.origin || e.source !== $('#model').contentWindow) return;
-    if(e.data?.source==='qiban-stage2d'){const m=e.data;if(m.type==='hostReady')loadStage();if(m.type==='ready'){ready=true;readyData=m;const model=state.portraits?.models?.find(x=>'portrait:'+x.id===selected);readyData.displayName=model?.name||'官方2D';$('#model-label').textContent=readyData.displayName+' · 官方2D动态立绘';call('portraitReady',{animations:m.animations}).catch(e=>notice(e.message));}if(m.type==='error')notice(m.message);return;}
+    const portrait = selected.startsWith('portrait:');
+    if (e.data?.source === 'qiban-stage2d') {
+      if (!portrait) return;
+      const m = e.data;
+      if (m.type === 'hostReady') loadStage();
+      if (m.type === 'ready' && selected === 'portrait:' + m.id) {
+        const model = state.portraits?.models?.find(item => item.id === m.id);
+        ready = true;
+        readyData = {...m, displayName: model?.name || '官方2D'};
+        $('#model-label').textContent = readyData.displayName + ' · 官方2D动态立绘';
+        call('portraitReady', {nonce, animations: m.animations}).catch(e => notice(e.message));
+      }
+      if (m.type === 'error') notice(m.message);
+      return;
+    }
+    if (portrait) return;
     const value = e.data?.qibanStageEvent;
     if (!value) return;
     if (value.type === 'pageReady') {
@@ -586,7 +627,9 @@
     if (value.nonce !== nonce) return;
     if (value.type === 'ready') {
       ready = true;
-      readyData = value;applyStagePreferences();
+      readyData = value;
+      applyTouchPolicy();
+      applyStagePreferences();
       $('#model-label').textContent = (value.characterId === 'Enya' ? '恩雅' : value.characterId === 'Fenny' ? '芬妮' : value.displayName || value.characterId) + (value.selection?' · '+(value.selection.mode==='standing'?'看板娘':'皮肤互动')+' · '+({normal:value.characterId==='Fenny'?'原婚纱':'正常服饰',nude:'果体版',underwear:'婚纱内衣版'}[value.selection.outfit]||value.selection.outfit):'');
     }
     if(value.type==='previewFrame'&&$('#preview-frame'))$('#preview-frame').textContent=value.frame+'/'+value.total;
@@ -607,6 +650,7 @@
       }
       if (event.type === 'archive') {
         archive = event.archive;
+        applyTouchPolicy();
         render();
       }
       if (event.type === 'refresh') await refresh();
@@ -619,11 +663,11 @@
           api
         }[event.pane] || settings)();
       }
-      if (event.type === 'loadModel') await loadModel(event.file);
-      if (event.type === 'reload') {
+      if (event.type === 'loadModel') await queueModelChange(() => loadModel(event.file));
+      if (event.type === 'reload') await queueModelChange(async () => {
         await refresh();
-        await loadModel(state.selectedModel === 'generic' ? 'generic.json' : state.selectedModel + '.snowbreak');
-      }
+        await loadModel(modelFile(state.selectedModel));
+      });
       if (event.type === 'action') action(event.action, event.motion, true);
       if (event.type === 'hearing') {
         document.querySelector('[data-do=hearing]')?.classList.toggle('selected',event.enabled);
@@ -681,9 +725,15 @@
       if($('#confirmation').open)$('#confirmation').close();else if($('#panel').open){if(currentPane==='settings')close();else run(()=>handle(paneParents[currentPane]||'settings'));}else settings();
     }
   };
-  run(async () => {
+  run(() => queueModelChange(async () => {
     await refresh();
-    const file = state.pendingModel || (state.selectedModel === 'generic' ? 'generic.json' : state.models.find(m => m.id === state.selectedModel)?.file || state.models[0]?.file);
+    if (state.requireModelChoice) {
+      $('#empty').hidden = false;
+      $('#empty p').textContent = '角色显示重复中断，请重新选择伙伴。';
+      $('#empty button').textContent = '选择伙伴';
+      return;
+    }
+    const file = state.pendingModel || modelFile(state.selectedModel) || state.models[0]?.file;
     if (file) await loadModel(file);else $('#empty').hidden = false;
-  });
+  }));
 })();

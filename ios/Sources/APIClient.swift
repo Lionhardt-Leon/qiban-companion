@@ -116,11 +116,13 @@ struct APIClient {
             if useSearch {auxiliary["web_results"]=sources.map{["title":$0.title,"url":$0.url,"summary":$0.snippet]}}
             request=try addingAuxiliary(auxiliary,to:request)
         }
-        let (data, response) = try await session.data(for: request)
-        guard let http = response as? HTTPURLResponse else { throw CompanionError.message("接口未返回 HTTP 响应。") }
-        guard (200..<300).contains(http.statusCode) else {
-            // Do not reflect provider response bodies: they can contain credentials or prompt text.
-            throw CompanionError.message("接口返回 HTTP \(http.statusCode)，请检查地址、密钥、模型或服务额度。" + (image == nil && settings.runtimeImages.isEmpty ? "" : "当前请求含图片，请确认所选模型与接口支持 image_url 识图；可移除图片或关闭自身截图后重试。"))
+        let (data, _) = try await ServiceClient.boundedResponse(
+            request, session: session, limit: 2 * 1024 * 1024, label: "主对话接口"
+        ) { http in
+            guard (200..<300).contains(http.statusCode) else {
+                // Provider error bodies can contain credentials or prompt text.
+                throw CompanionError.message("接口返回 HTTP \(http.statusCode)，请检查地址、密钥、模型或服务额度。" + (image == nil && settings.runtimeImages.isEmpty ? "" : "当前请求含图片，请确认所选模型与接口支持 image_url 识图；可移除图片或关闭自身截图后重试。"))
+            }
         }
         guard let result = try? JSONDecoder().decode(ChatResponse.self, from: data),
               let text = result.choices.first?.message.content?.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -141,8 +143,8 @@ struct APIClient {
         if needsJapanese {rule+="必须另加 speech_ja 字符串：把 spoken_text 翻成符合角色口吻的自然日语，只含实际可朗读台词，不含括号动作、旁白、JSON或翻译说明，不增加或删改原意。reply 仍填‘补全已生成’。"}
         repair.httpBody=try JSONEncoder().encode(ChatRequest(model:settings.model,messages:[.init(role:"system",content:rule),.init(role:"user",content:content)],temperature:0.2,max_tokens:needsJapanese ? 2048:512))
         do {
-            let (body,response)=try await session.data(for:repair);try Task.checkCancellation()
-            guard let http=response as? HTTPURLResponse,(200..<300).contains(http.statusCode),let result=try? JSONDecoder().decode(ChatResponse.self,from:body),let text=result.choices.first?.message.content,let supplement=try? DialogueMotion.parse(text,actions:needsBody ? actions:[]) else{return primary}
+            let body = try await ServiceClient.data(repair, session:session, limit:256 * 1024, label:"对话补全")
+            guard let result=try? JSONDecoder().decode(ChatResponse.self,from:body),let text=result.choices.first?.message.content,let supplement=try? DialogueMotion.parse(text,actions:needsBody ? actions:[]) else{return primary}
             let useBody=needsBody && supplement.hasBodyDecision
             return DialogueReply(text:primary.text,action:useBody ? supplement.action:primary.action,motion:useBody ? supplement.motion:primary.motion,spokenJapanese:needsJapanese ? (supplement.spokenJapanese ?? primary.spokenJapanese):primary.spokenJapanese,spokenChinese:primary.spokenChinese,affect:useBody ? supplement.affect:primary.affect,hasBodyDecision:primary.hasBodyDecision || useBody,sources:primary.sources)
         }catch is CancellationError {throw CancellationError()}catch {try Task.checkCancellation();return primary}

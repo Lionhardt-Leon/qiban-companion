@@ -4,7 +4,7 @@ import CryptoKit
 enum ChatModuleInfo {
     static let source = "https://github.com/QingchenWait/Fritia_Online_CHAT"
     static let revision = "7dfa8044dfef79c6c2876f69607c079218e723fb"
-    static let packageSHA256 = "911a57ccff4141e8c97f0f1afa08ef3519514302576ab4df03422ca9846ec648"
+    static let packageSHA256 = "8908a6ec701d4747fc923cb6a41eacf954485a72e74948842fb5c549fa88736b"
 }
 
 struct ChatModuleManifest:Decodable {
@@ -15,8 +15,16 @@ struct ChatModuleManifest:Decodable {
 
 struct ChatModuleLibrary {
     let directory:URL
-    init() {
-        directory=FileManager.default.urls(for:.applicationSupportDirectory,in:.userDomainMask)[0]
+    struct CapacityError: LocalizedError {
+        var errorDescription: String? { "通讯记录超过容量，请先导出恢复副本。" }
+    }
+    private static let stateLock = NSLock()
+    private let stateLimit: Int
+    private static let publicationLock = NSLock()
+
+    init(directory: URL? = nil, stateLimit: Int = 128 * 1024 * 1024) {
+        self.stateLimit = stateLimit
+        self.directory = directory ?? FileManager.default.urls(for:.applicationSupportDirectory,in:.userDomainMask)[0]
             .appendingPathComponent(AppIdentity.storageNamespace).appendingPathComponent("ChatModule",isDirectory:true)
     }
     var current:URL {directory.appendingPathComponent("current",isDirectory:true)}
@@ -26,24 +34,77 @@ struct ChatModuleLibrary {
         (try? String(contentsOf:current.appendingPathComponent("package.sha256"),encoding:.utf8))==ChatModuleInfo.packageSHA256
     }
     private var stateDirectory:URL {directory.appendingPathComponent("state",isDirectory:true)}
+    private struct StateRecord: Codable { let key: String; let value: String }
+
+    private func filesAndBytes() throws -> ([URL], Int) {
+        let fm = FileManager.default
+        guard fm.fileExists(atPath:stateDirectory.path) else { return ([],0) }
+        let files = try fm.contentsOfDirectory(at:stateDirectory,includingPropertiesForKeys:[.fileSizeKey])
+            .filter { $0.pathExtension == "json" }
+        var bytes = 0
+        for file in files { bytes += try file.resourceValues(forKeys:[.fileSizeKey]).fileSize ?? 0 }
+        return (files,bytes)
+    }
+    private func protectedRecord(_ file: URL) throws -> (StateRecord, Data?) {
+        // Older writers limited the unescaped UTF-8 value. JSON escapes can use six bytes.
+        guard let size = try file.resourceValues(forKeys:[.fileSizeKey]).fileSize,
+              size <= 6 * 64 * 1024 * 1024 + 4096 else { throw CapacityError() }
+        let record = try JSONDecoder().decode(StateRecord.self,from:Data(contentsOf:file,options:.mappedIfSafe))
+        let value = try ChatModuleVault.protect(record.value,key:record.key)
+        guard value != record.value else { return (record,nil) }
+        let safe = StateRecord(key:record.key,value:value)
+        return (safe,try JSONEncoder().encode(safe))
+    }
     func state() throws -> [String:String] {
-        guard FileManager.default.fileExists(atPath:stateDirectory.path) else{return [:]}
-        var result:[String:String]=[:],bytes=0
-        for file in try FileManager.default.contentsOfDirectory(at:stateDirectory,includingPropertiesForKeys:[.fileSizeKey]) where file.pathExtension=="json" {
-            let data=try Data(contentsOf:file);bytes+=data.count
-            guard bytes<=128*1024*1024 else{throw CompanionError.message("通讯文字存储超过128MB，请先导出存档。")}
-            let record=try JSONDecoder().decode(StateRecord.self,from:data);result[record.key]=record.value
+        Self.stateLock.lock(); defer { Self.stateLock.unlock() }
+        let (files,bytes) = try filesAndBytes()
+        guard bytes <= stateLimit else { throw CapacityError() }
+        var total = bytes
+        var result: [String:String] = [:]
+        for file in files {
+            let (record,updated) = try protectedRecord(file)
+            if let updated {
+                let previous = try file.resourceValues(forKeys:[.fileSizeKey]).fileSize ?? 0
+                total += updated.count - previous
+                guard total <= stateLimit else { throw CapacityError() }
+                try updated.write(to:file,options:[.atomic,.completeFileProtection])
+            }
+            result[record.key] = record.value
         }
         return result
     }
-    private struct StateRecord:Codable {let key:String;let value:String}
-    func persist(key:String,value:String?) throws {
-        guard (key.hasPrefix("fritia_") || key.hasPrefix("fritia-")),key.count<=200,(value?.utf8.count ?? 0)<=64*1024*1024 else {throw CompanionError.message("通讯存储键或单条内容超过限制。")}
-        try FileManager.default.createDirectory(at:stateDirectory,withIntermediateDirectories:true)
+    @discardableResult func persist(key:String,value:String?) throws -> String? {
+        guard (key.hasPrefix("fritia_") || key.hasPrefix("fritia-")), key.count<=200,
+              (value?.utf8.count ?? 0)<=64*1024*1024 else { throw CapacityError() }
         let name=SHA256.hash(data:Data(key.utf8)).map{String(format:"%02x",$0)}.joined()+".json"
-        let file=stateDirectory.appendingPathComponent(name)
-        if let value=value {try JSONEncoder().encode(StateRecord(key:key,value:value)).write(to:file,options:[.atomic,.completeFileProtection])}
-        else if FileManager.default.fileExists(atPath:file.path) {try FileManager.default.removeItem(at:file)}
+        let file = stateDirectory.appendingPathComponent(name)
+        let safeValue = try value.map { try ChatModuleVault.protect($0,key:key) }
+        let encoded = try safeValue.map { try JSONEncoder().encode(StateRecord(key:key,value:$0)) }
+        Self.stateLock.lock(); defer { Self.stateLock.unlock() }
+        let fm = FileManager.default
+        if let encoded {
+            let (_,total) = try filesAndBytes()
+            let old = fm.fileExists(atPath:file.path) ? try file.resourceValues(forKeys:[.fileSizeKey]).fileSize ?? 0 : 0
+            guard total - old + encoded.count <= stateLimit || (total > stateLimit && encoded.count < old)
+                else { throw CapacityError() }
+            try fm.createDirectory(at:stateDirectory,withIntermediateDirectories:true)
+            try encoded.write(to:file,options:[.atomic,.completeFileProtection])
+        } else if fm.fileExists(atPath:file.path) { try fm.removeItem(at:file) }
+        return safeValue
+    }
+
+    // Recovery does not load the whole workspace and leaves the source directory intact.
+    func exportStateRecords(to output: URL) throws {
+        Self.stateLock.lock(); defer { Self.stateLock.unlock() }
+        try FileManager.default.createDirectory(at:output,withIntermediateDirectories:true)
+        for file in try filesAndBytes().0 {
+            try autoreleasepool {
+                let (_,safe) = try protectedRecord(file)
+                let target = output.appendingPathComponent(file.lastPathComponent)
+                if let safe { try safe.write(to:target,options:[.atomic,.completeFileProtection]) }
+                else { try FileManager.default.copyItem(at:file,to:target) }
+            }
+        }
     }
     func install(_ url:URL) throws {
         let access=url.startAccessingSecurityScopedResource();defer{if access{url.stopAccessingSecurityScopedResource()}}
@@ -71,11 +132,44 @@ struct ChatModuleLibrary {
             catch {try? output.close();throw error}
             guard partHash.finalize().map({String(format:"%02x",$0)}).joined()==expected else{throw CompanionError.message("对话模块文件损坏。")}
         }
-        let previous=directory.appendingPathComponent("previous-"+UUID().uuidString,isDirectory:true)
         try ChatModuleInfo.packageSHA256.write(to:stage.appendingPathComponent("package.sha256"),atomically:true,encoding:.utf8)
-        let hadCurrent=FileManager.default.fileExists(atPath:current.path)
-        if hadCurrent {try FileManager.default.moveItem(at:current,to:previous)}
-        do {try FileManager.default.moveItem(at:stage,to:current)}
-        catch {if hadCurrent{try? FileManager.default.moveItem(at:previous,to:current)};throw error}
+        try replaceCurrent(with: stage)
+    }
+
+    func replaceCurrent(with stage: URL) throws {
+        Self.publicationLock.lock()
+        defer { Self.publicationLock.unlock() }
+        let files = FileManager.default
+        let previous = directory.appendingPathComponent("previous-" + UUID().uuidString, isDirectory: true)
+        let hadCurrent = files.fileExists(atPath: current.path)
+        if hadCurrent { try files.moveItem(at: current, to: previous) }
+        do { try files.moveItem(at: stage, to: current) }
+        catch {
+            if hadCurrent { try? files.moveItem(at: previous, to: current) }
+            throw error
+        }
+        prunePreviousModules(preferred: hadCurrent ? previous : nil)
+    }
+
+    private func prunePreviousModules(preferred: URL?) {
+        let files = FileManager.default
+        guard let candidates = try? files.contentsOfDirectory(
+            at: directory, includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey, .creationDateKey]
+        ) else { return }
+        let versions = candidates.compactMap { url -> (URL, Date)? in
+            let name = url.lastPathComponent
+            guard name.hasPrefix("previous-"), UUID(uuidString: String(name.dropFirst("previous-".count))) != nil,
+                  let properties = try? url.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey, .creationDateKey]),
+                  properties.isDirectory == true, properties.isSymbolicLink == false,
+                  files.fileExists(atPath: url.appendingPathComponent("site/index.html").path),
+                  let marker = try? String(contentsOf: url.appendingPathComponent("package.sha256"), encoding: .utf8),
+                  marker.count == 64, marker.allSatisfy({ $0.isHexDigit }) else { return nil }
+            return (url, properties.creationDate ?? .distantPast)
+        }
+        let keep = versions.first(where: { $0.0 == preferred })?.0
+            ?? versions.max(by: { $0.1 < $1.1 })?.0
+        for (url, _) in versions where url != keep {
+            try? files.removeItem(at: url)
+        }
     }
 }

@@ -17,6 +17,7 @@ struct ChatContactChange:Decodable {
     let prompt:String
     let examples:String
     let promptEdited:Bool
+    let examplesEdited:Bool?
     let messages:[ChatSharedMessage]
     let removedIds:[String]
     let sessionID:String?
@@ -46,11 +47,16 @@ extension LocalStore {
     }
     func chatContactSnapshot(_ card:PersonaCard)->[String:Any] {
         var settings=archive.settings;var library=settings.personas!
-        library.defaultCardID=card.id;library.modelBindings["native"]=card.id;settings.personas=library
+        library.defaultCardID=card.id;library.modelBindings["native"]=card.id
+        // The communications module adds examples as a separate prompt section.
+        if let index=library.cards.firstIndex(where:{$0.id==card.id}) {
+            library.cards[index].examples=""
+        }
+        settings.personas=library
         let rendered=(try? PersonaPrompt.character(settings:settings,context:CompanionContext())) ?? card.description
         let session=chatSession(card.id)
         return ["id":archive.chatContactOrigins?[card.id.uuidString] ?? "qiban_"+card.id.uuidString,"qibanId":card.id.uuidString,"name":card.name,"description":card.title,
-                "prompt":rendered,"examples":"","source":"qiban","tags":["App人设"],
+                "prompt":rendered,"examples":card.examples,"source":"qiban","tags":["App人设"],
                 "memories":session.memories,"resetToken":archive.chatResetTokens?[card.id.uuidString] ?? "0",
                 "sessions":(archive.conversationSessions ?? []).filter{$0.personaKey==card.id.uuidString}.map{meta->[String:Any] in
                     ["id":meta.id,"title":meta.title,"createdAt":meta.createdAt.timeIntervalSince1970*1000,"updatedAt":max(meta.updatedAt,archive.sessionContents(meta.id).messages.last?.createdAt ?? meta.updatedAt).timeIntervalSince1970*1000,"active":archive.activeSessionIDs?[card.id.uuidString]==meta.id,"externalID":meta.externalID as Any? ?? NSNull(),"memories":archive.sessionContents(meta.id).memories]
@@ -67,7 +73,7 @@ extension LocalStore {
                 "configured":!archive.settings.endpoint.isEmpty && !archive.settings.model.isEmpty,
                 "searchEnabled":archive.settings.services?.search.enabled==true,
                 "activeId":archive.chatContactOrigins?[(currentCard?.id ?? library.defaultCardID!).uuidString] ?? "qiban_"+(currentCard?.id ?? library.defaultCardID!).uuidString,
-                "nativeArchive":String(decoding:try export(),as:UTF8.self)]
+                "nativeArchive":String(decoding:try archiveData(),as:UTF8.self)]
     }
     private func chatSession(_ id:UUID)->PersonaConversation {
         if archive.personaSessionKey==id.uuidString {return PersonaConversation(messages:archive.messages,memories:archive.memories,diary:archive.diary)}
@@ -107,6 +113,8 @@ extension LocalStore {
         if index==nil || change.promptEdited {
             guard change.prompt.count<=PersonaLimits.fieldCharacters else {throw CompanionError.message("修改后的角色提示词超过本体单字段100万字，请在本体人设页拆分保存。")}
             card.description=change.prompt;card.personality="";card.scenario="";card.systemRules="";card.replyRules=""
+        }
+        if index == nil || (change.examplesEdited ?? change.promptEdited) {
             card.examples=change.examples
         }
         if let index=index {library.cards[index]=card}else{library.cards.append(card)}

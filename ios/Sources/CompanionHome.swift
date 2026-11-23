@@ -66,10 +66,22 @@ struct CompanionHome: View {
     private func performMotion(_ event:DialogueActionEvent){if isPortrait{portrait.play(event.action)}else if isSnowbreak{snowbreak.play(event.action,withVoice:false,automatic:true)}else{stage.performDialogueAction(event.action,motion:event.motion)}}
     private func greetIfReady(){guard isSnowbreak,sheet==nil,scenePhase == .active,!greetedModels.contains(modelKey),let action=CompanionBehavior.greeting(actions:availableActions,mode:snowbreak.companionMode) else{return};greetedModels.insert(modelKey);if isSnowbreak{snowbreak.play(action,withVoice:snowbreakVoice,automatic:true)}else{stage.performDialogueAction(action)}}
     private func resumeStage() {
-        store.activateCompanion(modelKey)
-        if isPortrait {stage.stop();snowbreak.pause();portrait.pause();portrait.resume();if let selected=portrait.selected{store.activatePortrait(id:selected.id,name:selected.name)}}
-        else if isSnowbreak {portrait.pause();stage.stop();snowbreak.resume();greetIfReady() }
-        else {portrait.pause();snowbreak.pause();Task { await stage.refresh();stage.start() } }
+        guard scenePhase == .active, sheet == nil else { return }
+        if isPortrait {
+            stage.stop()
+            snowbreak.pause()
+            portrait.refresh()
+            if let selected = portrait.selected, !store.activatePortrait(id: selected.id, name: selected.name) {
+                portrait.pause()
+                return
+            }
+            portrait.resume()
+        } else {
+            store.activateCompanion(modelKey)
+            portrait.pause()
+            if isSnowbreak { stage.stop(); snowbreak.resume(); greetIfReady() }
+            else { snowbreak.pause(); stage.resume() }
+        }
     }
 
     var body: some View {
@@ -231,7 +243,11 @@ struct CompanionHome: View {
             case .diary: withClose { DiaryView() }
             case .memory: withClose { MemoryView() }
             case .embodiment: withClose { EmbodimentSettingsView() }
-            case .portraits:withClose {PortraitImportView(stage:portrait,onSelect:{engine="portrait"})}
+            case .portraits:withClose {PortraitImportView(stage:portrait,onSelect:{ model in
+                guard store.activatePortrait(id:model.id,name:model.name) else { return false }
+                engine="portrait"
+                return true
+            })}
             case .snowbreak: withClose { SnowbreakImportView(stage:snowbreak) }
             case .persona: PersonaView(modelKey:modelKey,modelName:modelLabel,actions:availableActions,onClose:{sheet = nil})
             case .speech: withClose {SpeechSettingsView()}
@@ -491,7 +507,13 @@ struct CompanionHome: View {
                     VStack(spacing: 16) {
                         Image(systemName: "person.crop.circle.fill").font(.system(size: 64)).foregroundStyle(.white.opacity(0.9))
                         Text(store.currentCard?.name ?? modelLabel).font(.title.bold())
-                        Picker("当前伙伴",selection:$engine) {
+                        Picker("当前伙伴",selection:Binding(get:{engine},set:{ value in
+                            if value == "portrait" {
+                                guard let selection = portrait.selected,
+                                      store.activatePortrait(id:selection.id,name:selection.name) else { return }
+                            }
+                            engine = value
+                        })) {
                             Text("本地伙伴").tag("native")
                             if !portrait.models.isEmpty {Text("官方 2D · "+portrait.name).tag("portrait")}
                             if snowbreak.library.hasCurrent || isSnowbreak { Text(snowbreak.characterName).tag("snowbreak") }

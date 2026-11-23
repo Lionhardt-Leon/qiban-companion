@@ -31,7 +31,42 @@ final class SpeechPlayer implements AutoCloseable {
     }
     private void event(String type,String id,boolean busy,String status){try{events.accept(new JSONObject().put("type",type).put("id",id).put("busy",busy).put("status",status));}catch(JSONException ignored){}}
     private void level(float value){try{events.accept(new JSONObject().put("type","level").put("value",value));}catch(JSONException ignored){}}
-    private void playPCM(float[] samples,JSONObject speech,String id,AtomicBoolean cancelled,Runnable begin)throws Exception {int buffer=Math.max(16384,AudioTrack.getMinBufferSize(32000,AudioFormat.CHANNEL_OUT_MONO,AudioFormat.ENCODING_PCM_FLOAT));AudioTrack player=new AudioTrack.Builder().setAudioAttributes(new AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_MEDIA).setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build()).setAudioFormat(new AudioFormat.Builder().setSampleRate(32000).setChannelMask(AudioFormat.CHANNEL_OUT_MONO).setEncoding(AudioFormat.ENCODING_PCM_FLOAT).build()).setBufferSizeInBytes(buffer).setTransferMode(AudioTrack.MODE_STREAM).build();track=player;try{player.setVolume((float)speech.optDouble("volume",1));int first=Math.min(512,samples.length);player.write(samples,0,first,AudioTrack.WRITE_NON_BLOCKING);if(cancelled.get())return;player.play();begin.run();event("speech",id,true,"正在朗读");for(int offset=first;offset<samples.length&&!cancelled.get();){int n=Math.min(3200,samples.length-offset),written=player.write(samples,offset,n,AudioTrack.WRITE_BLOCKING);if(written<0)throw new IOException("音频播放中断。");double energy=0;for(int i=offset;i<offset+written;i++)energy+=samples[i]*samples[i];level((float)Math.min(1,Math.sqrt(energy/Math.max(1,written))*5));offset+=written;}while(!cancelled.get()&&Integer.toUnsignedLong(player.getPlaybackHeadPosition())<samples.length)Thread.sleep(20);}finally{track=null;player.release();level(0);}}
+    private void playPCM(float[] samples, JSONObject speech, String id,
+                         AtomicBoolean cancelled, Runnable begin) throws Exception {
+        int sampleRate = 32000;
+        int buffer = Math.max(16384, AudioTrack.getMinBufferSize(sampleRate,
+                AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_FLOAT));
+        AudioTrack player = new AudioTrack.Builder()
+                .setAudioAttributes(new AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_MEDIA)
+                        .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build())
+                .setAudioFormat(new AudioFormat.Builder().setSampleRate(sampleRate)
+                        .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
+                        .setEncoding(AudioFormat.ENCODING_PCM_FLOAT).build())
+                .setBufferSizeInBytes(buffer).setTransferMode(AudioTrack.MODE_STREAM).build();
+        track = player;
+        try {
+            player.setVolume((float)speech.optDouble("volume", 1));
+            PcmPlayback.play(samples.length, (offset, count) -> {
+                int accepted = player.write(samples, offset, count, AudioTrack.WRITE_NON_BLOCKING);
+                if (accepted > 0 && !cancelled.get()) {
+                    double energy = 0;
+                    for (int i = offset; i < offset + accepted; i++) energy += samples[i] * samples[i];
+                    level((float)Math.min(1, Math.sqrt(energy / accepted) * 5));
+                }
+                return accepted;
+            }, () -> Integer.toUnsignedLong(player.getPlaybackHeadPosition()), cancelled::get, () -> {
+                player.play();
+                if (!cancelled.get()) {
+                    begin.run();
+                    event("speech", id, true, "正在朗读");
+                }
+            });
+        } finally {
+            track = null;
+            player.release();
+            level(0);
+        }
+    }
     private void playWav(byte[] wav,JSONObject speech,String id,AtomicBoolean cancelled,Runnable begin)throws Exception {if(wav.length<44||wav.length>12*1024*1024||!new String(wav,0,4,java.nio.charset.StandardCharsets.US_ASCII).equals("RIFF")||!new String(wav,8,4,java.nio.charset.StandardCharsets.US_ASCII).equals("WAVE"))throw new IOException("云端 TTS 未返回有效 WAV。");File file=File.createTempFile("qiban-speech-",".wav",context.getCacheDir());FilesSupport.atomic(file,wav);MediaPlayer player=new MediaPlayer();media=player;CountDownLatch done=new CountDownLatch(1);try{player.setDataSource(file.getPath());player.setAudioAttributes(new AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_MEDIA).setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build());player.setOnCompletionListener(p->done.countDown());player.setOnErrorListener((p,w,e)->{done.countDown();return true;});player.prepare();if(player.getDuration()>120000)throw new IOException("单段语音超过120秒。");float volume=(float)speech.optDouble("volume",1);player.setVolume(volume,volume);if(cancelled.get())return;player.start();begin.run();event("speech",id,true,"正在朗读");WavEnvelope envelope=WavEnvelope.parse(wav);while(!cancelled.get()&&!done.await(80,TimeUnit.MILLISECONDS)){level(envelope==null?.25f:envelope.at(player.getCurrentPosition()));} }finally{media=null;player.release();file.delete();level(0);}}
     private void playSystem(String text,JSONObject speech,String id,AtomicBoolean cancelled,Runnable begin)throws Exception {if(!systemReady.await(10,TimeUnit.SECONDS)||systemStatus!=TextToSpeech.SUCCESS)throw new IOException("本机没有可用的系统语音服务，请安装音色或导入 .qvoice。");Locale language=speech.optString("language","zh").equals("ja")?Locale.JAPANESE:Locale.SIMPLIFIED_CHINESE;int result=system.setLanguage(language);if(result<0)throw new IOException("系统未安装所选语言音色，请在安卓语音设置中下载。");Set<Voice> voices=system.getVoices();Voice offline=null;if(voices!=null)for(Voice v:voices)if(v.getLocale().getLanguage().equals(language.getLanguage())&&!v.isNetworkConnectionRequired()&&!v.getFeatures().contains(TextToSpeech.Engine.KEY_FEATURE_NOT_INSTALLED)){offline=v;if(v.equals(system.getVoice()))break;}if(offline==null||system.setVoice(offline)<0)throw new IOException("系统未安装本机离线音色，请下载对应语言或导入 .qvoice。");system.setSpeechRate((float)speech.optDouble("speed",1));CountDownLatch done=new CountDownLatch(1);String utterance=UUID.randomUUID().toString();system.setOnUtteranceProgressListener(new UtteranceProgressListener(){public void onStart(String u){if(!u.equals(utterance)||cancelled.get())return;begin.run();event("speech",id,true,"正在朗读");level(.35f);}public void onDone(String u){if(u.equals(utterance))done.countDown();}public void onError(String u){if(u.equals(utterance))done.countDown();}});Bundle params=new Bundle();params.putFloat(TextToSpeech.Engine.KEY_PARAM_VOLUME,(float)speech.optDouble("volume",1));main.post(()->{if(!cancelled.get())system.speak(text,TextToSpeech.QUEUE_FLUSH,params,utterance);});while(!cancelled.get()&&!done.await(100,TimeUnit.MILLISECONDS)){}level(0);}
     void previewWav(byte[] wav)throws Exception {stop();JSONObject preferences=store.settings().getJSONObject("speech");int ticket=generation.get();worker.execute(()->{if(ticket!=generation.get())return;AtomicBoolean cancelled=new AtomicBoolean();cancellation=cancelled;active=true;try{playWav(wav,preferences,"preview",cancelled,()->{});}catch(Exception error){event("speech","preview",false,error.getMessage());}finally{active=false;event("speech","preview",false,"");}});}

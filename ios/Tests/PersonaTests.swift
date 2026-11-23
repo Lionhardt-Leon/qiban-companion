@@ -69,6 +69,56 @@ final class PersonaTests:XCTestCase {
         try JSONEncoder().encode(archive).write(to:directory.appendingPathComponent("archive-v1.json"))
         return (LocalStore(directory:directory,readKey:{""},replyProvider:provider ?? {_,_,_,_,_ in DialogueReply(text:"收到",action:nil)}),directory)
     }
+    @MainActor func testChatExamplesSyncWithoutFlatteningPersona() throws {
+        let (store,directory) = try makeStore()
+        defer { try? FileManager.default.removeItem(at:directory) }
+        try store.prepareChatSharing()
+        var library = try XCTUnwrap(store.archive.settings.personas)
+        let id = library.cards[0].id
+        library.cards[0].personality = "structured-personality"
+        library.cards[0].examples = "separate-example"
+        try store.savePersonas(library,selected:id,modelKey:"native")
+        let snapshot = store.chatContactSnapshot(library.cards[0])
+        XCTAssertEqual(snapshot["examples"] as? String, "separate-example")
+        XCTAssertFalse(try XCTUnwrap(snapshot["prompt"] as? String).contains("separate-example"))
+
+        let fields:[String:Any] = [
+            "id":"test-contact", "qibanId":id.uuidString, "name":library.cards[0].name,
+            "prompt":"unchanged", "examples":"", "promptEdited":false, "examplesEdited":true,
+            "messages":[] as [String], "removedIds":[] as [String],
+        ]
+        let data = try JSONSerialization.data(withJSONObject:fields)
+        _ = try store.syncChatContact(JSONDecoder().decode(ChatContactChange.self,from:data))
+        let saved = try XCTUnwrap(store.archive.settings.personas?.cards.first(where:{$0.id==id}))
+        XCTAssertEqual(saved.examples,"")
+        XCTAssertEqual(saved.personality,"structured-personality")
+    }
+
+    @MainActor func testFirstPortraitBindingMigratesLegacyAndKeepsHistoryWithDefaultRole() throws {
+        for hasHistory in [false, true] {
+            let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+            defer { try? FileManager.default.removeItem(at:root) }
+            let store = LocalStore(directory:root,readKey:{""})
+            var legacy = store.archive
+            if hasHistory {
+                legacy.memories = "旧记忆"
+                legacy.messages = [Message(role:"user",content:"旧对话")]
+                legacy.diary = [JournalEntry(text:"旧日记")]
+            }
+            try store.commit(legacy)
+            XCTAssertTrue(store.activatePortrait(id:"fixture/actor",name:"立绘角色"))
+            XCTAssertEqual(store.archive.schemaVersion,2)
+            XCTAssertTrue(store.archive.messages.isEmpty)
+            let reopened = LocalStore(directory:root,readKey:{""})
+            XCTAssertTrue(reopened.activatePortrait(id:"fixture/actor",name:"立绘角色"))
+            XCTAssertEqual(reopened.currentCard?.name,"立绘角色")
+            reopened.activateCompanion("native")
+            XCTAssertEqual(reopened.archive.messages.map(\.id),legacy.messages.map(\.id))
+            XCTAssertEqual(reopened.archive.memories,legacy.memories)
+            XCTAssertEqual(reopened.archive.diary.map(\.id),legacy.diary.map(\.id))
+        }
+    }
+
     @MainActor func testFirstMigrationAndCardSessionSwitchPreserveHistoryMemoryAndDiary() throws {
         let (store,directory) = try makeStore();defer{try? FileManager.default.removeItem(at:directory)}
         var library = PersonaLibrary.migrating(store.archive.settings.persona)

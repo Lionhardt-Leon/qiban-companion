@@ -1,5 +1,5 @@
 """Prepare pinned, patched C++ source only; never downloads a speaker model."""
-import concurrent.futures,hashlib,io,re,runpy,tarfile,urllib.request
+import concurrent.futures,hashlib,io,re,runpy,tarfile,tempfile,urllib.request
 from pathlib import Path
 root=Path(__file__).resolve().parents[1]
 helper=runpy.run_path(str(root/'tools/probe-tts-ios.py'))
@@ -10,11 +10,18 @@ with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
     list(pool.map(lambda item:helper['download_zip']('https://codeload.github.com/CppModules/'+item[0]+'/zip/'+item[1],deps/item[0]),helper['DEPS'].items()))
 boost=Path('/usr/include')
 if not (boost/'boost').exists():
-    boost=work/'boost_1_88_0'
+    boost=work/'boost-headers-1.88.0'
     if not boost.exists():
         raw=urllib.request.urlopen('https://archives.boost.io/release/1.88.0/source/boost_1_88_0.tar.gz',timeout=120).read()
         assert hashlib.sha256(raw).hexdigest()=='3621533e820dcab1e8012afd583c0c73cf0f77694952b81352bf38c1488f9cb4'
-        with tarfile.open(fileobj=io.BytesIO(raw),mode='r:gz') as archive:archive.extractall(work,filter='data')
+        # Only the headers are used. Long documentation paths can exceed the Windows path limit.
+        with tempfile.TemporaryDirectory(dir=work) as tmp, tarfile.open(fileobj=io.BytesIO(raw),mode='r:gz') as archive:
+            headers=(entry for entry in archive if entry.name.startswith('boost_1_88_0/boost/'))
+            archive.extractall(tmp,members=headers,filter='data')
+            extracted=Path(tmp)/'boost_1_88_0'
+            if not (extracted/'boost/version.hpp').is_file():
+                raise ValueError('Boost header archive is incomplete')
+            extracted.rename(boost)
 patcher=runpy.run_path(str(root/'tools/tts-native/patch_frontend.py'))
 patcher['patch'](source,deps);patcher['patch_package_text'](source)
 # Upstream mixed header casing works on default macOS/Windows volumes but fails

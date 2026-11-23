@@ -3,7 +3,7 @@ const cleanURL=(path,base)=>{const url=new URL(path,base);if(url.origin!==new UR
 const json=async url=>{const r=await fetch(url);if(!r.ok)throw Error('2D 资源读取失败（'+r.status+'）');return r.json();};
 export class PortraitPlayer {
   constructor(canvas,{onStatus=()=>{},onReady=()=>{},maxFPS=30}={}){
-    this.canvas=canvas;this.onStatus=onStatus;this.onReady=onReady;this.maxFPS=maxFPS;this.ticket=0;this.frame=0;this.paused=false;this.speech=0;this.lastLevel=0;this.lastTime=0;this.started=0;this.frames=0;this.gpu=null;
+    this.canvas=canvas;this.onStatus=onStatus;this.onReady=onReady;this.maxFPS=maxFPS;this.ticket=0;this.frame=0;this.paused=false;this.pauseAt=null;this.speech=0;this.lastLevel=0;this.lastTime=0;this.started=0;this.frames=0;this.gpu=null;
     this.resize=new ResizeObserver(()=>this.size());this.resize.observe(canvas);
     this.lost=e=>{e.preventDefault();this.stop();this.onStatus('2D 图形上下文已暂停，正在恢复…');};this.restored=()=>{this.gpu=null;if(this.model)this.load(this.model,this.base);};
     canvas.addEventListener('webglcontextlost',this.lost);canvas.addEventListener('webglcontextrestored',this.restored);
@@ -22,15 +22,19 @@ export class PortraitPlayer {
         if(image.width>8192||image.height>8192||image.width!==p.width||image.height!==p.height)throw Error('2D 图页尺寸不匹配。');this.images.set(p.name,image);
       }
       this.idle=model.idle||[...skeleton.animations.keys()].find(n=>n.endsWith('_stand'))||skeleton.animations.keys().next().value;
-      this.animation=this.idle;this.animationStart=performance.now();this.oneShot=false;this.elapsed=0;this.smoothSpeech=0;
+      this.animation=this.idle;this.animationStart=this.pauseAt ?? performance.now();this.oneShot=false;this.elapsed=0;this.smoothSpeech=0;
       skeleton.pose(this.idle,0);const points=skeleton.meshes().filter(m=>m.color[3]>.05).flatMap(m=>m.positions);
       const xs=points.filter((_,i)=>i%2===0),ys=points.filter((_,i)=>i%2===1);this.bounds=points.length?[Math.min(...xs),Math.min(...ys),Math.max(...xs),Math.max(...ys)]:[data.skeleton.x,data.skeleton.y,data.skeleton.x+data.skeleton.width,data.skeleton.y+data.skeleton.height];
       if(this.bounds.some(x=>!Number.isFinite(x))||this.bounds[2]-this.bounds[0]<1||this.bounds[3]-this.bounds[1]<1)throw Error('2D 模型边界无效。');
-      this.initGPU();this.size();this.onStatus('');this.onReady({id:model.id,animations:[...skeleton.animations.keys()],bounds:this.bounds,renderer:'webgl1'});this.tick(performance.now());
+      this.initGPU();this.size();this.onStatus('');this.onReady({id:model.id,animations:[...skeleton.animations.keys()],bounds:this.bounds,renderer:this.renderer});this.tick(performance.now());
     }catch(e){if(ticket===this.ticket){this.onStatus('2D 角色加载失败：'+e.message);throw e;}}
   }
   initGPU(){
-    const gl=this.canvas.getContext('webgl',{alpha:true,premultipliedAlpha:true,antialias:false,preserveDrawingBuffer:false,powerPreference:'low-power'});if(!gl)throw Error('设备暂时无法创建 2D 图形上下文。');
+    const attributes={alpha:true,premultipliedAlpha:true,antialias:false,preserveDrawingBuffer:false,powerPreference:'low-power'};
+    const legacy=this.canvas.getContext('webgl',attributes);
+    const gl=legacy || this.canvas.getContext('webgl2',attributes);
+    if(!gl)throw Error('设备暂时无法创建 2D 图形上下文。');
+    this.renderer=legacy ? 'webgl1' : 'webgl2';
     this.gpu=gl;const shader=(type,source)=>{const s=gl.createShader(type);gl.shaderSource(s,source);gl.compileShader(s);if(!gl.getShaderParameter(s,gl.COMPILE_STATUS))throw Error(gl.getShaderInfoLog(s));return s;};
     const vs=shader(gl.VERTEX_SHADER,'attribute vec2 position;attribute vec2 uv;uniform vec4 camera;varying vec2 vUV;void main(){vUV=uv;gl_Position=vec4((position-camera.xy)*camera.zw,0.,1.);}');
     const fs=shader(gl.FRAGMENT_SHADER,'precision mediump float;uniform sampler2D image;uniform vec4 light;uniform vec3 dark;varying vec2 vUV;void main(){vec4 t=texture2D(image,vUV);float a=t.a*light.a;vec3 rgb=t.rgb*light.rgb+(vec3(1.)-t.rgb)*dark;gl_FragColor=vec4(rgb*a,a);}');
@@ -41,10 +45,21 @@ export class PortraitPlayer {
     this.textures=new Map();for(const [name,img] of this.images){const tex=gl.createTexture();gl.bindTexture(gl.TEXTURE_2D,tex);gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL,false);gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,img);for(const axis of [gl.TEXTURE_WRAP_S,gl.TEXTURE_WRAP_T])gl.texParameteri(gl.TEXTURE_2D,axis,gl.CLAMP_TO_EDGE);for(const filter of [gl.TEXTURE_MIN_FILTER,gl.TEXTURE_MAG_FILTER])gl.texParameteri(gl.TEXTURE_2D,filter,gl.LINEAR);this.textures.set(name,tex);}
   }
   size(){const ratio=Math.min(devicePixelRatio||1,1.75),w=Math.max(1,Math.round(this.canvas.clientWidth*ratio)),h=Math.max(1,Math.round(this.canvas.clientHeight*ratio));if(this.canvas.width!==w||this.canvas.height!==h){this.canvas.width=w;this.canvas.height=h;}this.gpu?.viewport(0,0,w,h);}
-  expression(name,oneShot=false){if(!this.skeleton?.animations.has(name))return false;if(this.animation!==name||oneShot){this.animation=name;this.animationStart=performance.now();this.oneShot=oneShot;}return true;}
+  expression(name,oneShot=false){if(!this.skeleton?.animations.has(name))return false;if(this.animation!==name||oneShot){this.animation=name;this.animationStart=this.pauseAt ?? performance.now();this.oneShot=oneShot;}return true;}
   mood(mood){const key=this.model?.expressions?.[mood]||this.model?.expressions?.neutral||this.idle;return this.expression(key);}
   level(v){this.speech=Math.max(0,Math.min(1,Number(v)||0));this.lastLevel=performance.now();}
-  pause(value=true){this.paused=value;if(value){this.pauseAt=performance.now();this.stop();this.level(0);}else if(!this.frame&&this.skeleton){this.animationStart+=this.pauseAt?performance.now()-this.pauseAt:0;this.pauseAt=0;this.lastTime=0;this.tick(performance.now());}}
+  pause(value=true){
+    if(this.paused===value)return;
+    const now=performance.now();
+    this.paused=value;
+    if(value){
+      this.pauseAt=now;this.stop();this.level(0);
+    }else{
+      if(this.pauseAt!==null)this.animationStart+=now-this.pauseAt;
+      this.pauseAt=null;this.lastTime=0;
+      if(!this.frame&&this.gpu&&this.skeleton)this.tick(now);
+    }
+  }
   tick(now){
     this.frame=0;if(this.paused||!this.gpu||!this.skeleton)return;
     this.frame=requestAnimationFrame(t=>this.tick(t));if(now-this.lastTime<1000/this.maxFPS)return;

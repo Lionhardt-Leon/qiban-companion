@@ -15,18 +15,37 @@ enum ServiceClient {
         request.httpBody=body;return request
     }
     static func data(_ request:URLRequest,session:URLSession,limit:Int,label:String) async throws -> Data {
-        let (stream,response)=try await session.bytes(for:request)
-        guard let http=response as? HTTPURLResponse,(200..<300).contains(http.statusCode) else {
-            throw CompanionError.message(label+"接口返回 HTTP \((response as? HTTPURLResponse)?.statusCode ?? 0)，请检查该功能的地址、密钥和协议。")
+        let (data, _) = try await boundedResponse(request, session:session, limit:limit, label:label) { http in
+            guard (200..<300).contains(http.statusCode) else {
+                throw CompanionError.message(label+"接口返回 HTTP \(http.statusCode)，请检查该功能的地址、密钥和协议。")
+            }
         }
-        guard response.expectedContentLength<=Int64(limit) else {throw CompanionError.message(label+"返回内容过大。")}
-        var result=Data();result.reserveCapacity(min(limit,64_000))
+        return data
+    }
+
+    static func boundedResponse(_ request: URLRequest, session: URLSession, limit: Int, label: String,
+                                validate: (HTTPURLResponse) throws -> Void = { _ in }) async throws -> (Data, HTTPURLResponse) {
+        let (stream, response) = try await session.bytes(for: request)
+        var completed = false
+        defer { if !completed { stream.task.cancel() } }
+        try Task.checkCancellation()
+        guard let http = response as? HTTPURLResponse else {
+            throw CompanionError.message(label + "未返回 HTTP 响应。")
+        }
+        try validate(http)
+        guard response.expectedContentLength <= Int64(limit) else {
+            throw CompanionError.message(label + "返回内容过大。")
+        }
+        var result = Data()
+        result.reserveCapacity(min(limit, 64_000))
         for try await byte in stream {
-            if result.count%4096==0 {try Task.checkCancellation()}
-            guard result.count<limit else {throw CompanionError.message(label+"返回内容过大。")}
+            if result.count % 4096 == 0 { try Task.checkCancellation() }
+            guard result.count < limit else { throw CompanionError.message(label + "返回内容过大。") }
             result.append(byte)
         }
-        try Task.checkCancellation();return result
+        try Task.checkCancellation()
+        completed = true
+        return (result, http)
     }
     static func visionRequest(_ profile:ServiceEndpoint,key:String,question:String,images:[CameraFrame]) throws -> URLRequest {
         try profile.validate(for:.vision)

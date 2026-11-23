@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict';
+import {readFileSync} from 'node:fs';
+import {runInNewContext} from 'node:vm';
 import {createGame,makePlay,beats,act,startRound,botAction,viewFor,restoreGame,RULES_VERSION} from '../games/tycoon/engine.mjs';
 import {RoomService,createRoomServer} from '../game-server/server.mjs';
 let checks=0;
@@ -37,6 +39,63 @@ check('authoritative game uses selected bot roles and exposes only caller hand',
 check('action retry returns current state without executing twice',()=>{const r=service.rooms.get(code),g=r.game;g.current=0;const action=botAction(g,0,'normal',random),request={op:'act',...hostInput,action,actionId:'unique-retry',revision:r.revision};const first=service.request(request),revision=first.state.revision;const twice=service.request(request);assert(twice.duplicate);assert.equal(twice.state.revision,revision);assert.throws(()=>service.request({...request,actionId:'stale'}));});
 check('disconnect/reconnect keeps original seat and cannot use someone else token',()=>{now+=25_000;const v=service.request({op:'state',...hostInput}).state;assert(!v.seats[friend.state.seat].online);const joined=service.request({op:'state',code,token:friend.token}).state;assert(joined.seats[friend.state.seat].online);assert.throws(()=>service.request({op:'state',code,token:'invalid'}));});
 check('leaving active room transfers host and AI takes the released seat',()=>{cmd('leave');const r=service.rooms.get(code);assert(r.seats[0].bot);assert.equal(r.host,1);assert.throws(()=>service.request({op:'state',...hostInput}));assert.equal(r.game.players[0].bot,true);});
+
+// Exercise the release bundles too. Device-level protocol coverage lives in check-mobile-interop.
+const roomRuntimes = [['Node', RoomService]];
+for (const [platform, path] of [
+  ['iOS', '../games/tycoon/native-runtime.js'],
+  ['Android', '../android/app/src/main/assets/game/room-runtime.js']
+]) {
+  const sandbox = {};
+  runInNewContext(readFileSync(new URL(path, import.meta.url), 'utf8'), sandbox);
+  roomRuntimes.push([platform, sandbox.QibanRoomRuntime.RoomCore]);
+}
+for (const [platform, Runtime] of roomRuntimes) {
+  for (const capacity of [3, 4]) {
+    for (const leavingSeat of [0, 1]) {
+      check(`${platform} ${capacity} seats continue after seat ${leavingSeat} leaves at settlement`, () => {
+        let clock = 0, sequence = 0;
+        const service = new Runtime({now: () => clock, random, crypto: {
+          token: () => (++sequence).toString(16).padStart(8, '0'), hash: String, equal: (a,b) => a === b
+        }});
+        const host = service.request({op:'create', capacity, requestId:'host'});
+        const code = host.state.code;
+        const guest = service.request({op:'join', code, requestId:'guest'});
+        const tokens = [host.token, guest.token];
+        const room = service.rooms.get(code);
+        const move = (seat, op, options={}) => service.request({
+          code, token:tokens[seat], revision:room.revision, actionId:String(++sequence), op, ...options
+        });
+        move(1, 'ready', {ready:true});
+        move(0, 'start', {fillBots:true});
+        function advanceUntil(phase) {
+          for (let i = 0; room.game.phase !== phase && i < 1000; i++) {
+            clock += 20_000;
+            service.tick();
+          }
+          assert.equal(room.game.phase, phase);
+        }
+        advanceUntil('finished');
+        const order = [...room.game.order], scores = Array.from(room.game.players, p => p.score);
+        const survivor = 1 - leavingSeat;
+        move(leavingSeat, 'leave');
+        assert.throws(() => service.request({op:'state', code, token:tokens[leavingSeat]}));
+        assert.equal(room.host, survivor);
+        const next = move(survivor, 'next').state;
+        assert.equal(next.game.round, 2);
+        assert.equal(next.seats[leavingSeat].bot, true);
+        assert.equal(next.game.players[leavingSeat].bot, true);
+        assert.equal(next.seat, survivor);
+        assert.deepEqual([...next.game.previous], order);
+        assert.deepEqual(Array.from(next.game.players, p => p.score), scores);
+        advanceUntil('playing');
+        assert.equal(new Set(room.game.players.flatMap(p=>p.hand)).size, 54);
+        move(survivor, 'leave');
+        assert.equal(service.rooms.has(code), false);
+      });
+    }
+  }
+}
 
 const {server}=createRoomServer({key:'test-service-key'});await new Promise(r=>server.listen(0,'127.0.0.1',r));const base='http://127.0.0.1:'+server.address().port;
 const post=(path,body,headers={})=>fetch(base+path,{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer test-service-key',...headers},body:JSON.stringify(body)});

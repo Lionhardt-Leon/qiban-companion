@@ -4,30 +4,60 @@ import Security
 
 enum APIKeyStore {
     private static var service:String { AppIdentity.keychainService }
-    static func read() throws -> String {
+    struct MainSecret: Codable {
+        let endpoint: String
+        let value: String
+        func key(for address: String) -> String {
+            APIKeyStore.identity(address) == endpoint ? value : ""
+        }
+    }
+
+    static func identity(_ address: String) -> String? {
+        guard let url = try? APIClient.endpoint(address),
+              var parts = URLComponents(url:url,resolvingAgainstBaseURL:false),
+              let host = parts.host else { return nil }
+        parts.scheme = "https"
+        parts.host = host.lowercased()
+        if parts.port == 443 { parts.port = nil }
+        return parts.url?.absoluteString
+    }
+
+    // An invalid UTF-8 prefix distinguishes bound records from legacy text.
+    private static let mainFormat = Data([0xff, 0x51, 0x01])
+
+    static func read(forSavedEndpoint address: String) throws -> String {
         var query = base
         query[kSecReturnData as String] = true
         query[kSecMatchLimit as String] = kSecMatchLimitOne
         var result: CFTypeRef?
         let status = SecItemCopyMatching(query as CFDictionary, &result)
         if status == errSecItemNotFound { return "" }
-        guard status == errSecSuccess, let data = result as? Data,
-              let key = String(data: data, encoding: .utf8) else {
+        guard status == errSecSuccess, let data = result as? Data else {
             throw CompanionError.message("无法读取钥匙串密钥，请解锁设备后重试。")
         }
-        return key
+        if data.starts(with:mainFormat) {
+            let record = try JSONDecoder().decode(MainSecret.self,from:Data(data.dropFirst(mainFormat.count)))
+            return record.key(for:address)
+        }
+        guard let legacy = String(data:data,encoding:.utf8) else { throw CompanionError.message("主接口凭据格式无效。") }
+        guard identity(address) != nil else { return "" }
+        try write(legacy, for:address)
+        return legacy
     }
     private static var base: [String: Any] {
         [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service,
          kSecAttrAccount as String: "chat-api"]
     }
-    static func write(_ key: String) throws {
+    static func write(_ key: String, for address: String) throws {
         let status: OSStatus
         if key.isEmpty {
             status = SecItemDelete(base as CFDictionary)
             if status == errSecItemNotFound { return }
         } else {
-            let attributes: [String: Any] = [kSecValueData as String: Data(key.utf8),
+            guard let endpoint=identity(address), key.utf8.count<=8192,
+                  !key.contains("\n"), !key.contains("\r") else {throw CompanionError.message("主接口密钥或地址无效。")}
+            let encoded = mainFormat + (try JSONEncoder().encode(MainSecret(endpoint:endpoint,value:key)))
+            let attributes: [String: Any] = [kSecValueData as String: encoded,
                 kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlockedThisDeviceOnly]
             let updated = SecItemUpdate(base as CFDictionary, attributes as CFDictionary)
             if updated == errSecItemNotFound {
@@ -80,15 +110,19 @@ enum APIKeyStore {
     private var pendingExtraImages:[CameraFrame] = []
     private var pendingSearch=false
     private var context = CompanionContext()
-    private let readKey: () throws -> String
+    private let injectedKey: (() throws -> String)?
+    func mainKey() throws -> String {
+        if let injectedKey {return try injectedKey()}
+        return try APIKeyStore.read(forSavedEndpoint:archive.settings.endpoint)
+    }
 
-    init(directory: URL? = nil, readKey: @escaping () throws -> String = APIKeyStore.read,
+    init(directory: URL? = nil, readKey: (() throws -> String)? = nil,
          replyProvider: @escaping ReplyProvider = { settings, key, history, memories, actions in
              try await APIClient.reply(settings: settings, key: key, history: history, memories: memories, actions: actions)
          }, visionReplyProvider: @escaping VisionReplyProvider = { settings,key,history,memories,actions,image in
              try await APIClient.reply(settings:settings,key:key,history:history,memories:memories,actions:actions,image:image)
          }) {
-        self.readKey = readKey
+        self.injectedKey = readKey
         self.replyProvider = replyProvider
         self.visionReplyProvider = visionReplyProvider
         self.directory = directory ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -136,16 +170,45 @@ enum APIKeyStore {
         next.messages = restored.messages;next.memories = restored.memories;next.diary = restored.diary
         next.personaSessionKey = key;next.personaConversations = sessions
     }
-    func activatePortrait(id:String,name:String) {
-        let key="portrait:"+id
-        guard PersonaLibrary.validModelKey(key) else{return}
-        if archive.settings.personas?.modelBindings[key]==nil {
-            var next=archive;var library=next.settings.personas ?? PersonaLibrary.migrating(next.settings.persona)
-            if let card=library.cards.first(where:{$0.name==name}){library.modelBindings[key]=card.id}
-            else {guard library.cards.count<50 else{error="人设卡已满，请先在设置中整理。";return};var card=PersonaCard();card.title=name+" · 2D";card.name=name;card.description="你是"+name+"，通过屏幕上的2D剧情立绘与用户面对面。遵守用户已设置的人设；不编造共同经历，动作以素材支持的表情和动画为准。";library.cards.append(card);library.modelBindings[key]=card.id}
-            next.settings.personas=library;do{try commit(next)}catch{self.error=error.localizedDescription;return}
+    @discardableResult func activatePortrait(id: String, name: String) -> Bool {
+        let key = "portrait:" + id
+        guard PersonaLibrary.validModelKey(key) else { return false }
+        var next = archive
+        var library = next.settings.personas ?? PersonaLibrary.migrating(next.settings.persona)
+        let bindingChanged = library.modelBindings[key] == nil
+        if bindingChanged {
+            if let existing = library.cards.first(where: { $0.name == name }) {
+                library.modelBindings[key] = existing.id
+            } else {
+                guard library.cards.count < 50 else {
+                    error = "人设卡已满，请先在设置中整理。"
+                    return false
+                }
+                var card = PersonaCard()
+                card.title = name + " · 2D"
+                card.name = name
+                card.description = "你是" + name + "，通过屏幕上的2D剧情立绘与用户面对面。遵守用户已设置的人设；不编造共同经历，动作以素材支持的内容为准。"
+                library.cards.append(card)
+                library.modelBindings[key] = card.id
+            }
+            next.schemaVersion = max(next.schemaVersion, 2)
+            next.settings.personas = library
         }
-        activateCompanion(key)
+        guard let card = library.card(for: key) else { return false }
+        let conversationChanged = next.personaSessionKey != card.id.uuidString
+        if bindingChanged || conversationChanged {
+            // Legacy chat belongs to the migrated default persona, even if a new role is selected first.
+            if next.personaSessionKey == nil { next.personaSessionKey = library.defaultCardID?.uuidString }
+            switchConversation(&next, to: card.id.uuidString)
+            do { try commit(next) }
+            catch {
+                self.error = error.localizedDescription
+                return false
+            }
+        }
+        if conversationChanged || context.modelKey != key { cancel() }
+        context.modelKey = key
+        return true
     }
     func activateCompanion(_ modelKey:String) {
         guard PersonaLibrary.validModelKey(modelKey) else {return}
@@ -186,18 +249,19 @@ enum APIKeyStore {
     }
 
     func saveSettings(_ settings: APISettings, key: String) throws {
+        guard storageReady else {throw CompanionError.message("本地资料未就绪。")}
         guard !busy else { throw CompanionError.message("请等待当前回复完成。") }
         _ = try APIClient.endpoint(settings.endpoint)
         guard !settings.model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw CompanionError.message("请填写模型名称。")
         }
-        let oldKey = try APIKeyStore.read()
-        try APIKeyStore.write(key)
+        let oldKey = try APIKeyStore.read(forSavedEndpoint:archive.settings.endpoint)
+        try APIKeyStore.write(key, for:settings.endpoint)
         var next = archive
         next.settings = settings
         next.settings.services=archive.settings.services
         do { try commit(next) } catch {
-            try? APIKeyStore.write(oldKey)
+            try? APIKeyStore.write(oldKey, for:archive.settings.endpoint)
             throw error
         }
     }
@@ -224,7 +288,7 @@ enum APIKeyStore {
             guard text.count <= 8_000 else { throw CompanionError.message("单条消息请控制在 8000 字以内。") }
             _ = try APIClient.endpoint(archive.settings.endpoint)
             guard !archive.settings.model.isEmpty else { throw CompanionError.message("请先配置模型。") }
-            let key = try readKey()
+            let key = try mainKey()
             if let image = image, !image.isFresh() { throw CompanionError.message("相机画面已过期，请重新取景。") }
             var next = archive
             next.messages.append(Message(role: "user", content: text))
@@ -241,7 +305,7 @@ enum APIKeyStore {
         guard !busy, archive.messages.last?.role == "user" else { return }
         do {
             guard pendingImage == nil,pendingExtraImages.isEmpty else { throw CompanionError.message("含图片的请求请重新发送，以便确认图片与最新状态。") }
-            beginReply(key: try readKey())
+            beginReply(key: try mainKey())
         }
         catch { self.error = error.localizedDescription }
     }
@@ -314,23 +378,37 @@ enum APIKeyStore {
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         var next = archive; next.diary.insert(JournalEntry(text: text), at: 0); try commit(next)
     }
-    func export() throws -> Data { try JSONEncoder().encode(archive) }
+    static let backupByteLimit = 100 * 1024 * 1024
+
+    static func checkBackupSize(_ bytes: Int) throws {
+        guard bytes <= backupByteLimit else {
+            throw CompanionError.message("备份超过 100 MiB。")
+        }
+    }
+
+    func archiveData() throws -> Data { try JSONEncoder().encode(archive) }
+
+    func export() throws -> Data {
+        let data = try archiveData()
+        try Self.checkBackupSize(data.count)
+        return data
+    }
     func restore(_ data: Data) throws {
         guard !busy else { throw CompanionError.message("请先停止当前回复再恢复备份。") }
-        guard data.count <= 50_000_000 else { throw CompanionError.message("备份超过 50MB。") }
+        try Self.checkBackupSize(data.count)
         let restored = try JSONDecoder().decode(LocalArchive.self, from: data)
         try restored.validate()
         let snapshot = directory.appendingPathComponent("before-restore-\(UUID().uuidString).json")
-        try export().write(to: snapshot, options: [.atomic, .completeFileProtection])
+        try archiveData().write(to: snapshot, options: [.atomic, .completeFileProtection])
         // An imported endpoint must not inherit a credential intended for another service.
-        let endpointChanged = restored.settings.endpoint != archive.settings.endpoint
+        let endpointChanged = APIKeyStore.identity(restored.settings.endpoint) != APIKeyStore.identity(archive.settings.endpoint)
         var oldKey = ""
         if endpointChanged {
-            oldKey = try APIKeyStore.read()
-            try APIKeyStore.write("")
+            oldKey = try APIKeyStore.read(forSavedEndpoint:archive.settings.endpoint)
+            try APIKeyStore.write("", for:archive.settings.endpoint)
         }
         do { try commit(restored) } catch {
-            if endpointChanged { try? APIKeyStore.write(oldKey) }
+            if endpointChanged { try? APIKeyStore.write(oldKey, for:archive.settings.endpoint) }
             throw error
         }
     }

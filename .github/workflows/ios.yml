@@ -36,7 +36,11 @@ jobs:
         run: python3 tools/check-mobile-native.py --with-swift
       - name: Check communications message operations
         if: inputs.run_tests
-        run: node tools/check-chat-messages.mjs
+        run: |
+          node tools/check-chat-messages.mjs
+          node tools/check-chat-examples.mjs
+          node tools/check-portrait-clock.mjs
+          node tools/check-card-game.mjs
       - name: Verify speech cancellation lifecycle
         if: inputs.run_tests
         run: python3 tools/probe-speech-cancellation.py

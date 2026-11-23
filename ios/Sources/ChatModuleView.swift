@@ -36,6 +36,7 @@ import UniformTypeIdentifiers
                     }.disabled(!controller.ready)
                     Button("停止朗读"){controller.stopSpeech()}
                     Button("重新打开页面"){controller.refresh()}.disabled(!controller.ready)
+                    if controller.canRecoverState {Button("导出通讯记录恢复副本"){controller.exportRecoveryCopy()}}
                     Button("导入／更新 .qchat 模块"){beginImport()}
                     Link("原项目与开源授权",destination:URL(string:ChatModuleInfo.source)!)
                 } label:{Image(systemName:"ellipsis.circle").font(.title3)}
@@ -46,7 +47,7 @@ import UniformTypeIdentifiers
             else {landing}
             if !controller.status.isEmpty {ProgressView(controller.status).font(.caption).padding(10)}
             if let error=controller.error {
-                VStack(spacing:8){Text(error).font(.footnote).foregroundStyle(.red);Button("重新打开"){controller.error=nil;if controller.webView != nil{controller.refresh()}else{Task{await controller.start()}}}}
+                VStack(spacing:8){Text(error).font(.footnote).foregroundStyle(.red);Button("重新打开"){controller.error=nil;if controller.webView != nil{controller.refresh()}else{controller.reopen()}}}
                     .padding(12).frame(maxWidth:.infinity).background(.white)
             }
         }.frame(maxWidth:.infinity,maxHeight:.infinity).background(Color(red:0.96,green:0.97,blue:1)).preferredColorScheme(.light).tint(.indigo)
@@ -55,7 +56,7 @@ import UniformTypeIdentifiers
         .onChange(of:scenePhase){controller.suspend($0 == .background)}
         .sheet(isPresented:$importing) {CharacterDocumentPicker {result in
             importing=false
-            do {if let url=try result.get(){controller.install(url)}else{Task{await controller.start()}}}catch{controller.error=error.localizedDescription}
+            do {if let url=try result.get(){controller.install(url)}else{controller.reopen()}}catch{controller.error=error.localizedDescription}
         }}
         .sheet(item:$controller.pane,onDismiss:{if controller.ready{controller.refresh()}}) {pane in
             Group {switch pane {
@@ -87,7 +88,10 @@ import UniformTypeIdentifiers
     private func beginImport() {
         Task {
             do {
-                if let view=controller.webView {_=try await view.callAsyncJavaScript("if(window.QibanNative) await window.QibanNative.flush();",arguments:[:],in:nil,contentWorld:.page)}
+                if let view=controller.webView {
+                    _=try await view.callAsyncJavaScript("if(window.QibanNative) await window.QibanNative.flush();",arguments:[:],in:nil,contentWorld:.page)
+                    guard controller.webView === view else {return}
+                }
                 controller.dispose();importing=true
             }catch{controller.error=error.localizedDescription}
         }

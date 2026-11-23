@@ -189,26 +189,54 @@ final class PhoneCardRoomBrowser:@unchecked Sendable {
     private var changed:(([[String:String]],String?)->Void)?
     private var waiters:[UUID:(String,CheckedContinuation<NWEndpoint,Error>)]=[:]
     func start(changed:@escaping([[String:String]],String?)->Void){queue.async{self.changed=changed;self.begin();changed(self.rows,nil)}}
-    func stop(){queue.async{self.browser?.cancel();self.browser=nil;self.changed=nil;for item in self.waiters.values{item.1.resume(throwing:CancellationError())};self.waiters.removeAll()}}
+    func stop() {
+        queue.async {
+            self.changed=nil
+            let pending=self.waiters
+            self.waiters.removeAll()
+            self.stopIfIdle()
+            for item in pending.values {item.1.resume(throwing:CancellationError())}
+        }
+    }
+    private func stopIfIdle() {
+        guard changed == nil, waiters.isEmpty else {return}
+        let old=browser
+        browser=nil;rows=[];endpoints.removeAll()
+        old?.cancel()
+    }
     private func begin(){
         guard browser==nil else{return};let parameters=NWParameters.tcp;parameters.includePeerToPeer=true
         let browser=NWBrowser(for:.bonjourWithTXTRecord(type:PhoneCardRoomServer.serviceType,domain:nil),using:parameters);self.browser=browser
-        browser.browseResultsChangedHandler={[weak self] results,_ in
-            guard let self=self else{return};var rows:[[String:String]]=[]
+        browser.browseResultsChangedHandler={[weak self,weak browser] results,_ in
+            guard let self=self,let browser=browser,self.browser === browser else{return};var endpoints:[String:NWEndpoint]=[:];var rows:[[String:String]]=[]
             for result in results{guard case .bonjour(let record)=result.metadata,let id=record["id"],let code=record["room"],record["version"]=="1" else{continue}
-                self.endpoints[id]=result.endpoint;rows.append(["id":id,"code":code,"name":record["name"] ?? "附近的伙伴"])
+                endpoints[id]=result.endpoint;rows.append(["id":id,"code":code,"name":record["name"] ?? "附近的伙伴"])
             }
+            self.endpoints=endpoints
             self.rows=rows.sorted{($0["code"] ?? "")<($1["code"] ?? "")};self.changed?(self.rows,nil)
             let ready=self.waiters.filter{self.endpoints[$0.value.0] != nil};for (id,item) in ready{self.waiters.removeValue(forKey:id);item.1.resume(returning:self.endpoints[item.0]!)}
+            self.stopIfIdle()
         }
-        browser.stateUpdateHandler={[weak self] state in if case .failed=state{self?.changed?([],"无法发现附近房间。请在 iOS 设置中允许“本地网络”，或使用房主分享的地址。");}}
+        browser.stateUpdateHandler={[weak self,weak browser] state in
+            guard let self, let browser, self.browser === browser, case .failed(let error)=state else{return}
+            self.browser=nil;browser.cancel()
+            self.rows=[];self.endpoints.removeAll()
+            let pending=self.waiters;self.waiters.removeAll()
+            for item in pending.values {item.1.resume(throwing:error)}
+            self.changed?([],"无法发现附近房间。请在 iOS 设置中允许“本地网络”，或使用房主分享的地址。")
+        }
         browser.start(queue:queue)
     }
     func endpoint(_ id:String) async throws -> NWEndpoint {
         try await withCheckedThrowingContinuation{done in queue.async{
             if let endpoint=self.endpoints[id]{done.resume(returning:endpoint);return}
             self.begin();let ticket=UUID();self.waiters[ticket]=(id,done)
-            self.queue.asyncAfter(deadline:.now()+8){if let pending=self.waiters.removeValue(forKey:ticket){pending.1.resume(throwing:CompanionError.message("未找到原手机房间。请让房主保持 App 前台，并连接同一 Wi-Fi／热点。"))}}
+            self.queue.asyncAfter(deadline:.now()+8) {
+                if let pending=self.waiters.removeValue(forKey:ticket) {
+                    pending.1.resume(throwing:CompanionError.message("未找到原手机房间。请让房主保持 App 前台，并连接同一 Wi-Fi／热点。"))
+                    self.stopIfIdle()
+                }
+            }
         }}
     }
 }

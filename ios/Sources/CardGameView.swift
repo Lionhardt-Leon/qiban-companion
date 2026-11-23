@@ -1,3 +1,4 @@
+import Network
 import SwiftUI
 import WebKit
 
@@ -20,31 +21,38 @@ import WebKit
     private var closing=false
     private let redirects=CardGameNoRedirect()
     private let discovery=PhoneCardRoomBrowser()
+    private var joinedRoute:(id:String,token:String,endpoint:NWEndpoint)?
     private static var idleBeforeHosting:Bool?
     private var importTicket=UUID()
     init(store:LocalStore){self.store=store;super.init()}
     func start() async {
-        guard webView==nil else{return}
+        guard !Task.isCancelled,webView==nil,server==nil else{return}
+        let ticket = lifecycle
         do {
             guard let root=Bundle.main.url(forResource:"tycoon",withExtension:nil) else{throw CompanionError.message("本版缺少牌桌程序。")}
             guard FileManager.default.fileExists(atPath:root.appendingPathComponent("index.html").path) else{throw CompanionError.message("牌桌首页没有正确打包，请安装完整更新包。")}
-            let server=ChatModuleServer(root:root,port:Self.port,artRoot:library.artRoot);self.server=server;try await server.start()
-            let (html,response)=try await URLSession.shared.data(from:server.pageURL)
+            let server=ChatModuleServer(root:root,port:Self.port,artRoot:library.artRoot);self.server=server;try await server.start();try Task.checkCancellation()
+            guard lifecycle==ticket else{server.stop();return}
+            let (html,response)=try await URLSession.shared.data(from:server.pageURL);try Task.checkCancellation()
+            guard lifecycle==ticket else{server.stop();return}
             guard (response as? HTTPURLResponse)?.statusCode==200,String(decoding:html,as:UTF8.self).contains("app.mjs") else{throw CompanionError.message("本机牌桌页面载入失败，可点“重新打开”。")}
             let content=WKUserContentController();content.addScriptMessageHandler(self,contentWorld:.page,name:"qibanGame")
             let config=WKWebViewConfiguration();config.userContentController=content;config.websiteDataStore = .default()
             config.mediaTypesRequiringUserActionForPlayback=[]
             let view=WKWebView(frame:.zero,configuration:config);view.navigationDelegate=self;view.isOpaque=false;view.backgroundColor = .black
             webView=view;view.load(URLRequest(url:server.pageURL));objectWillChange.send()
-        }catch{self.error=error.localizedDescription}
+        } catch {
+            guard lifecycle == ticket else {return}
+            server?.stop();server=nil;if !Task.isCancelled {self.error=error.localizedDescription}
+        }
     }
-    func dispose(){lifecycle=UUID();discovery.stop();networkTasks.values.forEach{$0.cancel()};networkTasks.removeAll();webView?.configuration.userContentController.removeScriptMessageHandler(forName:"qibanGame",contentWorld:.page);webView?.stopLoading();webView=nil;server?.stop();server=nil;ready=false}
-    func retry(){dispose();error=nil;Task{await start()}}
+    func dispose(){lifecycle=UUID();importTicket=UUID();joinedRoute=nil;discovery.stop();networkTasks.values.forEach{$0.cancel()};networkTasks.removeAll();webView?.configuration.userContentController.removeScriptMessageHandler(forName:"qibanGame",contentWorld:.page);webView?.stopLoading();webView=nil;server?.stop();server=nil;ready=false}
+    func retry(){dispose();error=nil;let ticket=lifecycle;Task{guard lifecycle==ticket else{return};await start()}}
     func close(_ finished:@escaping()->Void){
         guard !closing else{return};closing=true
         Task {defer{closing=false};do{
             if let view=webView{_ = try await view.callAsyncJavaScript("if(window.QibanCards) await window.QibanCards.flush();",arguments:[:],in:nil,contentWorld:.page)}
-            finished()
+            dispose();finished()
         }catch{self.error="存档未写入，请稍后再返回："+error.localizedDescription}}
     }
     func suspend(_ flag:Bool){suspended=flag;if flag{networkTasks.values.forEach{$0.cancel()};networkTasks.removeAll()};webView?.evaluateJavaScript(flag ? "window.QibanCards?.suspend()":"window.QibanCards?.resume()")}
@@ -52,10 +60,11 @@ import WebKit
         guard !importingBusy else{return};importingBusy=true;importProgress=0;notice=nil;error=nil
         let ticket=UUID();importTicket=ticket
         Task {defer{importingBusy=false};do{let library=self.library;let result=try await Task.detached{try library.install(url){done,total in Task{@MainActor [weak self] in guard let self=self,self.importingBusy,self.importTicket==ticket else{return};self.importProgress=Double(done)/Double(max(1,total))}}}.value
+                guard importTicket==ticket else{return}
                 importProgress=1;notice="已导入「\(result.title)」：\(result.characters) 个角色，\(result.images) 张图片。"
                 if let view=webView{_ = try? await view.callAsyncJavaScript("if(window.QibanCards) await window.QibanCards.reloadArt();",arguments:[:],in:nil,contentWorld:.page)}
             }
-            catch{self.error=error.localizedDescription}}
+            catch{if importTicket==ticket {self.error=error.localizedDescription}}}
     }
     func userContentController(_ userContentController:WKUserContentController,didReceive message:WKScriptMessage,replyHandler:@escaping(Any?,String?)->Void){
         guard message.frameInfo.isMainFrame,let url=message.frameInfo.request.url,let server=server,url.host=="127.0.0.1",url.port==Int(Self.port),url.path.hasPrefix("/"+server.token+"/"),
@@ -97,7 +106,20 @@ import WebKit
         case "nearbyRequest":
             guard !suspended,networkTasks.count<=4,let id=body["id"] as? String,id.count<=80,let input=body["body"] as? [String:Any] else{throw CompanionError.message("附近房间请求无效。")}
             let bytes=try JSONSerialization.data(withJSONObject:input);guard bytes.count<=1_700_000 else{throw CompanionError.message("联机图片过大。")}
-            let endpoint=try await discovery.endpoint(id);try Task.checkCancellation();return try await PhoneCardRoomRequest().run(endpoint:endpoint,body:bytes)
+            let op=input["op"] as? String, token=input["token"] as? String
+            let endpoint:NWEndpoint
+            if op != "join", let route=joinedRoute, route.id==id, route.token==token {
+                endpoint=route.endpoint
+            } else {endpoint=try await discovery.endpoint(id)}
+            try Task.checkCancellation()
+            let result=try await PhoneCardRoomRequest().run(endpoint:endpoint,body:bytes)
+            try Task.checkCancellation()
+            if op=="join", result["state"] != nil, let joined=result["token"] as? String, !joined.isEmpty {
+                joinedRoute=(id,joined,endpoint)
+            } else if op=="leave", result["left"] as? Bool == true, joinedRoute?.id==id, joinedRoute?.token==token {
+                joinedRoute=nil
+            }
+            return result
         case "copyText":guard let text=body["text"] as? String,text.count<=4096 else{throw CompanionError.message("复制内容过长。")};UIPasteboard.general.string=text;return ["copied":true]
         case "request":
             guard !suspended,networkTasks.count<=4,let address=body["url"] as? String,address.utf8.count<=2048,let url=URL(string:address),
@@ -108,8 +130,9 @@ import WebKit
             request.setValue("application/json",forHTTPHeaderField:"Content-Type");request.setValue(key,forHTTPHeaderField:"X-Qiban-Server-Key")
             let config=URLSessionConfiguration.ephemeral;config.urlCache=nil;config.httpCookieStorage=nil;config.timeoutIntervalForRequest=12;config.timeoutIntervalForResource=15
             let session=URLSession(configuration:config,delegate:redirects,delegateQueue:nil);defer{session.invalidateAndCancel()}
-            let (data,response)=try await session.data(for:request);try Task.checkCancellation()
-            guard data.count<=8*1024*1024,let http=response as? HTTPURLResponse else{throw CompanionError.message("房间服务响应过大或无效。")}
+            let (data, http) = try await ServiceClient.boundedResponse(
+                request, session: session, limit: 8 * 1024 * 1024, label: "房间服务"
+            )
             guard let result=(try? JSONSerialization.jsonObject(with:data)) as? [String:Any] else{throw CompanionError.message("地址没有返回牌桌服务的数据，请检查端口与路径。")}
             if !(200..<300).contains(http.statusCode){return ["error":result["error"] as? String ?? "服务返回 \(http.statusCode)"]}
             return result

@@ -1,14 +1,40 @@
 package com.qiban.companion;
 import java.io.*;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.security.MessageDigest;
 import java.util.*;
 import org.json.*;
 
 /** The iOS archive schema, including per-persona independent message/memory/diary sessions. */
 final class ArchiveStore {
-    final File directory;private final File file;private JSONObject archive;
-    ArchiveStore(File directory)throws Exception {this.directory=directory;file=new File(directory,"archive.json");archive=file.exists()?FilesSupport.json(file,100*1024*1024):initial();prepare(archive);validate(archive);if(repairLegacyContact(archive)&&file.exists()){File backup=new File(directory,"archive-before-contact-repair.json");if(!backup.exists())FilesSupport.atomic(backup,FilesSupport.text(file,100*1024*1024));}save(archive);}
+    final File directory;
+    private File file;
+    private JSONObject archive;
+
+    ArchiveStore(File directory)throws Exception {
+        this(directory,directory);
+    }
+
+    ArchiveStore(File directory, File active)throws Exception {
+        this.directory=directory;
+        file=new File(active,"archive.json");
+        boolean exists=file.isFile();
+        archive=exists?FilesSupport.json(file,FilesSupport.ARCHIVE_LIMIT):initial();
+        prepare(archive);
+        validate(archive);
+        boolean repaired=repairLegacyContact(archive);
+        if(repaired && exists) {
+            File backup=new File(active,"archive-before-contact-repair.json");
+            if(!backup.exists())Files.copy(file.toPath(),backup.toPath());
+        }
+        if(!exists || repaired)save(archive);
+    }
+
+    synchronized void activate(File newFile,JSONObject validated) {
+        file=newFile;
+        archive=validated;
+    }
     static boolean repairLegacyContact(JSONObject a)throws Exception {
         String broken=identifier("null");JSONObject card=find(a.getJSONObject("settings").getJSONObject("personas").getJSONArray("cards"),broken);
         if(card==null||a.optInt("contactIdentityRepair",0)>=1)return false;
@@ -40,7 +66,21 @@ final class ArchiveStore {
     }
     synchronized JSONObject snapshot()throws Exception{return FilesSupport.copy(archive);}
     synchronized JSONObject settings()throws Exception{return FilesSupport.copy(archive.getJSONObject("settings"));}
-    synchronized void save(JSONObject next)throws Exception {prepare(next);String owner=next.getString("personaSessionKey"),id=next.getJSONObject("activeSessionIDs").getString(owner);JSONObject meta=find(next.getJSONArray("conversationSessions"),id);meta.put("mood",next.getJSONObject("moods").getJSONObject(owner));validate(next);FilesSupport.atomic(file,next.toString());archive=FilesSupport.copy(next);}
+    synchronized void save(JSONObject next)throws Exception {prepare(next);String owner=next.getString("personaSessionKey"),id=next.getJSONObject("activeSessionIDs").getString(owner);JSONObject meta=find(next.getJSONArray("conversationSessions"),id);meta.put("mood",next.getJSONObject("moods").getJSONObject(owner));validate(next);String serialized=next.toString();FilesSupport.requireBytes(serialized, FilesSupport.ARCHIVE_LIMIT);JSONObject detached=new JSONObject(serialized);FilesSupport.atomic(file,serialized);archive=detached;}
+    synchronized JSONObject commitSummary(String owner, String session, String messages,
+                                          String previousMemory, String memory, JSONObject diary) throws Exception {
+        if (!owner.equals(archive.getString("personaSessionKey"))
+                || !session.equals(archive.getJSONObject("activeSessionIDs").getString(owner))
+                || !messages.equals(archive.getJSONArray("messages").toString())
+                || !previousMemory.equals(archive.optString("memories"))) {
+            throw new IOException("对话或记忆已变更，请重新整理。");
+        }
+        JSONObject current = snapshot();
+        current.put("memories", memory);
+        current.getJSONArray("diary").put(diary);
+        save(current);
+        return current;
+    }
     static JSONObject contents(JSONObject a,String sessionID)throws Exception {JSONObject meta=find(a.getJSONArray("conversationSessions"),sessionID);if(meta==null)throw new IOException("找不到这段对话。");String owner=meta.getString("personaKey");if(sessionID.equals(a.getJSONObject("activeSessionIDs").optString(owner))){if(owner.equals(a.optString("personaSessionKey")))return new JSONObject().put("messages",a.getJSONArray("messages")).put("memories",a.optString("memories")).put("diary",a.getJSONArray("diary"));return a.getJSONObject("personaConversations").optJSONObject(owner)==null?empty():a.getJSONObject("personaConversations").getJSONObject(owner);}JSONObject value=a.getJSONObject("sessionHistories").optJSONObject(sessionID);return value==null?empty():value;}
     static void setContents(JSONObject a,String id,JSONObject value)throws Exception {JSONObject meta=find(a.getJSONArray("conversationSessions"),id);String owner=meta.getString("personaKey");if(id.equals(a.getJSONObject("activeSessionIDs").optString(owner))){if(owner.equals(a.optString("personaSessionKey"))){a.put("messages",value.getJSONArray("messages")).put("memories",value.optString("memories")).put("diary",value.getJSONArray("diary"));}else a.getJSONObject("personaConversations").put(owner,value);}else a.getJSONObject("sessionHistories").put(id,value);meta.put("updatedAt",now());}
     static void select(JSONObject a,String id)throws Exception {JSONObject meta=find(a.getJSONArray("conversationSessions"),id);if(meta==null)throw new IOException("对话已不存在。");String owner=meta.getString("personaKey"),previous=a.getJSONObject("activeSessionIDs").optString(owner);if(id.equals(previous))return;JSONObject restored=contents(a,id);if(!previous.isEmpty()){a.getJSONObject("sessionHistories").put(previous,contents(a,previous));JSONObject oldMeta=find(a.getJSONArray("conversationSessions"),previous);oldMeta.put("mood",FilesSupport.object(a,"moods").optJSONObject(owner));}FilesSupport.object(a,"moods").put(owner,meta.optJSONObject("mood")==null?defaultMood():meta.getJSONObject("mood"));a.getJSONObject("activeSessionIDs").put(owner,id);a.getJSONObject("sessionHistories").remove(id);setContents(a,id,restored);}
@@ -54,7 +94,7 @@ final class ArchiveStore {
         }
         JSONObject services=s.optJSONObject("services");return new JSONObject().put("contacts",contacts).put("speechFormat","【朗读格式】只把角色实际说出口的台词写在中文引号“”或日文「」中；动作、外貌、心理独白写在（圆括号）内，纯动作不编造台词。").put("globalPrompt",lib.optString("systemPrompt")+"\n【用户人设】\n"+lib.optString("userName")+"\n"+lib.optString("userDescription")).put("bodyNotice","当前为文字通讯，3D场景暂停，不要把文字描写当成身体已执行。").put("userName",lib.optString("userName").isEmpty()?"你":lib.optString("userName")).put("language",speech.optString("language","zh")).put("autoPlay",speech.optBoolean("autoPlay")).put("speechEnabled",speech.optBoolean("enabled",true)).put("model",s.optString("model")).put("temperature",s.optDouble("temperature",0.7)).put("configured",!s.optString("endpoint").isEmpty()&&!s.optString("model").isEmpty()).put("searchEnabled",services!=null&&services.optJSONObject("search")!=null&&services.getJSONObject("search").optBoolean("enabled")).put("activeId",origins.optString(a.getString("personaSessionKey"),"qiban_"+a.getString("personaSessionKey"))).put("nativeArchive",a.toString());
     }
-    static String prompt(JSONObject card,JSONObject lib){String user=card.optString("userName").isEmpty()?lib.optString("userName","你"):card.optString("userName"),description=card.optString("userDescription").isEmpty()?lib.optString("userDescription"):card.optString("userDescription");StringBuilder p=new StringBuilder("角色姓名："+card.optString("name")+"\n");for(String key:List.of("description","personality","scenario","systemRules","replyRules","examples")){if(!card.optString(key).isEmpty())p.append(card.optString(key)).append('\n');}p.append("\n【用户】\n").append(user).append('\n').append(description).append("\n【身体表现偏好】\n").append(lib.optString("bodyStyle"));return p.toString().replace("{{char}}",card.optString("name")).replace("{{user}}",user);}
+    static String prompt(JSONObject card,JSONObject lib){String user=card.optString("userName").isEmpty()?lib.optString("userName","你"):card.optString("userName"),description=card.optString("userDescription").isEmpty()?lib.optString("userDescription"):card.optString("userDescription");StringBuilder p=new StringBuilder("角色姓名："+card.optString("name")+"\n");for(String key:List.of("description","personality","scenario","systemRules","replyRules")){if(!card.optString(key).isEmpty())p.append(card.optString(key)).append('\n');}p.append("\n【用户】\n").append(user).append('\n').append(description).append("\n【身体表现偏好】\n").append(lib.optString("bodyStyle"));return p.toString().replace("{{char}}",card.optString("name")).replace("{{user}}",user);}
     synchronized JSONObject messages(String owner,String id,int offset)throws Exception {JSONObject a=snapshot();if(id.isEmpty())id=a.getJSONObject("activeSessionIDs").optString(owner);JSONObject m=find(a.getJSONArray("conversationSessions"),id);if(m==null||!m.getString("personaKey").equals(owner))return new JSONObject().put("messages",new JSONArray()).put("more",false).put("next",0);JSONArray list=contents(a,id).getJSONArray("messages"),result=new JSONArray();int end=Math.min(list.length(),Math.max(0,offset)+200);for(int i=Math.max(0,offset);i<end;i++){JSONObject row=list.getJSONObject(i),meta=new JSONObject();if(row.has("spokenJapanese"))meta.put("qibanSpokenJapanese",row.get("spokenJapanese"));if(row.has("spokenChinese"))meta.put("qibanSpokenChinese",row.get("spokenChinese"));result.put(new JSONObject().put("id",row.getString("id")).put("role",row.getString("role")).put("text",row.getString("content")).put("createdAt",milliseconds(row.getDouble("createdAt"))).put("meta",meta));}return new JSONObject().put("messages",result).put("next",end).put("more",end<list.length());}
     synchronized JSONObject sync(JSONObject change,boolean active)throws Exception {
         JSONObject a=snapshot(),lib=a.getJSONObject("settings").getJSONObject("personas");String original=change.getString("id"),binding=FilesSupport.string(change,"qibanId");
@@ -62,7 +102,11 @@ final class ArchiveStore {
         String key=binding.isEmpty()?identifier("contact:"+original):identifier(binding);JSONArray cards=lib.getJSONArray("cards");JSONObject card=find(cards,key);if(card==null&&!binding.isEmpty())return new JSONObject().put("linked",false);
         String origin=FilesSupport.string(a.getJSONObject("chatContactOrigins"),key);if(!origin.isEmpty()&&!origin.equals(original))return new JSONObject().put("linked",false).put("reason","角色映射冲突，原记录已保留。请更新通讯模块。");
         boolean newCard=card==null;if(newCard){if(cards.length()>=50)return new JSONObject().put("linked",false);cards.put(card=card(key,change.getString("name"),change.optString("prompt")));}
-        card.put("name",change.getString("name")).put("title",change.getString("name"));if(change.optBoolean("promptEdited")){card.put("description",change.optString("prompt")).put("examples",change.optString("examples"));for(String field:List.of("personality","scenario","systemRules","replyRules"))card.put(field,"");}a.getJSONObject("chatContactOrigins").put(key,original);prepare(a);
+        card.put("name",change.getString("name")).put("title",change.getString("name"));if(change.optBoolean("promptEdited")){card.put("description",change.optString("prompt"));for(String field:List.of("personality","scenario","systemRules","replyRules"))card.put(field,"");}
+        if(newCard || change.optBoolean("examplesEdited",change.optBoolean("promptEdited"))) {
+            card.put("examples",change.optString("examples"));
+        }
+        a.getJSONObject("chatContactOrigins").put(key,original);prepare(a);
         String id=identifier(change.optString("sessionID",a.getJSONObject("activeSessionIDs").getString(key)));JSONObject meta=find(a.getJSONArray("conversationSessions"),id);if(meta==null){meta=new JSONObject().put("id",id).put("personaKey",key).put("createdAt",now()).put("updatedAt",now());a.getJSONArray("conversationSessions").put(meta);a.getJSONObject("sessionHistories").put(id,empty());}if(!meta.getString("personaKey").equals(key))throw new IOException("对话与角色不匹配。");meta.put("title",change.optString("sessionTitle","新对话")).put("externalID",change.optString("conversationID"));
         if(newCard){String previous=a.getJSONObject("activeSessionIDs").optString(key);if(!previous.equals(id)&&contents(a,previous).getJSONArray("messages").length()==0){JSONArray list=a.getJSONArray("conversationSessions"),filtered=new JSONArray();for(int i=0;i<list.length();i++)if(!list.getJSONObject(i).getString("id").equals(previous))filtered.put(list.getJSONObject(i));a.put("conversationSessions",filtered);a.getJSONObject("sessionHistories").remove(previous);a.getJSONObject("activeSessionIDs").put(key,id);a.getJSONObject("sessionHistories").remove(id);}}
         JSONObject data=contents(a,id);JSONArray old=data.getJSONArray("messages"),removed=change.optJSONArray("removedIds"),incoming=change.getJSONArray("messages");if(incoming.length()>300||(removed!=null&&removed.length()>300))throw new IOException("单次同步超过上限。");Set<String> deleted=new HashSet<>();if(removed!=null)for(int i=0;i<removed.length();i++){deleted.add(identifier(removed.getString(i)));deleted.add(identifier("message:"+original+":"+removed.getString(i)));}

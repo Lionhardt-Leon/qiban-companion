@@ -42,6 +42,15 @@ final class ServiceRoutingTests:XCTestCase {
         XCTAssertEqual(restored.settings.services,routes);XCTAssertFalse(restored.settings.runtimeSearchRequested);XCTAssertEqual(restored.settings.persona,"保留人设")
         XCTAssertFalse(String(decoding:data,as:UTF8.self).contains("Authorization"));XCTAssertNoThrow(try restored.validate())
     }
+    func testMainCredentialsAreScopedToNormalizedChatEndpoint() throws {
+        let address = "https://EXAMPLE.invalid:443/v1/"
+        let identity = try XCTUnwrap(APIKeyStore.identity(address))
+        let secret = APIKeyStore.MainSecret(endpoint:identity,value:"test-only")
+        XCTAssertEqual(secret.key(for:"https://example.invalid/v1/chat/completions"),"test-only")
+        XCTAssertEqual(secret.key(for:"https://other.invalid/v1"),"")
+        XCTAssertEqual(secret.key(for:"https://example.invalid/other"),"")
+    }
+
     func testFullURLsBaseURLsAndBoundCredentialsNeverCrossProviders()throws {
         var value=profile(.tts)
         XCTAssertEqual(try value.url().absoluteString,"https://tts.example/v1/tools/tts")
@@ -152,6 +161,45 @@ final class ServiceRoutingTests:XCTestCase {
         let message=Message(role:"assistant",content:"回答",sources:rows)
         XCTAssertEqual(try JSONDecoder().decode(Message.self,from:JSONEncoder().encode(message)).sources,rows)
     }
+    func testMainReplyRejectsOversizedBodyAndOversizedSupplementKeepsPrimary() async throws {
+        let session = self.session()
+        defer { session.invalidateAndCancel(); ServiceURLProtocol.handler = nil }
+        let history = [Message(role:"user", content:"你好")]
+        ServiceURLProtocol.handler = { _ in (200, Data(repeating:65, count:2 * 1024 * 1024 + 1)) }
+        do {
+            _ = try await APIClient.reply(settings:settings(), key:"", history:history, memories:"", actions:[], session:session)
+            XCTFail("Expected a bounded main reply")
+        } catch { XCTAssertTrue(error.localizedDescription.contains("过大")) }
+
+        let primary = try response("原始回复")
+        let recorder = RequestRecorder()
+        ServiceURLProtocol.handler = { request in
+            recorder.add(request)
+            if recorder.values.count == 1 { return (200, primary) }
+            return (200, Data(repeating:65, count:256 * 1024 + 1))
+        }
+        let reply = try await APIClient.reply(settings:settings(), key:"", history:history, memories:"", actions:["hello"], session:session)
+        XCTAssertEqual(recorder.values.count, 2)
+        XCTAssertEqual(reply.text, "原始回复")
+    }
+
+    func testBoundedHTTPRoomErrorBodyAndExactLimit() async throws {
+        let session = self.session()
+        defer { session.invalidateAndCancel(); ServiceURLProtocol.handler = nil }
+        let payload = Data(#"{"error":"房间已满"}"#.utf8)
+        ServiceURLProtocol.handler = { _ in (409, payload) }
+        let request = URLRequest(url:URL(string:"https://rooms.example/api")!)
+        let (body, response) = try await ServiceClient.boundedResponse(
+            request, session:session, limit:payload.count, label:"房间服务"
+        )
+        XCTAssertEqual(response.statusCode, 409)
+        XCTAssertEqual(body, payload)
+        do {
+            _ = try await ServiceClient.boundedResponse(request, session:session, limit:payload.count-1, label:"房间服务")
+            XCTFail("Expected a bounded error body")
+        } catch { XCTAssertTrue(error.localizedDescription.contains("过大")) }
+    }
+
     func testBoundedResponseAndMalformedAudioReturnControlledErrors()async throws {
         let session=self.session();defer{session.invalidateAndCancel();ServiceURLProtocol.handler=nil}
         ServiceURLProtocol.handler={_ in (200,Data(repeating:65,count:140_000))}

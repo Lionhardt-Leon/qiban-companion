@@ -285,12 +285,21 @@ struct SnowbreakTouchEvent {
 
 struct SnowbreakCharacterView:UIViewRepresentable {
     @ObservedObject var stage:SnowbreakStage
-    func makeUIView(context:Context)->WKWebView { stage.makeView() }
-    func updateUIView(_ view:WKWebView,context:Context) { }
-    static func dismantleUIView(_ view:WKWebView,coordinator:()) {
-        view.evaluateJavaScript("window.SnowbreakHost?.receive({type:'dispose'})",completionHandler:nil)
-        view.stopLoading();view.navigationDelegate = nil
-        view.configuration.userContentController.removeScriptMessageHandler(forName:"snowbreak")
+    final class Coordinator { weak var stage:SnowbreakStage? }
+    func makeCoordinator()->Coordinator { Coordinator() }
+    func makeUIView(context:Context)->WKWebView {
+        context.coordinator.stage = stage
+        return stage.makeView()
+    }
+    func updateUIView(_ view:WKWebView,context:Context) { context.coordinator.stage = stage }
+    static func dismantleUIView(_ view:WKWebView,coordinator:Coordinator) {
+        if let stage = coordinator.stage {
+            stage.detach(view)
+        } else {
+            view.evaluateJavaScript("window.SnowbreakHost?.receive({type:'dispose'})",completionHandler:nil)
+            view.stopLoading();view.navigationDelegate = nil
+            view.configuration.userContentController.removeScriptMessageHandler(forName:"snowbreak")
+        }
     }
 }
 

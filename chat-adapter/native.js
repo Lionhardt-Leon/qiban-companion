@@ -75,7 +75,7 @@ export async function initQibanChat() {
       offset=result.next;more=result.more;
     }
     list.sort((a,b)=>a.createdAt-b.createdAt);store.messages[conversation.id]=list;
-    mirrors[conversation.id]={...mirrors[conversation.id],qibanId:contact.qibanId,cardID:card.id,sessionID:session.id,sessionTitle:conversation.qibanThreadTitle,resetToken:(session.resetToken||contact.resetToken||'0'),prompt:contact.prompt,name:contact.name,ids:list.map(item=>item.id),signatures,nativeIDs};
+    mirrors[conversation.id]={...mirrors[conversation.id],qibanId:contact.qibanId,cardID:card.id,sessionID:session.id,sessionTitle:conversation.qibanThreadTitle,resetToken:(session.resetToken||contact.resetToken||'0'),prompt:contact.prompt,examples:card.examples || '',name:contact.name,ids:list.map(item=>item.id),signatures,nativeIDs};
   }
     }
   store.activeConversationId=store.conversations.some(item=>item.id===active) ? active : store.conversations.find(item=>item.memberIds[0]===profile.activeId)?.id || store.activeConversationId;
@@ -146,18 +146,21 @@ async function syncPass() {
     const allIDs=new Set(list.map(item=>item.id)),old=mirrors[conversation.id] || {};
     const removed=[...new Set([...(old.ids || []).filter(id=>!allIDs.has(id)),...(old.pendingRemovedIDs || [])])];
     const promptEdited=old.prompt!==undefined ? old.prompt!==card.prompt : !card.qibanId;
+    const examples=card.examples || '';
+    const baselineExamples=old.examples ?? profile?.contacts?.find(contact=>contact.qibanId===card.qibanId)?.examples;
+    const examplesEdited=baselineExamples!==undefined ? baselineExamples!==examples : !card.qibanId;
     const changed=valid.filter(item=>old.signatures?.[item.id]!==signature(item));
     const batches=Math.max(1,Math.ceil(changed.length/200),Math.ceil(removed.length/200));
     let linked=null;const signatures={...old.signatures},nativeIDs={...old.nativeIDs};
     for(let batch=0;batch<batches;batch++) {
       const messages=changed.slice(batch*200,batch*200+200).map(item=>({id:item.id,role:item.role,text:item.text,createdAt:item.createdAt,spokenJapanese:item.meta?.qibanSpokenJapanese || null,spokenChinese:item.meta?.qibanSpokenChinese ?? null}));
-      if(!messages.length && !removed.length && card.name===old.name && old.active===(store.activeConversationId===conversation.id) && old.sessionTitle===conversation.qibanThreadTitle && !promptEdited && old.qibanId)continue;
-      linked=await window.QibanNative.call('syncContact',{active:store.activeConversationId===conversation?.id,contact:{id:card.id,sessionID:conversation.qibanSessionId,conversationID:conversation.id,sessionTitle:conversation.qibanThreadTitle&&conversation.qibanThreadTitle!=='新对话'?conversation.qibanThreadTitle:(list.find(m=>m.role==='user'&&m.text)?.text?.slice(0,36)||'新对话'),qibanId:card.qibanId || old.qibanId || null,name:card.name,prompt:card.prompt || '',examples:card.examples || '',promptEdited,messages,removedIds:removed.slice(batch*200,batch*200+200)}});
+      if(!messages.length && !removed.length && card.name===old.name && old.active===(store.activeConversationId===conversation.id) && old.sessionTitle===conversation.qibanThreadTitle && !promptEdited && !examplesEdited && old.qibanId)continue;
+      linked=await window.QibanNative.call('syncContact',{active:store.activeConversationId===conversation?.id,contact:{id:card.id,sessionID:conversation.qibanSessionId,conversationID:conversation.id,sessionTitle:conversation.qibanThreadTitle&&conversation.qibanThreadTitle!=='新对话'?conversation.qibanThreadTitle:(list.find(m=>m.role==='user'&&m.text)?.text?.slice(0,36)||'新对话'),qibanId:card.qibanId || old.qibanId || null,name:card.name,prompt:card.prompt || '',examples,examplesEdited,promptEdited,messages,removedIds:removed.slice(batch*200,batch*200+200)}});
       if(!linked.linked)break;
       for(const message of messages){signatures[message.id]=JSON.stringify([message.text,message.spokenJapanese || undefined,message.spokenChinese ?? undefined]);nativeIDs[message.id]=linked.messageIDs[message.id];}
     }
     if(linked?.linked){
-      const newest=read(KEY,{});newest[conversation.id]={...newest[conversation.id],qibanId:linked.qibanId,cardID:card.id,sessionID:linked.sessionID || conversation.qibanSessionId,active:store.activeConversationId===conversation.id,sessionTitle:conversation.qibanThreadTitle,resetToken:old.resetToken || '0',prompt:card.prompt,name:card.name,ids:valid.map(item=>item.id),signatures,nativeIDs,pendingRemovedIDs:(newest[conversation.id]?.pendingRemovedIDs || []).filter(id=>!removed.includes(id))};
+      const newest=read(KEY,{});newest[conversation.id]={...newest[conversation.id],qibanId:linked.qibanId,cardID:card.id,sessionID:linked.sessionID || conversation.qibanSessionId,active:store.activeConversationId===conversation.id,sessionTitle:conversation.qibanThreadTitle,resetToken:old.resetToken || '0',prompt:card.prompt,examples,name:card.name,ids:valid.map(item=>item.id),signatures,nativeIDs,pendingRemovedIDs:(newest[conversation.id]?.pendingRemovedIDs || []).filter(id=>!removed.includes(id))};
       localStorage.setItem(KEY,JSON.stringify(newest));linkedAny=true;
     }
   }

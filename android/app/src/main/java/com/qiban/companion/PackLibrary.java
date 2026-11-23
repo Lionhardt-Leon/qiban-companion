@@ -10,8 +10,9 @@ import org.json.*;
 
 /** Streamed, verified imports. A failed import cannot replace the working library. */
 final class PackLibrary {
-    final File root,chat,art,voice,models,state;
-    PackLibrary(File root){this.root=root;chat=new File(root,"chat");art=new File(root,"art");voice=new File(root,"voice");models=new File(root,"models");state=new File(root,"chat-state");root.mkdirs();state.mkdirs();models.mkdirs();art.mkdirs();}
+    final File root,chat,art,voice,models;
+    private File state,game;
+    PackLibrary(File root){this.root=root;chat=new File(root,"chat");art=new File(root,"art");voice=new File(root,"voice");models=new File(root,"models");state=new File(root,"chat-state");game=new File(root,"game-state.json");root.mkdirs();state.mkdirs();models.mkdirs();art.mkdirs();}
     boolean hasChat(){try{return FilesSupport.text(new File(chat,"package.sha256"),100).equals(BuildConfig.CHAT_SHA256);}catch(Exception e){return false;}}
     JSONObject install(File input,String name,java.util.function.Consumer<String> progress)throws Exception {
         if(name.toLowerCase(Locale.ROOT).endsWith(".qstage"))return new PortraitLibrary(root).install(input);
@@ -46,8 +47,59 @@ final class PackLibrary {
     JSONObject catalog()throws Exception {JSONArray characters=new JSONArray(),themes=new JSONArray();File[] folders=art.listFiles();if(folders!=null)for(File folder:folders){File file=new File(folder,"catalog.json");if(!file.isFile())continue;JSONObject m=FilesSupport.json(file,2*1024*1024);String prefix="art/"+m.getString("id")+"/";JSONArray list=m.getJSONArray("characters");for(int i=0;i<list.length();i++){JSONObject c=FilesSupport.copy(list.getJSONObject(i));c.put("id",m.getString("id")+"/"+c.getString("id"));for(String key:List.of("portrait","avatar"))if(c.has(key))c.put(key,prefix+c.getString(key));for(String key:List.of("states","stateLayers","blinkLayers"))if(c.has(key))c.put(key,prefix(c.getJSONObject(key),prefix));if(c.has("layers"))c.put("layers",paths(c.getJSONArray("layers"),prefix));characters.put(c);}if(m.has("theme")){JSONObject t=FilesSupport.copy(m.getJSONObject("theme"));t.put("images",prefix(t.getJSONObject("images"),prefix)).put("audio",prefix(t.getJSONObject("audio"),prefix));themes.put(t);}}return new JSONObject().put("characters",characters).put("themes",themes);}
     private JSONObject prefix(JSONObject object,String prefix)throws Exception{JSONObject out=new JSONObject();Iterator<String> keys=object.keys();while(keys.hasNext()){String key=keys.next();Object v=object.get(key);out.put(key,v instanceof JSONArray?paths((JSONArray)v,prefix):prefix+v);}return out;}
     private JSONArray paths(JSONArray values,String prefix)throws Exception{JSONArray out=new JSONArray();for(int i=0;i<values.length();i++)out.put(prefix+values.getString(i));return out;}
-    JSONObject storage()throws Exception{JSONObject out=new JSONObject();File[] files=state.listFiles();long total=0;if(files!=null)for(File file:files){total+=file.length();if(total>128L*1024*1024)throw new IOException("通讯文字超过128MB。");JSONObject item=FilesSupport.json(file,64*1024*1024);out.put(item.getString("key"),item.getString("value"));}return out;}
-    synchronized void persist(String key,String value)throws Exception {if(!(key.startsWith("fritia_")||key.startsWith("fritia-"))||key.length()>200||(value!=null&&value.getBytes(StandardCharsets.UTF_8).length>64*1024*1024))throw new IOException("通讯存储内容无效或过大。");String id=RoomEngine.hex(MessageDigest.getInstance("SHA-256").digest(key.getBytes(StandardCharsets.UTF_8)));File file=new File(state,id+".json");if(value==null){Files.deleteIfExists(file.toPath());return;}long total=value.length();File[] all=state.listFiles();if(all!=null)for(File f:all)if(!f.equals(file))total+=f.length();if(total>128L*1024*1024)throw new IOException("通讯文字超过128MB，请先导出。");FilesSupport.atomic(file,new JSONObject().put("key",key).put("value",value).toString());}
+    synchronized void useState(File active) {
+        state=new File(active,"chat-state");
+        game=new File(active,"game-state.json");
+    }
+    synchronized String game()throws Exception {
+        return game.isFile()?FilesSupport.text(game,FilesSupport.GAME_LIMIT):null;
+    }
+    synchronized void saveGame(String value)throws Exception {
+        writeGame(game,value);
+    }
+    static void writeGame(File file,String value)throws Exception {
+        FilesSupport.requireBytes(value,FilesSupport.GAME_LIMIT);
+        JSONObject parsed=new JSONObject(value);
+        if(!parsed.has("preferences"))throw new IOException("牌桌存档无效。");
+        FilesSupport.atomic(file,value);
+    }
+
+    synchronized JSONObject storage(SecretVault.Settings settings)throws Exception {
+        JSONObject out=new JSONObject();
+        long total=0;
+        for(File item:records(state)) {
+            total+=item.length();
+            if(total>2L*FilesSupport.CHAT_TOTAL_LIMIT)throw new IOException("旧版通讯存档超过恢复上限。");
+            JSONObject row=FilesSupport.json(item,2*FilesSupport.CHAT_RECORD_LIMIT+2048);
+            String key=row.getString("key"), value=row.getString("value"),safe=settings.apply(key,value);
+            if(!safe.equals(value))persist(key,safe);
+            out.put(key,safe);
+        }
+        return out;
+    }
+    private static File[] records(File folder)throws IOException {
+        File[] result=folder.listFiles(f->f.isFile()&&f.getName().matches("[a-f0-9]{64}\\.json"));
+        if(result==null)throw new IOException("无法读取通讯存档目录。");
+        return result;
+    }
+    static File recordFile(File dir,String key)throws Exception {
+        if(!(key.startsWith("fritia_")||key.startsWith("fritia-"))||key.length()>200)throw new IOException("通讯存储键无效。");
+        return new File(dir,RoomEngine.hex(MessageDigest.getInstance("SHA-256").digest(key.getBytes(StandardCharsets.UTF_8)))+".json");
+    }
+    static String record(String key,String value)throws Exception {
+        String record=new JSONObject().put("key",key).put("value",value).toString();
+        FilesSupport.requireBytes(record,FilesSupport.CHAT_RECORD_LIMIT);
+        return record;
+    }
+    synchronized void persist(String key,String value)throws Exception {
+        File file=recordFile(state,key);
+        if(value==null){Files.deleteIfExists(file.toPath());return;}
+        String record=record(key,value);
+        long total=FilesSupport.utf8Length(record);
+        for(File existing:records(state))if(!existing.equals(file))total+=existing.length();
+        if(total>FilesSupport.CHAT_TOTAL_LIMIT)throw new IOException("通讯文字超过128MiB，请先导出。");
+        FilesSupport.atomic(file,record);
+    }
     private static JSONObject readJSON(ZipFile zip,String path,int max)throws Exception{ZipEntry e=zip.getEntry(path);if(e==null||e.getSize()>max)throw new IOException("包中缺少有效索引。");try(InputStream in=zip.getInputStream(e)){byte[] b=FilesSupport.read(in,max+1);if(b.length>max)throw new IOException("索引过大。");return new JSONObject(new String(b,StandardCharsets.UTF_8));}}
     private static void validateArt(JSONObject m)throws Exception{JSONArray characters=m.getJSONArray("characters");if(characters.length()<1||characters.length()>200)throw new IOException("立绘角色数量无效。");JSONObject files=m.getJSONObject("files");Set<String> ids=new HashSet<>();for(int i=0;i<characters.length();i++){JSONObject c=characters.getJSONObject(i);if(!ids.add(c.getString("id"))||!c.getString("id").matches("[A-Za-z0-9_-]{1,80}")||c.getString("name").length()>80)throw new IOException("角色标识无效。");for(String key:List.of("portrait","avatar"))if(c.has(key)&&!files.has(c.getString(key)))throw new IOException("角色图片缺失。");}if(m.has("theme")){JSONObject t=m.getJSONObject("theme");if(!t.getString("id").equals("p5-original")||t.getInt("width")!=1600||t.getInt("height")!=900)throw new IOException("原版牌桌尺寸不兼容。");for(String section:List.of("images","audio")){JSONObject map=t.getJSONObject(section);Iterator<String> keys=map.keys();while(keys.hasNext())if(!files.has(map.getString(keys.next())))throw new IOException("原版视听资源缺失。");}}}
     private static void validateVoice(JSONObject m)throws Exception {if(!m.optString("frontendRevision").equals("384a2f995c48ef1903373ac8814569a8925779ba"))throw new IOException("语音前端版本不兼容。");JSONArray voices=m.getJSONArray("voices");if(voices.length()!=2)throw new IOException("请选择完整的中日语音包。");JSONObject files=m.getJSONObject("files");for(int i=0;i<voices.length();i++){JSONObject v=voices.getJSONObject(i);if(!List.of("zh","ja").contains(v.getString("language")))throw new IOException("音色语言无效。");String d=v.getString("directory");for(String name:List.of("config.json","conditioning.json","reference_bert.bin","prompt_semantic.bin","refer_spec.bin","gpt_encoder.onnx","gpt_step.onnx","sovits.onnx"))if(!files.has(d+"/"+name))throw new IOException("语音参考或模型不完整。");}if(!files.has("shared/bert.onnx")||!files.has("shared/tokenizer.json"))throw new IOException("共用语音模型缺失。");}

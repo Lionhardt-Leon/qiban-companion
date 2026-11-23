@@ -102,6 +102,8 @@ for path in ['src/js/chat_engine.js','src/js/tool_chat_engine.js']:
 for path in ['src/js/chat_engine.js','src/js/tool_chat_engine.js','src/js/roundtable.js']:
     patch(path,"const PLAYER_NAME = '分析员';","const PLAYER_NAME = window.QibanProfile?.userName || '分析员';")
 patch('src/js/roundtable.js', '${speaker.prompt || `你正在扮演 ${speaker.name}。`}', '${window.QibanNative?.available ? window.QibanNative.characterPrompt(speaker) : (speaker.prompt || `你正在扮演 ${speaker.name}。`)}')
+for path in ['src/js/chat_engine.js','src/js/tool_chat_engine.js']:
+    patch(path, '${character.examples}', r'${window.QibanNative?.available ? character.examples.replace(/\{\{\s*(char|user)\s*\}\}/gi, (_, name) => name.toLowerCase() === "char" ? character.name : PLAYER_NAME) : character.examples}')
 patch('src/js/chat_engine.js','  const system = [','  const system = [\n    window.QibanNative?.available ? window.QibanNative.nativeMemory(character,mode) : \'\',')
 patch('src/js/ui.js','async function toggleVoicePlayback(messageId, attachment) {', '''async function toggleVoicePlayback(messageId, attachment) {
   if(window.QibanNative?.available && !window.QibanNative.ttsEnabled() && attachment?.source==='tts-reply'){window.QibanNative.notice('TTS 已关闭。');return;}
@@ -164,7 +166,7 @@ for path in (ROOT/'chat-adapter').glob('*'):
     if path.is_file():site['source/adapters/'+path.name]=path.read_bytes()
 site['source/README.txt']=notice.encode('utf-8')
 manifest={'schema':'qiban-chat-module/1','revision':REVISION,'upstream':UPSTREAM,'license':'GPL-3.0','files':{name:hashlib.sha256(data).hexdigest() for name,data in site.items()}}
-out=ROOT/'dist/Fritia-Chat-Mobile-v6.qchat'
+out=ROOT/'dist/Fritia-Chat-Mobile-v9.qchat'
 out.parent.mkdir(parents=True,exist_ok=True)
 with zipfile.ZipFile(out,'w',compression=zipfile.ZIP_STORED) as z:
     def write(name,data):
@@ -176,5 +178,5 @@ digest=hashlib.sha256(out.read_bytes()).hexdigest()
 native=ROOT/'ios/Sources/ChatModuleLibrary.swift'
 native.write_text(re.sub(r'static let packageSHA256 = "[^"]+"','static let packageSHA256 = "'+digest+'"',native.read_text(encoding='utf-8')),encoding='utf-8')
 report={'file':str(out),'bytes':out.stat().st_size,'sha256':digest,'files':len(site)+1,'upstreamRevision':REVISION,'upstreamZipSHA256':hashlib.sha256(archive.read_bytes()).hexdigest(),'originalAssetsPubliclyUploaded':False,'licenseAndSourceIncluded':True}
-(ROOT/'dist/Chat-Module-v5-manifest.json').write_text(json.dumps(report,ensure_ascii=False,indent=2),encoding='utf-8')
+(ROOT/'dist/Chat-Module-v9-manifest.json').write_text(json.dumps(report,ensure_ascii=False,indent=2),encoding='utf-8')
 print(json.dumps(report,ensure_ascii=True))

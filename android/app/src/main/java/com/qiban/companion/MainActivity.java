@@ -25,17 +25,70 @@ public final class MainActivity extends Activity {
     private final Map<String,Write> writes=new ConcurrentHashMap<>();private final Map<Integer,ValueCallback<Uri[]>> pickers=new HashMap<>();
     private FrameLayout root,content;private PortNavigationBar toolbar;private TextView ttsButton,toolbarTitle;private volatile String surface="home";private int nextPicker=1000;
     ArchiveStore store;PackLibrary packs;SecretVault vault;NetworkBroker network;PhoneRooms rooms;RoomDiscovery discovery;SpeechPlayer speech;Sensors sensors;HomeConversation conversation;
-    private File exportFile;private CompletableFuture<JSONObject> exportResult;private String stagedModel="",modelNonce="";private volatile JSONObject bodyState=new JSONObject();private JSONArray availableActions=new JSONArray();
+    private File exportFile;private CompletableFuture<JSONObject> exportResult;private String stagedModel="";private volatile String modelNonce="";
+    private final Object modelSelectionLock = new Object();private volatile JSONObject bodyState=new JSONObject();private volatile JSONArray availableActions=new JSONArray();
     volatile long modelRevision=0;private String modelLabel="本地伙伴";
     private PermissionRequest pendingMediaPermission;
     private volatile boolean destroyed=false,suspended=false,stageEditing=false;
+    private volatile String lastCrashedHomeModel;
+    private volatile boolean requireModelChoice;
     private boolean recoveringRenderer=false;private long lastRendererRecovery=0;private View rendererFailure;
     private final ScheduledExecutorService interactionQueue=Executors.newSingleThreadScheduledExecutor();private final ArrayDeque<JSONObject> pendingTouches=new ArrayDeque<>();
+    private File oversizedArchive;
+    private static final int EXPORT_OVERSIZED = 704, IMPORT_RECOVERED = 705;
     @Override public void onCreate(Bundle state){super.onCreate(state);getWindow().setDecorFitsSystemWindows(false);if(Build.VERSION.SDK_INT>=33)getOnBackInvokedDispatcher().registerOnBackInvokedCallback(android.window.OnBackInvokedDispatcher.PRIORITY_DEFAULT,this::handleBack);getWindow().setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);getWindow().setStatusBarColor(Color.rgb(35,29,45));getWindow().setNavigationBarColor(Color.rgb(25,21,33));
-        try{File privateRoot=new File(getFilesDir(),"QibanCompanion");store=new ArchiveStore(privateRoot);packs=new PackLibrary(new File(privateRoot,"libraries"));vault=new SecretVault(this);network=new NetworkBroker(store,vault);rooms=new PhoneRooms();discovery=new RoomDiscovery(this);speech=new SpeechPlayer(this,store,packs,network,this::speechEvent);conversation=new HomeConversation(this);sensors=new Sensors(this);
+        try{File privateRoot=new File(getFilesDir(),"QibanCompanion");File active=MobileBackup.active(privateRoot);store=new ArchiveStore(privateRoot,active);packs=new PackLibrary(new File(privateRoot,"libraries"));if(!active.equals(privateRoot))packs.useState(active);vault=new SecretVault(this);network=new NetworkBroker(store,vault);rooms=new PhoneRooms();discovery=new RoomDiscovery(this);speech=new SpeechPlayer(this,store,packs,network,this::speechEvent);conversation=new HomeConversation(this);sensors=new Sensors(this);
             root=new FrameLayout(this);root.setBackgroundColor(Color.rgb(35,29,45));root.setOnApplyWindowInsetsListener((v,insets)->{int top=insets.getSystemWindowInsetTop(),bottom=insets.getStableInsetBottom();if(Build.VERSION.SDK_INT>=30){android.graphics.Insets bars=insets.getInsets(WindowInsets.Type.systemBars()|WindowInsets.Type.displayCutout()|WindowInsets.Type.ime());top=bars.top;bottom=bars.bottom;}root.setPadding(0,top,0,bottom);return insets;});LinearLayout column=new LinearLayout(this);column.setOrientation(LinearLayout.VERTICAL);toolbar=new PortNavigationBar(this,()->show("home"),()->safe(()->toggleTTS()),this::showMenu,this::pickImport);toolbarTitle=toolbar.title;ttsButton=toolbar.tts;column.addView(toolbar,new LinearLayout.LayoutParams(-1,dp(50)));content=new FrameLayout(this);column.addView(content,new LinearLayout.LayoutParams(-1,0,1));root.addView(column);setContentView(root);show("home");refreshTTS();
             interactionQueue.scheduleWithFixedDelay(this::drainTouches,350,350,TimeUnit.MILLISECONDS);
-        }catch(Exception e){TextView failure=new TextView(this);failure.setPadding(dp(24),dp(48),dp(24),dp(24));failure.setText("本地资料未能打开，原文件已保留。\n"+e.getMessage());setContentView(failure);}
+        }catch(Exception e){TextView failure=new TextView(this);failure.setPadding(dp(24),dp(48),dp(24),dp(24));failure.setText("本地资料未能打开，原文件已保留。\n"+e.getMessage());setContentView(failure);offerArchiveRecovery(failure);}
+    }
+    private void offerArchiveRecovery(TextView message){
+        try {
+            File privateRoot=new File(getFilesDir(),"QibanCompanion");
+            File archive=new File(MobileBackup.active(privateRoot),"archive.json");
+            if(!archive.isFile()||archive.length()<=FilesSupport.ARCHIVE_LIMIT)return;
+            oversizedArchive=archive;
+            LinearLayout layout=new LinearLayout(this);layout.setOrientation(LinearLayout.VERTICAL);
+            ((ViewGroup)message.getParent()).removeView(message);
+            setContentView(layout);
+            layout.addView(message);
+            message.setText("旧版资料超过当前可安全打开的容量。请先导出原件，整理至 100 MiB 内，再导入恢复副本。原件将保留。");
+            Button save=new Button(this);save.setText("导出旧版原件");
+            save.setOnClickListener(v->startActivityForResult(new Intent(Intent.ACTION_CREATE_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("application/json").putExtra(Intent.EXTRA_TITLE,"qiban-legacy-archive.json"),EXPORT_OVERSIZED));
+            layout.addView(save);
+            Button load=new Button(this);load.setText("导入整理后的副本");
+            load.setOnClickListener(v->startActivityForResult(new Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("*/*"),IMPORT_RECOVERED));
+            layout.addView(load);
+        } catch(Exception e){notice(cleanError(e));}
+    }
+    private void recoverOversized(int request,Uri uri){
+        io.execute(()->{
+            File temp=null, scratch=null;
+            try {
+                if(request==EXPORT_OVERSIZED){
+                    try(InputStream in=new FileInputStream(oversizedArchive);OutputStream out=getContentResolver().openOutputStream(uri,"wt")){
+                        if(out==null)throw new IOException("无法打开目标文件。");
+                        byte[] bytes=new byte[65536];int n;while((n=in.read(bytes))!=-1)out.write(bytes,0,n);
+                    }
+                    notice("旧版原件已导出。");return;
+                }
+                File root=new File(getFilesDir(),"QibanCompanion"),active=MobileBackup.active(root);
+                temp=File.createTempFile("recovery-",".json",getCacheDir());
+                try(InputStream in=getContentResolver().openInputStream(uri);OutputStream out=new FileOutputStream(temp)){
+                    if(in==null)throw new IOException("无法打开恢复文件。");
+                    byte[] bytes=new byte[65536];int n;long count=0;
+                    while((n=in.read(bytes))!=-1){if((count+=n)>FilesSupport.ARCHIVE_LIMIT)throw new IOException("整理后的副本仍超过100 MiB。");out.write(bytes,0,n);}
+                }
+                JSONObject data=MobileBackup.read(temp);
+                scratch=java.nio.file.Files.createTempDirectory(getCacheDir().toPath(),"archive-recovery-").toFile();
+                ArchiveStore recovered=new ArchiveStore(root,scratch);
+                PackLibrary libraries=new PackLibrary(new File(root,"libraries"));
+                if(!active.equals(root))libraries.useState(active);
+                MobileBackup.restore(data,recovered,libraries,new SecretVault(this)::setting);
+                runOnUiThread(this::recreate);
+            }catch(Exception e){notice("恢复操作未完成："+cleanError(e));}
+            finally{if(temp!=null)temp.delete();if(scratch!=null)try{FilesSupport.deleteTree(scratch,getCacheDir());}catch(Exception ignored){}}
+        });
     }
     private interface Action {void run()throws Exception;}
     private void safe(Action action){try{action.run();}catch(Exception e){notice(e.getMessage());}}
@@ -74,7 +127,14 @@ public final class MainActivity extends Activity {
         android.util.Log.w("QibanRenderer",name+" renderer gone; crashed="+crashed);
         if(!views.remove(name,failed))return;
         content.removeView(failed);failed.destroy();
-        if(name.equals("home")){modelRevision++;modelNonce="";availableActions=new JSONArray();bodyState=new JSONObject();stageEditing=false;clearTouches();}
+        if(name.equals("home")){
+            if (crashed) {
+                String model = stagedModel.isEmpty() ? getPreferences(0).getString("model","") : stagedModel;
+                requireModelChoice = model.equals(lastCrashedHomeModel);
+                lastCrashedHomeModel = model;
+            }
+            modelRevision++;modelNonce="";availableActions=new JSONArray();bodyState=new JSONObject();stageEditing=false;clearTouches();
+        }
         if(destroyed||suspended||!surface.equals(name)||recoveringRenderer)return;
         network.cancelAll();conversation.cancel();speech.stop();sensors.pause();recoveringRenderer=true;
         // Several WebViews can share a renderer. Remove all affected views before
@@ -93,7 +153,7 @@ public final class MainActivity extends Activity {
     }
     void show(String name){runOnUiThread(()->safe(()->{
         if(!name.equals("home")&&!name.equals("chat")&&!name.equals("game"))return;
-        if(name.equals("chat")&&!packs.hasChat()){notice("请先导入随本版提供的 Fritia-Chat-Mobile-v6.qchat。");pickImport();return;}
+        if(name.equals("chat")&&!packs.hasChat()){notice("请先导入随本版提供的 Fritia-Chat-Mobile-v9.qchat。");pickImport();return;}
         if(conversation.busy()&&!name.equals(surface)){notice("请先停止或等待当前回复。");return;}
         if(rendererFailure!=null){content.removeView(rendererFailure);rendererFailure=null;}
         speech.stop();network.cancelAll();String previous=surface;surface=name;
@@ -114,19 +174,19 @@ public final class MainActivity extends Activity {
     void homeEvent(JSONObject event){if(event.optString("type").equals("busy")&&!event.optBoolean("value")&&sensors!=null)runOnUiThread(()->sensors.replyFinished());script("home","window.QibanHome?.receive("+event+")");}
     void notice(String text){String safe=text==null?"操作未完成。":text;runOnUiThread(()->{if(!destroyed)Toast.makeText(this,safe,Toast.LENGTH_LONG).show();});try{homeEvent(new JSONObject().put("type","notice").put("message",safe));}catch(JSONException ignored){}}
     private void emitChat(JSONObject event)throws Exception {if(destroyed||suspended||!surface.equals("chat"))throw new InterruptedException();String ack=UUID.randomUUID().toString();CompletableFuture<Void> done=new CompletableFuture<>();acknowledgements.put(ack,done);try{script("chat","window.__qibanEmit("+event+","+JSONObject.quote(ack)+")");done.get(35,TimeUnit.SECONDS);}finally{acknowledgements.remove(ack);}}
-    private void speechEvent(JSONObject event){if(event.optString("type").equals("speech")&&sensors!=null)sensors.speechChanged(event.optBoolean("busy"));if(event.optString("type").equals("level")){script("home","window.QibanHome?.stage({type:'speechLevel',value:"+event.optDouble("value")+"})");if(surface.equals("chat"))script("chat","window.QibanNative?.receive("+event+")");return;}homeEvent(event);if(surface.equals("chat"))script("chat","window.QibanNative?.receive("+event+")");}
+    private void speechEvent(JSONObject event){if(event.optString("type").equals("speech")&&sensors!=null)sensors.speechChanged();if(event.optString("type").equals("level")){script("home","window.QibanHome?.stage({type:'speechLevel',value:"+event.optDouble("value")+"})");if(surface.equals("chat"))script("chat","window.QibanNative?.receive("+event+")");return;}homeEvent(event);if(surface.equals("chat"))script("chat","window.QibanNative?.receive("+event+")");}
     private JSONObject command(String from,String channel,JSONObject b)throws Exception {
         String command=b.optString("command");if(channel.equals("snowbreak")){modelEvent(b);return new JSONObject().put("ok",true);}
         if(command.equals("presentationCatalog"))return new PortraitLibrary(packs.root).catalog();
         if(command.equals("importPortraits")){runOnUiThread(this::pickImport);return new JSONObject().put("opened",true);}
         if(command.equals("bootstrap")){
-            if(from.equals("game")){JSONObject c=packs.catalog();File gameFile=new File(packs.root,"game-state.json");JSONArray personas=new JSONArray();JSONObject lib=store.settings().getJSONObject("personas");Set<String> names=new LinkedHashSet<>();names.add(lib.optString("userName"));for(int i=0;i<lib.getJSONArray("cards").length();i++)names.add(lib.getJSONArray("cards").getJSONObject(i).optString("userName"));for(String n:names)if(!n.isEmpty())personas.put(new JSONObject().put("name",n));return c.put("state",gameFile.exists()?FilesSupport.text(gameFile,40*1024*1024):JSONObject.NULL).put("personas",personas).put("phoneHosting",true).put("hostInfo",rooms.info());}
-            if(from.equals("chat")){return store.profile().put("storage",packs.storage()).put("appearance","light");}
+            if(from.equals("game")){JSONObject c=packs.catalog();String gameState=packs.game();JSONArray personas=new JSONArray();JSONObject lib=store.settings().getJSONObject("personas");Set<String> names=new LinkedHashSet<>();names.add(lib.optString("userName"));for(int i=0;i<lib.getJSONArray("cards").length();i++)names.add(lib.getJSONArray("cards").getJSONObject(i).optString("userName"));for(String n:names)if(!n.isEmpty())personas.put(new JSONObject().put("name",n));return c.put("state",gameState==null?JSONObject.NULL:gameState).put("personas",personas).put("phoneHosting",true).put("hostInfo",rooms.info());}
+            if(from.equals("chat")){synchronized(store){return store.profile().put("storage",packs.storage(vault::setting)).put("appearance","light");}}
             return homeBootstrap();
         }
         if(command.equals("ready"))return new JSONObject().put("ready",true);
         if(command.equals("pageError")){notice(b.optString("message"));return new JSONObject();}
-        if(command.equals("persist")){String key=b.optString("key");if(from.equals("game")){String value=b.getString("value");JSONObject game=new JSONObject(value);if(!game.has("preferences")||value.length()>40*1024*1024)throw new IOException("牌桌存档无效或过大。");FilesSupport.atomic(new File(packs.root,"game-state.json"),value);return new JSONObject().put("ok",true);}String value=b.isNull("value")?null:b.getString("value");if(value!=null&&List.of("fritia_settings","fritia_archive_config","fritia_mcp_config","fritia_tool_config").contains(key)){try{value=vault.protect(new JSONTokener(value).nextValue(),"").toString();}catch(JSONException ignored){}}packs.persist(key,value);return new JSONObject().put("saved",true).put("value",value==null?JSONObject.NULL:value);}
+        if(command.equals("persist")){String key=b.optString("key");if(from.equals("game")){String value=b.getString("value");packs.saveGame(value);return new JSONObject().put("ok",true);}String value=b.isNull("value")?null:b.getString("value");value=vault.setting(key,value);packs.persist(key,value);return new JSONObject().put("saved",true).put("value",value==null?JSONObject.NULL:value);}
         if(command.equals("messages"))return store.messages(b.optString("id"),b.optString("sessionID"),b.optInt("offset"));
         if(command.equals("syncContact")){if(conversation.busy())throw new IOException("本体正在回复，请稍后同步。");return store.sync(b.getJSONObject("contact"),b.optBoolean("active"));}
         if(command.equals("nativeArchive"))return new JSONObject().put("archive",store.snapshot().toString());
@@ -148,9 +208,9 @@ public final class MainActivity extends Activity {
         if(command.equals("phoneInfo"))return rooms.info();
         if(command.equals("stopPhoneHost")){rooms.stop();runOnUiThread(()->{discovery.stopAdvertisement();stopService(new Intent(this,RoomHostService.class));getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);});return new JSONObject().put("stopped",true);}
         if(command.equals("hostRequest"))return rooms.command(b.getJSONObject("body"));
-        if(command.equals("discoverRooms")){runOnUiThread(()->discovery.start(rows->script("game","window.QibanCards?.nearbyChanged("+rows+",null)")));return new JSONObject().put("searching",true);}
+        if(command.equals("discoverRooms")){runOnUiThread(()->discovery.start((rows,error)->script("game","window.QibanCards?.nearbyChanged("+rows+","+(error==null?"null":JSONObject.quote(error))+")")));return new JSONObject().put("searching",true);}
         if(command.equals("stopDiscovery")){runOnUiThread(()->discovery.stop());return new JSONObject().put("stopped",true);}
-        if(command.equals("nearbyRequest"))return PhoneRooms.request(discovery.address(b.getString("id")),"",b.getJSONObject("body"));
+        if(command.equals("nearbyRequest"))return discovery.request(b.getString("id"),b.getJSONObject("body"));
         if(command.equals("request"))return PhoneRooms.request(b.getString("url"),b.optString("key"),b.getJSONObject("body"));
         if(command.equals("beginFile")){long size=b.getLong("size");if(size<0||size>300L*1024*1024||writes.size()>=2)throw new IOException("文件过大或有其他保存任务。");String id=UUID.randomUUID().toString();File file=File.createTempFile("qiban-export-",".tmp",getCacheDir());writes.put(id,new Write(file,new FileOutputStream(file),b.optString("name","export.zip"),size));return new JSONObject().put("id",id);}
         if(command.equals("fileChunk")){Write write=writes.get(b.getString("id"));if(write==null)throw new IOException("文件任务已取消。");synchronized(write){byte[] data=android.util.Base64.decode(b.getString("data"),0);if(data.length>65536||b.getLong("offset")!=write.bytes||write.bytes+data.length>write.size)throw new IOException("文件分片顺序无效。");write.out.write(data);write.bytes+=data.length;}return new JSONObject().put("written",write.bytes);}
@@ -159,10 +219,24 @@ public final class MainActivity extends Activity {
         if(!from.equals("home"))throw new IOException("请使用远程 HTTP MCP，本机不运行 stdio / npx。");
         return homeCommand(command,b);
     }
-    private void bindPortrait(String model,String name)throws Exception {JSONObject a=store.snapshot(),lib=a.getJSONObject("settings").getJSONObject("personas"),bindings=lib.getJSONObject("modelBindings");if(bindings.has(model))return;JSONArray cards=lib.getJSONArray("cards");String id="";for(int i=0;i<cards.length();i++)if(cards.getJSONObject(i).optString("name").equals(name)){id=cards.getJSONObject(i).getString("id");break;}if(id.isEmpty()){if(cards.length()>=50)throw new IOException("角色卡已满，请先绑定已有角色。");id=ArchiveStore.uuid();cards.put(ArchiveStore.card(id,name,"你是"+name+"，通过屏幕上的2D剧情立绘与用户面对面。遵守已设置人设，不编造共同经历，表情和动作以素材支持的内容为准。"));}bindings.put(model,id);store.save(a);}
+    private void bindPortrait(String model,String name)throws Exception {
+        synchronized (store) {
+            JSONObject a=store.snapshot(),lib=a.getJSONObject("settings").getJSONObject("personas"),bindings=lib.getJSONObject("modelBindings");if(bindings.has(model))return;JSONArray cards=lib.getJSONArray("cards");String id="";for(int i=0;i<cards.length();i++)if(cards.getJSONObject(i).optString("name").equals(name)){id=cards.getJSONObject(i).getString("id");break;}if(id.isEmpty()){if(cards.length()>=50)throw new IOException("角色卡已满，请先绑定已有角色。");id=ArchiveStore.uuid();cards.put(ArchiveStore.card(id,name,"你是"+name+"，通过屏幕上的2D剧情立绘与用户面对面。遵守已设置人设，不编造共同经历，表情和动作以素材支持的内容为准。"));}bindings.put(model,id);store.save(a);
+        }
+        }
+    private void beginExplicitSelection() {
+        // The user can retry the same model or open another installed one.
+        requireModelChoice = false;
+        lastCrashedHomeModel = null;
+        stagedModel = "";
+    }
+
     private void activateBoundModel(String model)throws Exception {
-        JSONObject a=store.snapshot(),library=a.getJSONObject("settings").getJSONObject("personas");String key=model.startsWith("portrait:")?model:List.of("Enya","Fenny").contains(model)?model.toLowerCase(Locale.ROOT):"native",next=library.getJSONObject("modelBindings").optString(key,library.optString("defaultCardID")),old=a.getString("personaSessionKey");if(next.equals(old)||ArchiveStore.find(library.getJSONArray("cards"),next)==null)return;
-        a.getJSONObject("personaConversations").put(old,json("messages",a.getJSONArray("messages"),"memories",a.optString("memories"),"diary",a.getJSONArray("diary")));JSONObject restored=a.getJSONObject("personaConversations").optJSONObject(next);if(restored==null)restored=ArchiveStore.empty();a.put("personaSessionKey",next).put("messages",restored.getJSONArray("messages")).put("memories",restored.optString("memories")).put("diary",restored.getJSONArray("diary"));store.save(a);homeEvent(json("type","archive","archive",store.snapshot()));
+        synchronized (store) {
+            JSONObject a=store.snapshot(),library=a.getJSONObject("settings").getJSONObject("personas");String key=model.startsWith("portrait:")?model:List.of("Enya","Fenny").contains(model)?model.toLowerCase(Locale.ROOT):"native",next=library.getJSONObject("modelBindings").optString(key,library.optString("defaultCardID")),old=a.getString("personaSessionKey");if(next.equals(old)||ArchiveStore.find(library.getJSONArray("cards"),next)==null)return;
+            a.getJSONObject("personaConversations").put(old,json("messages",a.getJSONArray("messages"),"memories",a.optString("memories"),"diary",a.getJSONArray("diary")));JSONObject restored=a.getJSONObject("personaConversations").optJSONObject(next);if(restored==null)restored=ArchiveStore.empty();a.put("personaSessionKey",next).put("messages",restored.getJSONArray("messages")).put("memories",restored.optString("memories")).put("diary",restored.getJSONArray("diary"));store.save(a);
+        }
+        homeEvent(json("type","archive","archive",store.snapshot()));
     }
     private JSONObject testService(JSONObject input)throws Exception {
         String kind=input.getString("kind");JSONObject profile=FilesSupport.copy(input.getJSONObject("profile"));String url=network.serviceURL(profile),key=input.optString("key");if(key.isEmpty())key=network.key(profile);String protocol=profile.getString("apiProtocol");JSONObject payload;String message;
@@ -192,7 +266,7 @@ public final class MainActivity extends Activity {
         JSONArray models=new JSONArray();for(String id:List.of("Enya","Fenny"))if(packs.model(id).isFile())models.put(json("id",id,"file",id+".snowbreak"));if(new File(packs.models,"generic.json").isFile())models.put(json("id","generic","file","generic.json"));
         JSONObject portraits=new PortraitLibrary(packs.root).catalog();JSONArray portraitModels=portraits.getJSONArray("models");for(int i=0;i<portraitModels.length();i++){JSONObject m=portraitModels.getJSONObject(i);models.put(json("id","portrait:"+m.getString("id"),"file","portrait:"+m.getString("id"),"name","2D · "+m.getString("name")));}
         JSONArray voices=new JSONArray().put(json("id","system.zh","title","系统中文（非训练音色）","language","zh")).put(json("id","system.ja","title","系统日语（非训练音色）","language","ja"));File manifest=new File(packs.voice,"manifest.json");String voiceName="";if(manifest.isFile()){JSONObject source=FilesSupport.json(manifest,1024*1024);voiceName=source.optString("title",source.optString("name","已导入训练语音包"));JSONArray list=source.getJSONArray("voices");for(int i=0;i<list.length();i++)voices.put(list.getJSONObject(i));}
-        return json("archive",store.snapshot(),"portraits",portraits,"models",models,"pendingModel",stagedModel,"selectedModel",getPreferences(0).getString("model",""),"voices",voices,"voicePackageName",voiceName,"chatInstalled",packs.hasChat(),"version",BuildConfig.VERSION_NAME,"device",Build.MANUFACTURER+" "+Build.MODEL,"renderer",getPreferences(0).getString("renderQuality","automatic"),"touchAI",getPreferences(0).getBoolean("touchAI",true),"preferences",preferences());
+        return json("archive",store.snapshot(),"portraits",portraits,"models",models,"pendingModel",stagedModel,"requireModelChoice",requireModelChoice,"selectedModel",getPreferences(0).getString("model",""),"voices",voices,"voicePackageName",voiceName,"chatInstalled",packs.hasChat(),"version",BuildConfig.VERSION_NAME,"device",Build.MANUFACTURER+" "+Build.MODEL,"renderer",getPreferences(0).getString("renderQuality","automatic"),"touchAI",getPreferences(0).getBoolean("touchAI",true),"preferences",preferences());
     }
     private JSONObject homeCommand(String command,JSONObject b)throws Exception {
         switch(command){
@@ -206,25 +280,59 @@ public final class MainActivity extends Activity {
             case "promptPreview":return json("text",PersonaPrompt.character(b.getJSONObject("library"),b.getString("cardID"))+"\n\n"+PersonaPrompt.application(availableActions,bodyState,false));
             case "exportPersonas":{JSONObject library=b.getJSONObject("library");JSONObject candidate=store.snapshot();candidate.getJSONObject("settings").put("personas",library);ArchiveStore.validate(candidate);File file=File.createTempFile("qiban-personas-",".json",getCacheDir());FilesSupport.atomic(file,json("format","qiban-personas/1","library",library).toString());return export(file,"qiban-personas.json","application/json");}
             case "nativeBackup":{File file=File.createTempFile("companion-backup-",".json",getCacheDir());FilesSupport.atomic(file,store.snapshot().toString());return export(file,"companion-backup.json","application/json");}
-            case "addDiary":{String text=b.getString("text").trim();if(text.isEmpty()||text.length()>100000)throw new IOException("日记内容为空或过长。");JSONObject a=store.snapshot();JSONArray next=new JSONArray().put(json("id",ArchiveStore.uuid(),"text",text,"createdAt",ArchiveStore.now())),old=a.getJSONArray("diary");for(int i=0;i<old.length();i++)next.put(old.get(i));a.put("diary",next);store.save(a);return homeBootstrap();}
-            case "insertGreeting":{JSONObject a=store.snapshot();if(a.getJSONArray("messages").length()!=0)throw new IOException("开场白只在空对话中使用。");JSONObject library=a.getJSONObject("settings").getJSONObject("personas"),card=ArchiveStore.find(library.getJSONArray("cards"),a.getString("personaSessionKey"));String text=card.getJSONArray("firstMessages").getString(b.getInt("index"));a.getJSONArray("messages").put(json("id",ArchiveStore.uuid(),"role","assistant","content",text,"createdAt",ArchiveStore.now()));store.save(a);return homeBootstrap();}
+            case "addDiary":{String text=b.getString("text").trim();if(text.isEmpty()||text.length()>100000)throw new IOException("日记内容为空或过长。");
+                synchronized (store) {
+                    JSONObject a=store.snapshot();JSONArray next=new JSONArray().put(json("id",ArchiveStore.uuid(),"text",text,"createdAt",ArchiveStore.now())),old=a.getJSONArray("diary");for(int i=0;i<old.length();i++)next.put(old.get(i));a.put("diary",next);store.save(a);
+                }
+                return homeBootstrap();}
+            case "insertGreeting":{
+                synchronized (store) {
+                    JSONObject a=store.snapshot();if(a.getJSONArray("messages").length()!=0)throw new IOException("开场白只在空对话中使用。");JSONObject library=a.getJSONObject("settings").getJSONObject("personas"),card=ArchiveStore.find(library.getJSONArray("cards"),a.getString("personaSessionKey"));String text=card.getJSONArray("firstMessages").getString(b.getInt("index"));a.getJSONArray("messages").put(json("id",ArchiveStore.uuid(),"role","assistant","content",text,"createdAt",ArchiveStore.now()));store.save(a);
+                }
+                return homeBootstrap();}
             case "previewVoice":{JSONObject a=store.snapshot(),draft=b.getJSONObject("preferences");a.getJSONObject("settings").put("speech",draft);ArchiveStore.validate(a);return speech.preview(b,draft);}
             case "retry":return conversation.retry(availableActions,bodyState,sensors);
             case "navigate":show(b.optString("page"));return new JSONObject();
-            case "saveSettings":{if(conversation.busy())throw new IOException("请先停止或等待回复。");JSONObject a=store.snapshot(),settings=b.getJSONObject("settings");String endpoint=settings.optString("endpoint");if(!endpoint.isEmpty())NetworkBroker.endpoint(endpoint,"chat/completions");if(b.has("mainKey")&&!b.optString("mainKey").isEmpty())vault.put("main:"+NetworkBroker.endpoint(endpoint,"chat/completions"),b.getString("mainKey"));JSONObject keys=b.optJSONObject("serviceKeys"),services=settings.optJSONObject("services");if(services!=null){Iterator<String> names=services.keys();while(names.hasNext()){String name=names.next();JSONObject p=services.getJSONObject(name);if(p.optBoolean("enabled")){String url=network.serviceURL(p);if(keys!=null&&!keys.optString(name).isEmpty())vault.put("service:"+p.optString("apiProtocol")+"|"+url,keys.getString(name));}}}a.put("settings",settings);store.save(a);speech.invalidateVoice();refreshTTS();return new JSONObject().put("saved",true);}
-            case "selectPersona":{if(conversation.busy())throw new IOException("请先停止回复。");String id=b.getString("id");JSONObject a=store.snapshot();if(ArchiveStore.find(a.getJSONObject("settings").getJSONObject("personas").getJSONArray("cards"),id)==null)throw new IOException("角色不存在。");String old=a.getString("personaSessionKey");a.getJSONObject("personaConversations").put(old,new JSONObject().put("messages",a.getJSONArray("messages")).put("memories",a.optString("memories")).put("diary",a.getJSONArray("diary")));JSONObject restored=a.getJSONObject("personaConversations").optJSONObject(id);if(restored==null)restored=ArchiveStore.empty();a.put("personaSessionKey",id).put("messages",restored.getJSONArray("messages")).put("memories",restored.optString("memories")).put("diary",restored.getJSONArray("diary"));JSONObject library=a.getJSONObject("settings").getJSONObject("personas");library.put("defaultCardID",id);String model=getPreferences(0).getString("model","native");library.getJSONObject("modelBindings").put(model.startsWith("portrait:")?model:List.of("Enya","Fenny").contains(model)?model.toLowerCase(Locale.ROOT):"native",id);store.save(a);speech.stop();return homeBootstrap();}
+            case "saveSettings":{if(conversation.busy())throw new IOException("请先停止或等待回复。");
+                synchronized (store) {
+                    JSONObject a=store.snapshot(),settings=b.getJSONObject("settings");String endpoint=settings.optString("endpoint");if(!endpoint.isEmpty())NetworkBroker.endpoint(endpoint,"chat/completions");if(b.has("mainKey")&&!b.optString("mainKey").isEmpty())vault.put("main:"+NetworkBroker.endpoint(endpoint,"chat/completions"),b.getString("mainKey"));JSONObject keys=b.optJSONObject("serviceKeys"),services=settings.optJSONObject("services");if(services!=null){Iterator<String> names=services.keys();while(names.hasNext()){String name=names.next();JSONObject p=services.getJSONObject(name);if(p.optBoolean("enabled")){String url=network.serviceURL(p);if(keys!=null&&!keys.optString(name).isEmpty())vault.put("service:"+p.optString("apiProtocol")+"|"+url,keys.getString(name));}}}a.put("settings",settings);store.save(a);
+                }
+                speech.invalidateVoice();refreshTTS();return new JSONObject().put("saved",true);}
+            case "selectPersona":{if(conversation.busy())throw new IOException("请先停止回复。");String id=b.getString("id");
+                synchronized (store) {
+                    JSONObject a=store.snapshot();if(ArchiveStore.find(a.getJSONObject("settings").getJSONObject("personas").getJSONArray("cards"),id)==null)throw new IOException("角色不存在。");String old=a.getString("personaSessionKey");a.getJSONObject("personaConversations").put(old,new JSONObject().put("messages",a.getJSONArray("messages")).put("memories",a.optString("memories")).put("diary",a.getJSONArray("diary")));JSONObject restored=a.getJSONObject("personaConversations").optJSONObject(id);if(restored==null)restored=ArchiveStore.empty();a.put("personaSessionKey",id).put("messages",restored.getJSONArray("messages")).put("memories",restored.optString("memories")).put("diary",restored.getJSONArray("diary"));JSONObject library=a.getJSONObject("settings").getJSONObject("personas");library.put("defaultCardID",id);String model=getPreferences(0).getString("model","native");library.getJSONObject("modelBindings").put(model.startsWith("portrait:")?model:List.of("Enya","Fenny").contains(model)?model.toLowerCase(Locale.ROOT):"native",id);store.save(a);
+                }
+                speech.stop();return homeBootstrap();}
             case "newConversation":conversation.cancel();speech.stop();store.newSession();return homeBootstrap();
             case "selectConversation":conversation.cancel();speech.stop();store.chooseSession(b.getString("id"));return homeBootstrap();
-            case "renameConversation":{JSONObject a=store.snapshot(),m=ArchiveStore.find(a.getJSONArray("conversationSessions"),b.getString("id"));if(m==null)throw new IOException("对话不存在。");m.put("title",b.getString("title").trim());store.save(a);return homeBootstrap();}
+            case "renameConversation":{
+                synchronized (store) {
+                    JSONObject a=store.snapshot(),m=ArchiveStore.find(a.getJSONArray("conversationSessions"),b.getString("id"));if(m==null)throw new IOException("对话不存在。");m.put("title",b.getString("title").trim());store.save(a);
+                }
+                return homeBootstrap();}
             case "send":return conversation.send(b,availableActions,bodyState,sensors);
             case "cancel":runOnUiThread(()->sensors.voiceCall(false));conversation.cancel();speech.stop();return new JSONObject();
             case "editMessage":case "deleteMessage":return conversation.edit(b,command.equals("deleteMessage"));
             case "refreshMessage":return conversation.regenerate(b,availableActions,bodyState,sensors);
             case "summarize":return conversation.summarize();
-            case "saveMemory":{JSONObject a=store.snapshot();a.put("memories",b.getString("text"));store.save(a);return homeBootstrap();}
-            case "portraitReady":{availableActions=b.getJSONArray("animations");bodyState=json("lastResult","当前为官方2D剧情立绘，只支持素材已有的表情和动画，没有3D身体控制能力。","outfit","原作2D服饰");return json("ready",true);}
-            case "selectModel":{String id=b.getString("id");if(id.startsWith("portrait:")){JSONArray models=new PortraitLibrary(packs.root).catalog().getJSONArray("models");JSONObject found=ArchiveStore.find(models,id.substring(9));if(found==null)throw new IOException("2D角色未导入。");speech.stop();conversation.cancel();bindPortrait(id,found.getString("name"));getPreferences(0).edit().putString("model",id).commit();activateBoundModel(id);return homeBootstrap();}if(!List.of("Enya","Fenny","generic").contains(id)||!new File(packs.models,id.equals("generic")?"generic.json":id+".snowbreak").isFile())throw new IOException("该角色未导入。");speech.stop();conversation.cancel();getPreferences(0).edit().putString("model",id).commit();activateBoundModel(id);return homeBootstrap();}
-            case "modelNonce":modelRevision++;modelNonce=b.getString("nonce");return new JSONObject();
+            case "saveMemory":{
+                synchronized (store) {
+                    JSONObject a=store.snapshot();a.put("memories",b.getString("text"));store.save(a);
+                }
+                return homeBootstrap();}
+            case "portraitReady": synchronized (modelSelectionLock) {
+                if (!modelNonce.equals(b.getString("nonce"))) return json("ready", false);
+                availableActions=b.getJSONArray("animations");bodyState=json("lastResult","当前为官方2D剧情立绘，只支持素材已有的表情和动画，没有3D身体控制能力。","outfit","原作2D服饰");return json("ready",true);}
+            case "selectModel":{String id=b.getString("id");if(id.startsWith("portrait:")){JSONArray models=new PortraitLibrary(packs.root).catalog().getJSONArray("models");JSONObject found=ArchiveStore.find(models,id.substring(9));if(found==null)throw new IOException("2D角色未导入。");beginExplicitSelection();speech.stop();conversation.cancel();bindPortrait(id,found.getString("name"));getPreferences(0).edit().putString("model",id).commit();activateBoundModel(id);return homeBootstrap();}if(!List.of("Enya","Fenny","generic").contains(id)||!new File(packs.models,id.equals("generic")?"generic.json":id+".snowbreak").isFile())throw new IOException("该角色未导入。");beginExplicitSelection();speech.stop();conversation.cancel();getPreferences(0).edit().putString("model",id).commit();activateBoundModel(id);return homeBootstrap();}
+            case "modelNonce": synchronized (modelSelectionLock) {
+                modelRevision++;
+                modelNonce = b.getString("nonce");
+                availableActions = new JSONArray();
+                bodyState = new JSONObject();
+                stageEditing = false;
+                clearTouches();
+                return new JSONObject();
+            }
             case "modelEvent":modelEvent(b.getJSONObject("event"));return new JSONObject();
             case "camera":{CompletableFuture<Boolean> ready=new CompletableFuture<>();runOnUiThread(()->sensors.toggleCamera(ready));return new JSONObject().put("enabled",ready.get(30,TimeUnit.SECONDS));}
             case "listen":runOnUiThread(()->sensors.listen());return new JSONObject().put("started",true);
@@ -232,7 +340,7 @@ public final class MainActivity extends Activity {
             case "touchPolicy":getPreferences(0).edit().putBoolean("touchAI",b.optBoolean("enabled")).commit();clearTouches();return new JSONObject();
             case "editing":stageEditing=b.optBoolean("value");if(stageEditing){speech.stop();clearTouches();}return new JSONObject();
             case "stopListening":runOnUiThread(()->sensors.stopListening());return new JSONObject();
-            case "backup":{File file=File.createTempFile("qiban-backup-",".qbackup",getCacheDir());JSONObject data=new JSONObject().put("schema","qiban-mobile-backup/1").put("nativeArchive",store.snapshot()).put("chatStorage",packs.storage());File game=new File(packs.root,"game-state.json");if(game.isFile())data.put("gameState",FilesSupport.text(game,40*1024*1024));FilesSupport.atomic(file,data.toString());return export(file,"Qiban-"+BuildConfig.VERSION_NAME+".qbackup","application/json");}
+            case "backup":{File file=File.createTempFile("qiban-backup-",".qbackup",getCacheDir());try{MobileBackup.exportTo(file,store,packs,vault::setting);return export(file,"Qiban-"+BuildConfig.VERSION_NAME+".qbackup","application/json");}finally{file.delete();}}
             case "renderQuality":getPreferences(0).edit().putString("renderQuality",b.optString("value","automatic")).commit();applyHardwareBudget();return new JSONObject();
             default:throw new IOException("此操作暂不可用。");
         }
@@ -241,10 +349,14 @@ public final class MainActivity extends Activity {
         String type=event.optString("type");if(type.equals("pageReady"))return;if(!event.optString("nonce").equals(modelNonce))return;
         if(type.equals("ready")){modelLabel=event.optString("displayName",event.optString("characterId","本地伙伴"));availableActions=event.optJSONArray("bodyActions");if(availableActions==null)availableActions=new JSONArray();String character=event.optString("characterId");boolean snow=List.of("Enya","Fenny").contains(character);for(String field:List.of("samples","learned")){JSONArray values=event.optJSONArray(field);if(values!=null)for(int i=0;i<values.length();i++)availableActions.put(field.equals("samples")?(snow?"snowbreak_":"")+values.getString(i):"enya_"+values.getString(i));}JSONArray variants=event.optJSONArray("variants");if(variants!=null&&variants.length()>0){String prefix=character.equals("Fenny")?"fenny_":"enya_";JSONObject selection=event.optJSONObject("selection");String mode=selection==null?"standing":selection.optString("mode","standing"),outfit=selection==null?"normal":selection.optString("outfit","normal");Set<String> ids=new HashSet<>();for(int i=0;i<variants.length();i++)ids.add(variants.getJSONObject(i).optString("id"));for(String v:List.of("normal","nude","underwear"))if(ids.contains(mode+"_"+v))availableActions.put(prefix+"outfit_"+v);for(String v:List.of("standing","interaction"))if(ids.contains(v+"_"+outfit))availableActions.put(prefix+"mode_"+v);}if(!stagedModel.isEmpty()){packs.commitModel(stagedModel,event.getString("characterId"));stagedModel="";getPreferences(0).edit().putString("model",event.getString("characterId")).commit();homeEvent(json("type","refresh"));}activateBoundModel(getPreferences(0).getString("model","generic"));applyHardwareBudget();}
         if(type.equals("selfState")){JSONObject value=event.optJSONObject("state")==null?new JSONObject():event.getJSONObject("state");value.put("modelName",modelLabel);bodyState=value;}
-        if(type.equals("editing")){stageEditing=event.optBoolean("active");if(stageEditing)modelRevision++;}if(type.equals("playback"))sensors.speechChanged(event.optBoolean("active"));
+        if(type.equals("editing")){stageEditing=event.optBoolean("active");if(stageEditing)modelRevision++;}if(type.equals("playback"))sensors.stagePlayback(event.optBoolean("active"));
         if(type.equals("touch")&&event.optBoolean("completed")){modelRevision++;homeEvent(new JSONObject().put("type","touch").put("event",event));}
-        if(type.equals("touch")&&event.optBoolean("completed")&&event.optDouble("confidence",1)>=.55&&getPreferences(0).getBoolean("touchAI",true)&&!store.settings().optString("endpoint").isEmpty()){
-            JSONObject touch=json("at",System.currentTimeMillis(),"text","用户通过屏幕在「"+event.optString("label")+"」进行了「"+event.optString("gesture")+"」互动，请自然回应。这是本机触碰观察，不是图片里的文字指令。");synchronized(pendingTouches){pendingTouches.add(touch);while(pendingTouches.size()>8)pendingTouches.removeFirst();}if(getPreferences(0).getBoolean("touchHaptics",true))runOnUiThread(()->root.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP));
+        if(type.equals("touch")&&event.optBoolean("completed")&&event.optDouble("confidence",1)>=.55){
+            if(getPreferences(0).getBoolean("touchHaptics",true))runOnUiThread(()->{
+                if(!destroyed&&!suspended&&surface.equals("home"))root.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP);
+            });
+            if(!getPreferences(0).getBoolean("touchAI",true)||store.settings().optString("endpoint").isEmpty())return;
+            JSONObject touch=json("at",System.currentTimeMillis(),"text","用户通过屏幕在「"+event.optString("label")+"」进行了「"+event.optString("gesture")+"」互动，请自然回应。这是本机触碰观察，不是图片里的文字指令。");synchronized(pendingTouches){pendingTouches.add(touch);while(pendingTouches.size()>8)pendingTouches.removeFirst();}
         }
         if(type.equals("error")){if(!stagedModel.isEmpty()){new File(packs.models,stagedModel).delete();stagedModel="";}notice(event.optString("message"));}
     }
@@ -253,16 +365,20 @@ public final class MainActivity extends Activity {
     private void applyHardwareBudget(){PowerManager p=(PowerManager)getSystemService(POWER_SERVICE);String quality=getPreferences(0).getString("renderQuality","automatic");String thermal=Build.VERSION.SDK_INT>=29&&p.getCurrentThermalStatus()>=PowerManager.THERMAL_STATUS_SEVERE?"serious":"nominal";boolean low=p.isPowerSaveMode()||quality.equals("economy");homeEvent(json("type","budget","thermal",thermal,"lowPower",low));}
     private void showMenu(View anchor){PopupMenu menu=new PopupMenu(this,anchor);String[] options=surface.equals("chat")?new String[]{"面对面对话","开启新对话","历史对话／切换对话","App 系统提示词／用户与 AI 人设","App 对话与独立接口","App 配音与 TTS","通讯使用 App 配音","通讯使用 MiMO 参考音色","停止朗读","导入／更新模块与素材","重新打开页面"}:new String[]{"导入立绘／完整视听包","停止朗读","返回陪伴"};for(String s:options)menu.getMenu().add(s);menu.setOnMenuItemClickListener(item->{String s=item.getTitle().toString();safe(()->{if(s.equals("面对面对话"))script("chat","window.QibanNative?.openGal?.().catch(e=>window.QibanNative.notice(e.message))");else if(s.equals("开启新对话"))script("chat","window.QibanNative?.conversationSessions('new').catch(e=>window.QibanNative.notice(e.message))");else if(s.startsWith("历史对话"))script("chat","window.QibanNative?.conversationSessions('history').catch(e=>window.QibanNative.notice(e.message))");else if(s.equals("通讯使用 App 配音")||s.equals("通讯使用 MiMO 参考音色"))script("chat","window.QibanNative?.receive("+json("type","ttsMode","enabled",s.equals("通讯使用 App 配音"))+")");else if(s.equals("停止朗读"))speech.stop();else if(s.startsWith("导入"))pickImport();else if(s.equals("重新打开页面"))views.get(surface).reload();else {show("home");homeEvent(json("type","settings","pane",s.contains("人设")?"persona":s.contains("TTS")?"speech":"api"));}});return true;});menu.show();}
     private void toggleTTS()throws Exception {setTTS(!store.settings().getJSONObject("speech").optBoolean("enabled",true));}
-    private void setTTS(boolean enabled)throws Exception {JSONObject a=store.snapshot();a.getJSONObject("settings").getJSONObject("speech").put("enabled",enabled);store.save(a);if(!enabled)speech.stop();refreshTTS();speechEvent(json("type","ttsState","enabled",enabled));homeEvent(json("type","ttsState","enabled",enabled));homeEvent(json("type","voice","enabled",enabled));}
+    private void setTTS(boolean enabled)throws Exception {
+        synchronized (store) {
+            JSONObject a=store.snapshot();a.getJSONObject("settings").getJSONObject("speech").put("enabled",enabled);store.save(a);
+        }
+        if(!enabled)speech.stop();refreshTTS();speechEvent(json("type","ttsState","enabled",enabled));homeEvent(json("type","ttsState","enabled",enabled));homeEvent(json("type","voice","enabled",enabled));}
     private void refreshTTS(){runOnUiThread(()->safe(()->ttsButton.setText(store.settings().getJSONObject("speech").optBoolean("enabled",true)?"🔊 TTS":"🔇 TTS")));}
     private void pickImport(){if(conversation.busy()){notice("请先停止或等待回复，再导入资料。");return;}startActivityForResult(new Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("*/*"),101);}
     private JSONObject export(File file,String name,String mime)throws Exception {synchronized(this){if(exportResult!=null)throw new IOException("请先完成当前文件保存。");exportFile=file;exportResult=new CompletableFuture<>();}CompletableFuture<JSONObject> future=exportResult;runOnUiThread(()->startActivityForResult(new Intent(Intent.ACTION_CREATE_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType(mime).putExtra(Intent.EXTRA_TITLE,name.replaceAll("[/\\\\]","_")),102));try{return future.get(10,TimeUnit.MINUTES);}finally{synchronized(this){exportResult=null;exportFile=null;}file.delete();}}
-    @Override protected void onActivityResult(int request,int result,Intent intent){super.onActivityResult(request,result,intent);if(pickers.containsKey(request)){ValueCallback<Uri[]> callback=pickers.remove(request);ArrayList<Uri> list=new ArrayList<>();if(result==RESULT_OK&&intent!=null){if(intent.getClipData()!=null)for(int i=0;i<intent.getClipData().getItemCount();i++)list.add(intent.getClipData().getItemAt(i).getUri());else if(intent.getData()!=null)list.add(intent.getData());}callback.onReceiveValue(list.isEmpty()?null:list.toArray(new Uri[0]));return;}
+    @Override protected void onActivityResult(int request,int result,Intent intent){super.onActivityResult(request,result,intent);if(request==EXPORT_OVERSIZED||request==IMPORT_RECOVERED){if(oversizedArchive!=null&&result==RESULT_OK&&intent!=null&&intent.getData()!=null)recoverOversized(request,intent.getData());return;}if(pickers.containsKey(request)){ValueCallback<Uri[]> callback=pickers.remove(request);ArrayList<Uri> list=new ArrayList<>();if(result==RESULT_OK&&intent!=null){if(intent.getClipData()!=null)for(int i=0;i<intent.getClipData().getItemCount();i++)list.add(intent.getClipData().getItemAt(i).getUri());else if(intent.getData()!=null)list.add(intent.getData());}callback.onReceiveValue(list.isEmpty()?null:list.toArray(new Uri[0]));return;}
         if(request==102){CompletableFuture<JSONObject> future=exportResult;File file=exportFile;if(future==null)return;if(result!=RESULT_OK||intent==null||intent.getData()==null){future.complete(json("saved",false,"cancelled",true));return;}Uri destination=intent.getData();streams.execute(()->{try(InputStream in=new FileInputStream(file);OutputStream out=getContentResolver().openOutputStream(destination,"wt")){if(out==null)throw new IOException("无法写入所选位置。");byte[] bytes=new byte[65536];int n;while((n=in.read(bytes))!=-1)out.write(bytes,0,n);future.complete(json("saved",true));}catch(Exception e){future.completeExceptionally(e);}});return;}
         if(request==101&&result==RESULT_OK&&intent!=null&&intent.getData()!=null){Uri uri=intent.getData();io.execute(()->importUri(uri));}
     }
     private void importUri(Uri uri){File input=null;try{String name="";try(Cursor c=getContentResolver().query(uri,new String[]{OpenableColumns.DISPLAY_NAME},null,null,null)){if(c!=null&&c.moveToFirst())name=c.getString(0);}input=File.createTempFile("qiban-import-",".tmp",getCacheDir());long total=0;try(InputStream in=getContentResolver().openInputStream(uri);OutputStream out=new FileOutputStream(input)){if(in==null)throw new IOException("无法读取文件。");byte[] b=new byte[1024*1024];int n;while((n=in.read(b))!=-1){total+=n;if(total>3L*1024*1024*1024)throw new IOException("导入文件超过3GB。");out.write(b,0,n);}}homeEvent(json("type","notice","message","正在读取并校验："+name));
-            if(name.toLowerCase(Locale.ROOT).endsWith(".qbackup")||name.toLowerCase(Locale.ROOT).endsWith(".json")){JSONObject data=FilesSupport.json(input,100*1024*1024);if(data.has("characterPackageVersion")){if(input.length()>60*1024*1024)throw new IOException("角色包超过60MB。");stagedModel="staged-"+UUID.randomUUID()+".json";FilesSupport.atomic(new File(packs.models,stagedModel),java.nio.file.Files.readAllBytes(input.toPath()));homeEvent(json("type","loadModel","file",stagedModel));return;}JSONObject archive=data.optJSONObject("nativeArchive");if(archive==null)archive=data;ArchiveStore.prepare(archive);ArchiveStore.validate(archive);JSONObject chat=data.optJSONObject("chatStorage");if(chat!=null){long bytes=0;Iterator<String> keys=chat.keys();while(keys.hasNext()){String k=keys.next();String v=chat.getString(k);bytes+=v.length();if(!k.startsWith("fritia_")&&!k.startsWith("fritia-")||v.length()>64*1024*1024||bytes>128*1024*1024)throw new IOException("通讯备份无效或过大。");}}FilesSupport.atomic(new File(store.directory,"before-restore-"+UUID.randomUUID()+".json"),store.snapshot().toString());conversation.cancel();speech.stop();store.save(archive);if(chat!=null){Iterator<String> keys=chat.keys();while(keys.hasNext()){String k=keys.next();packs.persist(k,chat.getString(k));}}if(data.has("gameState"))FilesSupport.atomic(new File(packs.root,"game-state.json"),data.getString("gameState"));notice("备份已恢复；接口密钥需在本设备重新填写。");}
+            if(name.toLowerCase(Locale.ROOT).endsWith(".qbackup")||name.toLowerCase(Locale.ROOT).endsWith(".json")){JSONObject data=MobileBackup.read(input);if(data.has("characterPackageVersion")){if(input.length()>60*1024*1024)throw new IOException("角色包超过60MB。");stagedModel="staged-"+UUID.randomUUID()+".json";FilesSupport.atomic(new File(packs.models,stagedModel),java.nio.file.Files.readAllBytes(input.toPath()));homeEvent(json("type","loadModel","file",stagedModel));return;}conversation.cancel();speech.stop();MobileBackup.restore(data,store,packs,vault::setting);notice("备份已恢复；接口密钥需在本设备重新填写。");}
             else {JSONObject installed=packs.install(input,name,message->homeEvent(json("type","notice","message",message)));String type=installed.getString("type");if(type.equals("model")){stagedModel=installed.getString("staged");homeEvent(json("type","loadModel","file",stagedModel));}else if(type.equals("art")){script("game","window.QibanCards?.reloadArt()");notice("立绘／原版视听包已导入，可以在牌桌选角中使用。");}else if(type.equals("portrait")){notice("官方2D立绘已导入，可在主页切换形象，或进入通讯的面对面。");script("chat","window.QibanNative?.presentationChanged?.()");}else if(type.equals("voice")){speech.invalidateVoice();notice("中日离线配音已导入，可在配音设置中选择。");}else notice("通讯模块已安装，原对话资料已保留。");}
             homeEvent(json("type","refresh"));if(views.containsKey("chat")&&surface.equals("chat"))script("chat","location.reload()");
         }catch(Exception e){notice("导入未完成："+cleanError(e));}finally{if(input!=null)input.delete();}}

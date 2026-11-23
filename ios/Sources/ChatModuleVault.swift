@@ -9,7 +9,12 @@ enum ChatModuleVault {
         [kSecClass as String:kSecClassGenericPassword,kSecAttrService as String:AppIdentity.keychainService,kSecAttrAccount as String:"chat-module-"+id]
     }
     private static func token(_ value:String,base:String) throws -> String {
-        guard !value.isEmpty,!value.hasPrefix(prefix),base.hasPrefix("http"),URL(string:base)?.host != "qiban.app" else{return value}
+        guard !value.isEmpty,!value.hasPrefix(prefix) else{return value}
+        guard let endpoint=URLComponents(string:base), let host=endpoint.host, !host.isEmpty,
+              ["http","https"].contains(endpoint.scheme?.lowercased() ?? "") else {
+            throw CompanionError.message("保存通讯凭据需要有效的服务地址。")
+        }
+        if host=="qiban.app", value=="qiban-app-managed" {return value}
         let id=SHA256.hash(data:Data((base+"\n"+value).utf8)).map{String(format:"%02x",$0)}.joined()
         let data=try JSONEncoder().encode(Secret(base:base,value:value)),attributes:[String:Any]=[kSecValueData as String:data,kSecAttrAccessible as String:kSecAttrAccessibleWhenUnlockedThisDeviceOnly]
         let q=query(id),updated=SecItemUpdate(q as CFDictionary,attributes as CFDictionary)
@@ -18,21 +23,24 @@ enum ChatModuleVault {
         return prefix+id
     }
     static func protect(_ value:String,key:String) throws -> String {
-        guard ["fritia-settings","fritia_archive_sync","fritia_mcp_tool_config"].contains(key),let data=value.data(using:.utf8),let object=try? JSONSerialization.jsonObject(with:data) else{return value}
-        func walk(_ object:Any,base:String) throws -> Any {
+        guard !value.isEmpty, ["fritia-settings","fritia_archive_sync","fritia_mcp_tool_config","fritia_settings","fritia_archive_config","fritia_mcp_config","fritia_tool_config"].contains(key) else{return value}
+        let object=try JSONSerialization.jsonObject(with:Data(value.utf8))
+        func walk(_ object:Any,base:String,headers:Bool=false) throws -> Any {
             if let list=object as? [Any] {return try list.map{try walk($0,base:base)}}
             guard var fields=object as? [String:Any] else{return object}
-            let current=(fields["baseUrl"] ?? fields["url"] ?? fields["serverUrl"]) as? String ?? base
+            let current=headers ? base : ((fields["baseUrl"] ?? fields["url"] ?? fields["serverUrl"]) as? String ?? base)
             for (name,item) in fields {
-                if ["apiKey","password","Authorization","authorization","api-key","x-api-key"].contains(name),let secret=item as? String,!current.isEmpty {
+                if (headers || ["apikey","api_key","password","webdavpassword","authorization","api-key","x-api-key"].contains(name.lowercased())),let secret=item as? String {
                     fields[name]=try token(secret,base:current)
                 }else if let text=item as? String,text.trimmingCharacters(in:.whitespacesAndNewlines).hasPrefix("{"),let embedded=try? JSONSerialization.jsonObject(with:Data(text.utf8)) {
-                    fields[name]=String(decoding:try JSONSerialization.data(withJSONObject:walk(embedded,base:current)),as:UTF8.self)
-                }else{fields[name]=try walk(item,base:current)}
+                    fields[name]=String(decoding:try JSONSerialization.data(withJSONObject:walk(embedded,base:current),options:[.sortedKeys]),as:UTF8.self)
+                }else if name=="configJson",let text=item as? String,text.trimmingCharacters(in:.whitespacesAndNewlines).hasPrefix("{") {
+                    throw CompanionError.message("通讯工具配置格式无效。")
+                }else{fields[name]=try walk(item,base:current,headers:name.lowercased()=="headers")}
             }
             return fields
         }
-        return String(decoding:try JSONSerialization.data(withJSONObject:walk(object,base:"")),as:UTF8.self)
+        return String(decoding:try JSONSerialization.data(withJSONObject:walk(object,base:""),options:[.sortedKeys]),as:UTF8.self)
     }
     private static func resolve(_ token:String,url:URL) throws -> String {
         guard token.hasPrefix(prefix) else{return token}

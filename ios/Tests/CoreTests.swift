@@ -141,6 +141,25 @@ final class CoreTests: XCTestCase {
         XCTAssertThrowsError(try duplicate.validate())
     }
 
+    @MainActor func testLegacyLargeBackupRoundTripsAndChecksByteBoundary() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let source = LocalStore(directory: root.appendingPathComponent("source"))
+        var archive = source.archive
+        let content = String(repeating: "x", count: 8000)
+        archive.messages = (0..<7000).map { _ in Message(role: "user", content: content) }
+        try source.commit(archive)
+        let data = try source.export()
+        XCTAssertGreaterThan(data.count, 50_000_000)
+        XCTAssertNoThrow(try LocalStore.checkBackupSize(LocalStore.backupByteLimit))
+        XCTAssertThrowsError(try LocalStore.checkBackupSize(LocalStore.backupByteLimit + 1))
+        let destination = LocalStore(directory: root.appendingPathComponent("destination"))
+        try destination.restore(data)
+        let reloaded = LocalStore(directory: root.appendingPathComponent("destination"))
+        XCTAssertEqual(reloaded.archive.messages.count, archive.messages.count)
+        XCTAssertEqual(reloaded.archive.messages.map(\.id), archive.messages.map(\.id))
+    }
+
     func testRequestAndReplyWireFormat() throws {
         let request = ChatRequest(model: "custom", messages: [.init(role: "user", content: "你好")],
                                   temperature: 0.7, max_tokens: 1024)

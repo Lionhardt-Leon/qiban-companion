@@ -1,8 +1,45 @@
+import SceneKit
 import XCTest
 import OnnxRuntimeBindings
 @testable import QibanCompanion
 
 final class RuntimeStabilityTests:XCTestCase {
+    @MainActor func testStoppedStageRejectsLateDecodeAndCanResumeAgain() async throws {
+        let folder=FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer {try? FileManager.default.removeItem(at:folder)}
+        let library=CharacterLibrary(directory:folder)
+        try library.rememberValidatedData(Data("fixture".utf8))
+        let release=DispatchSemaphore(value:0)
+        let entered=DispatchSemaphore(value:0)
+        let stage=CompanionStage(library:library) { _ in
+            entered.signal()
+            guard release.wait(timeout:.now()+5) == .success else {throw CancellationError()}
+            return LoadedCharacter(scene:SCNScene(),package:nil,skeleton:nil,name:"fixture")
+        }
+        let first=try XCTUnwrap(stage.resume())
+        XCTAssertEqual(entered.wait(timeout:.now()+2),.success)
+        stage.stop()
+        release.signal()
+        await first.value
+        XCTAssertNil(stage.scene)
+        release.signal()
+        let second=try XCTUnwrap(stage.resume())
+        await second.value
+        XCTAssertEqual(stage.name,"fixture")
+        stage.stop()
+    }
+
+    @MainActor func testPortraitMessageRegistrationDoesNotRetainStageOwner() {
+        weak var observed:PortraitStage?
+        autoreleasepool {
+            var stage:PortraitStage?=PortraitStage()
+            observed=stage
+            _=stage?.makeView()
+            stage=nil
+        }
+        XCTAssertNil(observed)
+    }
+
     func testLinkedFrontendContainsNativeMemorySafetyFixes() {
         XCTAssertGreaterThanOrEqual(OfflineVoiceEngine.frontendSafetyRevision,3)
     }

@@ -762,7 +762,7 @@ function _arrayLikeToArray(r, a) { (null == a || a > r.length) && (a = r.length)
               startRound(r.game, this.random);
               break;
             case "leave":
-              if (r.game && r.game.phase !== "finished") {
+              if (r.game) {
                 p.bot = true;
                 p.ready = true;
                 delete p.token;
