@@ -39,6 +39,7 @@ jobs:
         run: |
           node tools/check-chat-messages.mjs
           node tools/check-chat-examples.mjs
+          node tools/check-chat-stickers.mjs
           node tools/check-portrait-clock.mjs
           node tools/check-card-game.mjs
       - name: Verify speech cancellation lifecycle

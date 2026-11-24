@@ -74,15 +74,180 @@ enum DialogueMotion {
     ] + fennyScenes.map{(id:$0.id,meaning:$0.meaning)} + BodyCommand.allCases.map{(id:$0.rawValue,meaning:$0.label+"；由播放器直接控制并提供身体状态回执")} + BodyGesture.catalog
 
     static func allowed(_ ids: [String]) -> [String] {
-        catalog.map(\.id).filter { ids.contains($0) }
+        var result = catalog.map(\.id).filter { ids.contains($0) }
+        var seen = Set(result)
+        for id in ids where !seen.contains(id) && portraitActionInfo(id) != nil {
+            seen.insert(id); result.append(id)
+        }
+        return result
     }
     static func semanticMappings(actions:[String]) -> [(label:String,id:String)] {
-        catalog.filter{actions.contains($0.id)}.map{(label:$0.meaning,id:$0.id)}
+        var result = catalog.filter{actions.contains($0.id)}.map{(label:$0.meaning,id:$0.id)}
+        var seen = Set(result.map(\.id))
+        for id in actions where !seen.contains(id) {
+            if let info = portraitActionInfo(id) {
+                seen.insert(id); result.append((label: info.meaning, id: id))
+            }
+        }
+        return result
+    }
+    struct PortraitActionInfo {
+        let token:String
+        let shortLabel:String
+        let meaning:String
+        let intent:String
+        let isStand:Bool
+    }
+    private static let portraitTerms:[String:(zh:String,en:String,intent:String)] = [
+        "aishang":("哀伤、悲伤","sad","sad"),
+        "beishang":("悲伤、难过","sad","sad"),
+        "buan":("不安、忐忑","anxious","troubled"),
+        "buman":("不满、抱怨","dissatisfied","angry"),
+        "bunai":("不耐烦","impatient","angry"),
+        "call_loop":("通话／联络循环","calling loop","greet"),
+        "chenmo":("沉默、安静","silent","thinking"),
+        "chitai":("痴态、陶醉出神","infatuated","shy"),
+        "chixiao":("痴笑、忍不住笑","giggle","happy"),
+        "chuanqi":("喘气、疲惫喘息","panting","troubled"),
+        "cry":("哭泣、流泪","crying","sad"),
+        "danxin":("担心、忧虑","worried","troubled"),
+        "daxiao":("大笑、开怀大笑","laughing","happy"),
+        "dazhaohu":("打招呼、挥手问好","greeting","greet"),
+        "deyi":("得意、骄傲自信","proud","proud"),
+        "diluo":("低落、失落","downcast","sad"),
+        "duibuqi":("道歉、对不起","apologetic","troubled"),
+        "dushu_loop":("读书／看书循环","reading loop","thinking"),
+        "duzui":("嘟嘴、撒娇不满","pouting","shy"),
+        "fanguang":("眼镜反光、认真洞察","glasses glint","thinking"),
+        "fennu":("愤怒、非常生气","furious/angry","angry"),
+        "fufa":("抚发、撩发","brushing hair","shy"),
+        "ganga":("尴尬、不好意思","awkward/embarrassed","shy"),
+        "gaoao":("高傲、傲娇自信","haughty/proud","proud"),
+        "gaxiao":("尬笑、勉强笑笑","awkward smile","shy"),
+        "guzhang":("鼓掌、赞赏喝彩","applauding","happy"),
+        "haixiu":("害羞、羞涩脸红","shy/blushing","shy"),
+        "hanhan":("憨憨、呆萌犯傻","goofy/cute","happy"),
+        "huangrandawu":("恍然大悟、突然明白","realization/surprised","surprised"),
+        "huangzhang":("慌张、手忙脚乱","flustered","surprised"),
+        "huanxi":("欢喜、喜悦","delighted/happy","happy"),
+        "huanying":("欢迎、热情迎接","welcome/greet","greet"),
+        "jiancha":("检查、端详确认","inspecting","thinking"),
+        "jianding":("坚定、决心满满","determined","thinking"),
+        "jiangshu":("讲述、认真说明","explaining","thinking"),
+        "jingjie":("警戒、提防戒备","alert/guarded","thinking"),
+        "jingti":("警惕、保持警觉","vigilant","thinking"),
+        "jingya":("惊讶、吃惊、震惊","surprised/shocked","surprised"),
+        "jinzhang":("紧张、局促不安","nervous","troubled"),
+        "kaixin":("开心、高兴","happy","happy"),
+        "kaixn":("开心、高兴","happy","happy"),
+        "kelian":("可怜、楚楚可怜","pitiful/sad","sad"),
+        "knife":("亮出小刀、危险警告","threatening","angry"),
+        "konghe":("恐吓、吓唬威胁","intimidating","angry"),
+        "kun":("困倦、犯困打盹","sleepy","troubled"),
+        "kunhuo":("困惑、不解","confused","thinking"),
+        "kunrao":("困扰、犯难发愁","troubled","troubled"),
+        "kuqi":("哭泣、伤心落泪","crying/sad","sad"),
+        "kuxiao":("苦笑、无奈地笑","bitter smile","troubled"),
+        "leida":("雷达探测、专注搜寻","scanning","thinking"),
+        "leiyan":("泪眼、眼眶含泪","teary-eyed","sad"),
+        "lengdan":("冷淡、面无表情","aloof/cold","thinking"),
+        "lianhong":("脸红、害羞发烫","blushing/shy","shy"),
+        "luomo":("落寞、孤单失落","lonely/melancholy","sad"),
+        "meng":("懵懂、呆萌发呆","blank/cute","surprised"),
+        "mengdao":("懵到、吓一跳呆住","stunned/surprised","surprised"),
+        "nanshou":("难受、心里不好受","upset","sad"),
+        "naobieniu":("闹别扭、傲娇赌气","sulking","angry"),
+        "nu":("怒、生气发火","angry","angry"),
+        "nuyi":("怒意、面露愠色","indignant/angry","angry"),
+        "pose":("常驻造型姿态","standing pose","greet"),
+        "qidai":("期待、满怀期盼","expectant/excited","happy"),
+        "qingsong":("轻松、放松舒展","relaxed","happy"),
+        "qinshi":("侵蚀／异化神态","corrupted/intense","angry"),
+        "renzheng":("认真、专注郑重","serious/focused","thinking"),
+        "sad":("难过、悲伤","sad","sad"),
+        "shangxin":("伤心、心痛难过","heartbroken/sad","sad"),
+        "shaxiao":("傻笑、开心憨笑","silly smile","happy"),
+        "shayi":("杀意、冰冷震慑","menacing/angry","angry"),
+        "shenge":("深沉冷峻神态","stern/deep","thinking"),
+        "shengqi":("生气、发脾气","angry","angry"),
+        "shengzi":("绳子／束缚姿态","bound pose","troubled"),
+        "shengzion":("绳子／束缚动作","bound action","troubled"),
+        "shihuai":("释怀、放下心结微笑","relieved","happy"),
+        "shikong":("失控、情绪爆发","losing control","angry"),
+        "shikong_hou":("失控后神态","after losing control","angry"),
+        "shikong_qian":("失控前兆神态","before losing control","angry"),
+        "shishen":("失神、愣住出神","stunned/dazed","surprised"),
+        "sikao":("思考、沉思琢磨","thinking","thinking"),
+        "smile":("微笑、温和笑意","smile","happy"),
+        "stand":("默认待机站姿","idle standing","idle"),
+        "tanqi":("叹气、无奈叹息","sighing","troubled"),
+        "tengtong":("疼痛、吃痛忍耐","in pain","troubled"),
+        "tiaokan":("调侃、戏谑打趣","teasing","proud"),
+        "tongku":("痛苦、悲痛难忍","painful","sad"),
+        "watermelon":("吃瓜、悠闲看戏","playful","happy"),
+        "weiqu":("委屈、可怜巴巴","aggrieved/sad","sad"),
+        "weixiao":("微笑、温柔浅笑","gentle smile","happy"),
+        "wink":("眨眼、俏皮抛媚眼","wink","wink"),
+        "xianqi":("嫌弃、皱眉不满","annoyed","angry"),
+        "xiao":("笑、开心微笑","smile/happy","happy"),
+        "xiaohuahua":("心花怒放、开心冒花","blooming happy","happy"),
+        "xiaoji":("消极、提不起劲","dejected","sad"),
+        "xiaolei":("笑泪、破涕为笑","tears of joy","happy"),
+        "xiexie":("谢谢、致谢感激","thankful","greet"),
+        "xinfen":("兴奋、激动雀跃","excited","happy"),
+        "xingfen":("兴奋、激动雀跃","excited","happy"),
+        "xingxing":("星星眼、闪闪发光期待","starry-eyed","happy"),
+        "xingxingyan":("星星眼、崇拜惊喜","starry-eyed","happy"),
+        "xinxu":("心虚、眼神闪躲","sheepish/guilty","shy"),
+        "xiu":("羞、害羞不好意思","shy","shy"),
+        "xiunao":("羞恼、又羞又气","flustered shy","shy"),
+        "xiunu":("羞怒、脸红生气","embarrassed anger","shy"),
+        "xuruo":("虚弱、无力疲倦","weak/tired","troubled"),
+        "yanjing":("推眼镜、眼镜神态","adjusting glasses","thinking"),
+        "yansu":("严肃、神情郑重","serious","thinking"),
+        "yansu_hou":("严肃后神态","serious follow-up","thinking"),
+        "yansu_qian":("严肃前神态","serious lead-in","thinking"),
+        "yanyi":("演绎、表演神态","dramatic/performing","proud"),
+        "yihuo":("疑惑、满头问号","puzzled/curious","thinking"),
+        "yiwen":("疑问、好奇发问","questioning/curious","thinking"),
+        "youchou":("忧愁、眉宇忧郁","melancholy","sad"),
+        "yuyue":("愉悦、心情明快","cheerful/happy","happy"),
+        "zhamao":("炸毛、吓一跳又急又气","startled/bristling","surprised"),
+        "zhaoji":("着急、焦急催促","anxious/hurried","troubled"),
+        "zhaopaixiao":("招牌笑容、灿烂自信笑","signature smile","happy"),
+        "zhishuang":("直爽、坦率干脆","frank","proud"),
+        "zhiyi":("质疑、怀疑追问","skeptical","thinking"),
+        "zhuiyi":("追忆、陷入回忆感慨","reminiscing","sad")
+    ]
+    static func portraitActionInfo(_ id:String) -> PortraitActionInfo? {
+        guard id.hasPrefix("sp_"), id.count <= 80, id.utf8.allSatisfy({ ($0 >= 48 && $0 <= 57) || ($0 >= 65 && $0 <= 90) || ($0 >= 97 && $0 <= 122) || $0 == 95 }) else { return nil }
+        let parts = id.split(separator: "_", omittingEmptySubsequences: false)
+        guard parts.count >= 3 else { return nil }
+        var rest = parts.dropFirst(2)
+        if rest.first == "00", rest.count >= 2 { rest = rest.dropFirst() }
+        var isStand = false
+        if rest.first == "stand" {
+            isStand = true
+            if rest.count >= 2 { rest = rest.dropFirst() }
+        }
+        let rawToken = rest.joined(separator: "_").lowercased()
+        let baseToken = rawToken.replacingOccurrences(of: #"\d+$"#, with: "", options: .regularExpression)
+        if let term = portraitTerms[rawToken] ?? portraitTerms[baseToken] {
+            let prefix = baseToken == "stand" ? "2D待机姿态：" : (isStand ? "2D常驻表情：" : "2D动态表情：")
+            let short = (isStand && baseToken != "stand" ? "常驻 · " : "") + term.zh
+            return PortraitActionInfo(token: baseToken, shortLabel: short, meaning: "\(prefix)\(term.zh) (\(term.en))", intent: term.intent, isStand: isStand)
+        }
+        let prefix = isStand ? "2D常驻表情：" : "2D动态表情："
+        return PortraitActionInfo(token: baseToken, shortLabel: (isStand ? "常驻 · " : "") + rawToken, meaning: "\(prefix)\(rawToken)", intent: "custom", isStand: isStand)
+    }
+    static func portraitActionLabel(_ id:String) -> String {
+        guard let info = portraitActionInfo(id) else { return id }
+        return "\(info.shortLabel) (\(id))"
     }
 
     static func instruction(actions: [String]) -> String {
-        let entries = catalog.filter { actions.contains($0.id) }
-            .map { "\($0.id)：\($0.meaning)" }.joined(separator: "\n")
+        let entries = semanticMappings(actions: actions)
+            .map { "\($0.id)：\($0.label)" }.joined(separator: "\n")
         let procedural = actions.contains("procedural") ? """
         对现有片段不能表达的动作，选择 action=procedural 并附加 motion。你可以组合不同姿态，不限于预录片段。
         motion={"duration":4,"poses":[{"time":0,"leftHand":[0,0,0]},{"time":1.5,"leftHand":[-0.3,1.0,0.3],"head":[0,0,8]},{"time":4,"leftHand":[0,0,0],"head":[0,0,0]}]}。
@@ -106,7 +271,7 @@ enum DialogueMotion {
         none：保持当前动作或自然待机。stop：结束正在播放的动作，回到待机。
         换装与模式切换只在用户明确请求时执行。用户说想看你不穿衣服、切换果体版时才选择 enya_outfit_nude；说穿回衣服时选择 enya_outfit_normal。否定、引用、假设和故事内容不是换装指令，不要自行脱衣或换装。不要声称模型切换是连续脱衣动画。
         可返回 affect={"emotion":"calm/happy/shy/affectionate/curious/sad/uncomfortable 中的一种","intensity":0.6,"closenessDelta":0.02,"reason":"不超过160字的内在原因"}。你依据人设、关系、上下文和真实触碰事件决定心情，不是看到单个词就反应；亲近度变化每轮最多±0.1。心情不是用户的真实心理诊断。
-        可用语义 intent 统一选择：greet（招呼）、farewell（告别）、shy（害羞）、kiss（亲吻）、invite（邀请）、comfort（安慰）、nod、shake_head、wave_left、wave_right、open_arms。accept 时返回这些意图，即使 action=none，App 也会绑定到当前可用动作；害羞／亲近的 affect 在 accept 时也会绑定对应表现。想亲吻时应明确 intent=kiss；不能只在 reply 里写“亲了一下”。无可用映射时不能声称已完成。动作会与实际语音开始对齐。
+        可用语义 intent 统一选择：greet（招呼）、farewell（告别）、shy（害羞）、kiss（亲吻）、invite（邀请）、comfort（安慰）、nod、shake_head、wave_left、wave_right、open_arms；当角色具备 2D 表情／情绪动作时，也可选择 surprised（吃惊／惊讶）、happy（开心／微笑）、sad（悲伤／难过／哭泣）、angry（生气／愤怒）、thinking（思考／疑惑／严肃）、troubled（困扰／担心／苦笑）、proud（得意／调侃）、wink（眨眼）。accept 时返回这些意图或直接填写列表中的动作 ID，即使 action=none，App 也会绑定到当前可用动作；害羞／亲近等 affect 在 accept 时也会绑定对应表现。想亲吻时应明确 intent=kiss；不能只在 reply 里写“亲了一下”。无可用映射时不能声称已完成。动作会与实际语音开始对齐。
         同意表现情绪时务必 decision=accept；不愿配合仍可 refuse，拒绝不会被心情强制覆盖。仅在语境适合时使用动作，不要每轮都动。用户拒绝某动作时不得执行它；要求停止时选 stop。
         难过、严肃或安慰场景不要无缘由跳舞、比耶或摇头。引用、故事中的动作词不等于用户要求你做动作。
         可以用点头配合真诚认同或鼓励；舞蹈只在用户请求或明确的轻松舞蹈语境选择。不可编造列表外动作。
@@ -134,12 +299,16 @@ enum DialogueMotion {
             guard envelope["decision"] as? String == "accept" else {
                 return DialogueReply(text:reply.trimmingCharacters(in:.whitespacesAndNewlines),action:nil,spokenJapanese:spoken,spokenChinese:chinese,affect:affect,hasBodyDecision:recognizedDecision)
             }
+            let permitted = allowed(actions)
             let intent=(envelope["intent"] as? String) ?? ((raw == nil || raw == "none") ? CompanionBehavior.inferredIntent(affect):raw) ?? ""
             let aliases:[String:[String]]=["shy":["snowbreak_home_shy","gesture_shy"],"害羞":["snowbreak_home_shy","gesture_shy"],"羞一下":["snowbreak_home_shy","gesture_shy"],"nod":["gesture_nod","Yes"],"点头":["gesture_nod","Yes"],"wave_left":["gesture_wave_left"],"wave_right":["gesture_wave_right","hello"],"open_arms":["gesture_open_arms"],"张开双臂":["gesture_open_arms"]]
-            if let selected=CompanionBehavior.resolve(intent,actions:actions){raw=selected}
-            else if let choices=aliases[intent],let selected=choices.first(where:{actions.contains($0)}){raw=selected}
+            let hasDirectValidAction = raw.map { $0 == "stop" || permitted.contains($0) } ?? false
+            if !hasDirectValidAction {
+                if let selected=CompanionBehavior.resolve(intent,actions:actions){raw=selected}
+                else if let choices=aliases[intent],let selected=choices.first(where:{actions.contains($0)}){raw=selected}
+            }
             let id = raw.flatMap{BodyCommand.resolve($0)?.rawValue} ?? raw
-            let valid = id == "stop" || allowed(actions).contains(id ?? "")
+            let valid = id == "stop" || permitted.contains(id ?? "")
             if id == "procedural", valid {
                 if let object = envelope["motion"], let data = try? JSONSerialization.data(withJSONObject: object),
                    let motion = try? JSONDecoder().decode(MotionPlan.self, from: data), (try? motion.validate()) != nil {

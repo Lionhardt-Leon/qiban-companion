@@ -49,7 +49,7 @@ enum ChatNativePane:String,Identifiable {case persona,api,speech,portrait;var id
         error=nil;status="正在打开本地通讯…";let ticket=sessionID
         do {
             try store.prepareChatSharing();try FileManager.default.createDirectory(at:temp,withIntermediateDirectories:true)
-            let server=ChatModuleServer(root:library.site,presentationRoot:PortraitLibrary().directory);self.server=server;try await server.start();try Task.checkCancellation()
+            let server=ChatModuleServer(root:library.site,presentationRoot:PortraitLibrary().directory,stickerRoot:CharacterStickerLibrary().directory);self.server=server;try await server.start();try Task.checkCancellation()
             guard sessionID==ticket else {server.stop();return}
             let content=WKUserContentController();content.addScriptMessageHandler(self,contentWorld:.page,name:"qibanChat")
             let config=WKWebViewConfiguration();config.userContentController=content;config.websiteDataStore = .default()

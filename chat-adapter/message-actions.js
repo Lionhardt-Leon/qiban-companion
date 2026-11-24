@@ -4,6 +4,7 @@ import {completePrivateMessageReply,requestCharacterReply} from './chat_engine.j
 import {completeToolPrivateMessageReply} from './tool_chat_engine.js';
 import {getSelectedMcpClientIds} from './mcp_tools.js';
 import {recordLongTermMemoryTurn} from './long_term_memory.js';
+import {applyCharacterStickerReply} from './qiban_stickers.js';
 import {clearSpeech,editMessage,deleteMessage,regenerationPlan,applyRegenerated,invalidateMessageMemory,restrictMemoryReferences,createDraft,isDraft,keepDraft,endDraft} from './qiban_message_ops.js';
 
 let hooks=null,active=false,modal=null;
@@ -100,7 +101,8 @@ async function regenerate(conversationID,messageID){
     };
     if(plan.conversation.type==='group'){
       const result=await requestCharacterReply({store:draft,conversation:plan.conversation,character,userText:plan.user.text,userMessage:plan.user,mode:'roundtable',chatSettings:runtime.settings,reasoningEffort:runtime.reasoningEffort});
-      accept({...base,text:typeof result==='string' ? result:result.text,status:'sent',meta:{}});
+      const parsed=applyCharacterStickerReply(typeof result==='string' ? result:result.text,character);
+      accept({...base,text:parsed.text,attachments:parsed.attachments,status:'sent',meta:{}});
     }else{
       const clients=getSelectedMcpClientIds(conversationID);
       const run=clients.length ? completeToolPrivateMessageReply:completePrivateMessageReply;

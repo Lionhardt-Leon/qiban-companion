@@ -133,7 +133,7 @@ struct CompanionHome: View {
                             Button("查看当前身体状态"){showingBodyState = true}
                             Button("心情与行为状态"){showingMood=true}
                             Button(senses.environment ? "停止环境聆听" : "环境声音反馈（本机）") { speech.stop();senses.toggleEnvironment() }
-                            if isPortrait {ForEach(portrait.actions,id:\.self){id in Button(id){portrait.play(id)}}}
+                            if isPortrait {ForEach(portrait.actions,id:\.self){id in Button(DialogueMotion.portraitActionLabel(id)){portrait.play(id)}}}
                             else if isSnowbreak {
                                 ForEach(snowbreak.savedCharacters,id:\.self){id in Button(id == "Fenny" ? "切换到芬妮婚皮":"切换到恩雅护士"){snowbreak.selectCharacter(id)}}
                                 if snowbreak.characterID == "Fenny" {

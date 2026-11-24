@@ -19,6 +19,12 @@ struct PersonaView:View {
     @State private var document = BackupDocument(data:Data())
     @State private var preview = false
     @State private var previewText = ""
+    @State private var stickerPack = CharacterStickerPack()
+    @State private var importingStickers = false
+    @State private var stickerBusy = false
+    @State private var editingStickerID:String? = nil
+    @State private var editingStickerLabel = ""
+    private let stickerLibrary = CharacterStickerLibrary()
     private var card:Binding<PersonaCard> {
         Binding(get:{library.cards.first{$0.id == selected} ?? PersonaCard()},set:{value in
             if let i = library.cards.firstIndex(where:{$0.id == selected}) {library.cards[i] = value}
@@ -65,6 +71,30 @@ struct PersonaView:View {
                     guard !loaded else{return}
                     library = store.archive.settings.personas ?? PersonaLibrary.migrating(store.archive.settings.persona)
                     selected = initialCardID ?? library.card(for:modelKey)?.id;loaded = true
+                    reloadStickers()
+                }
+                .onChange(of:selected) { _ in reloadStickers() }
+                .fileImporter(isPresented:$importingStickers,allowedContentTypes:[.zip,.image],allowsMultipleSelection:true) { result in
+                    guard let cardID = selected else { return }
+                    switch result {
+                    case .success(let urls):
+                        guard !urls.isEmpty else { return }
+                        stickerBusy = true
+                        let lib = stickerLibrary
+                        Task {
+                            do {
+                                let imported = try await Task.detached(priority:.userInitiated) { try lib.importFiles(urls,for:cardID) }.value
+                                stickerPack = imported.pack
+                                stickerBusy = false
+                                notice = "已为「\(card.wrappedValue.title)」解压导入 \(imported.added) 张表情包" + (imported.skipped > 0 ? "（跳过 \(imported.skipped) 项）" : "") + "。进入通讯模块即可生效。"
+                            } catch {
+                                stickerBusy = false
+                                store.error = error.localizedDescription
+                            }
+                        }
+                    case .failure(let error):
+                        store.error = error.localizedDescription
+                    }
                 }
                 .sheet(isPresented:$importing) {
                     CharacterDocumentPicker {result in
@@ -114,6 +144,7 @@ struct PersonaView:View {
                 TextField("卡片标题",text:card.title).textFieldStyle(.roundedBorder).accessibilityIdentifier("personaTitleInput")
                 TextField("AI 的名字 / 自称",text:card.name).textFieldStyle(.roundedBorder).accessibilityIdentifier("personaNameInput")
             }
+            stickerPanel
             editor("人物描述",text:card.description,hint:"身份、背景、与你的关系",id:"personaDescriptionInput")
             editor("性格与说话方式",text:card.personality,hint:"她怎样倾听、说话与表达情绪")
             editor("场景",text:card.scenario,hint:"你们目前所处的情境与关系阶段")
@@ -180,6 +211,69 @@ struct PersonaView:View {
     private func panel<Content:View>(_ title:String,_ hint:String,@ViewBuilder content:()->Content) -> some View {
         VStack(alignment:.leading,spacing:10){Text(title).font(.headline);Text(hint).font(.caption).foregroundStyle(.secondary);content()}
             .frame(maxWidth:.infinity,alignment:.leading).padding(16).background(.white.opacity(0.035),in:RoundedRectangle(cornerRadius:18))
+    }
+    private func reloadStickers() {
+        editingStickerID = nil
+        guard let id = selected else { stickerPack = CharacterStickerPack(); return }
+        stickerPack = stickerLibrary.load(for: id)
+    }
+    private var stickerPanel:some View {
+        panel("通讯 AI 表情包（按角色独立）","导入表情包 .zip 或图片后会直接解压到当前角色；通讯时 AI 会根据表情含义自行判断是否发送，不会每句必发。") {
+            Toggle("允许此角色在通讯中自主发送表情包",isOn:Binding(
+                get:{ stickerPack.enabled },
+                set:{ value in
+                    guard let id = selected else { return }
+                    do { stickerPack = try stickerLibrary.setEnabled(value,for:id) }
+                    catch { store.error = error.localizedDescription }
+                }
+            )).tint(.indigo)
+            HStack(spacing:10) {
+                Button { importingStickers = true } label:{
+                    Label(stickerBusy ? "正在解压导入…":"导入表情包 .zip / 图片",systemImage:"archivebox.fill")
+                }.buttonStyle(.borderedProminent).tint(.indigo).disabled(stickerBusy || selected == nil)
+                if !stickerPack.items.isEmpty {
+                    Button(role:.destructive) {
+                        guard let id = selected else { return }
+                        do { try stickerLibrary.clear(for:id); stickerPack = CharacterStickerPack(); notice = "已清空当前角色的表情包。" }
+                        catch { store.error = error.localizedDescription }
+                    } label:{ Text("清空") }.buttonStyle(.bordered)
+                }
+            }
+            if stickerPack.items.isEmpty {
+                Text("当前角色尚未导入表情包。支持直接选择如「爱蜜莉雅表情包.zip」自动解压，文件名将作为 AI 识别表情含义的默认标签。")
+                    .font(.caption).foregroundStyle(.secondary)
+            } else {
+                DisclosureGroup("已导入 \(stickerPack.items.count) 张表情包（可修改 AI 识别标签或删除）") {
+                    VStack(alignment:.leading,spacing:8) {
+                        ForEach(stickerPack.items) { item in
+                            HStack(spacing:8) {
+                                Text(item.id).font(.caption.monospaced()).foregroundStyle(.secondary).frame(width:36,alignment:.leading)
+                                if editingStickerID == item.id {
+                                    TextField("语义标签",text:$editingStickerLabel).textFieldStyle(.roundedBorder)
+                                    Button("确定") {
+                                        guard let id = selected else { return }
+                                        do {
+                                            stickerPack = try stickerLibrary.rename(stickerID:item.id,label:editingStickerLabel,for:id)
+                                            editingStickerID = nil
+                                        } catch { store.error = error.localizedDescription }
+                                    }.buttonStyle(.bordered)
+                                } else {
+                                    Text(item.label).font(.subheadline).lineLimit(1)
+                                    Spacer()
+                                    Button("改标签") { editingStickerID = item.id; editingStickerLabel = item.label }.font(.caption)
+                                    Button(role:.destructive) {
+                                        guard let id = selected else { return }
+                                        do { stickerPack = try stickerLibrary.remove(stickerID:item.id,for:id) }
+                                        catch { store.error = error.localizedDescription }
+                                    } label:{ Image(systemName:"trash") }.font(.caption)
+                                }
+                            }
+                            Divider()
+                        }
+                    }.padding(.top,6)
+                }
+            }
+        }
     }
     private func editor(_ title:String,text:Binding<String>,hint:String,id:String = "",limit:Int? = PersonaLimits.fieldCharacters) -> some View {
         panel(title,hint) {

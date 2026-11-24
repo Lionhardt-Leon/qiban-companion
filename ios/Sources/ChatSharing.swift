@@ -57,6 +57,7 @@ extension LocalStore {
         let session=chatSession(card.id)
         return ["id":archive.chatContactOrigins?[card.id.uuidString] ?? "qiban_"+card.id.uuidString,"qibanId":card.id.uuidString,"name":card.name,"description":card.title,
                 "prompt":rendered,"examples":card.examples,"source":"qiban","tags":["App人设"],
+                "stickers":CharacterStickerLibrary().webSnapshot(for:card.id),
                 "memories":session.memories,"resetToken":archive.chatResetTokens?[card.id.uuidString] ?? "0",
                 "sessions":(archive.conversationSessions ?? []).filter{$0.personaKey==card.id.uuidString}.map{meta->[String:Any] in
                     ["id":meta.id,"title":meta.title,"createdAt":meta.createdAt.timeIntervalSince1970*1000,"updatedAt":max(meta.updatedAt,archive.sessionContents(meta.id).messages.last?.createdAt ?? meta.updatedAt).timeIntervalSince1970*1000,"active":archive.activeSessionIDs?[card.id.uuidString]==meta.id,"externalID":meta.externalID as Any? ?? NSNull(),"memories":archive.sessionContents(meta.id).memories]

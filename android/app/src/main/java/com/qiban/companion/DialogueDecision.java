@@ -2,6 +2,7 @@ package com.qiban.companion;
 import org.json.*;
 import java.io.IOException;
 import java.util.*;
+import java.util.regex.Pattern;
 
 /** Matches DialogueMotion's explicit consent, trusted aliases and bounded motion decoding. */
 final class DialogueDecision {
@@ -10,13 +11,49 @@ final class DialogueDecision {
     static String action(JSONObject value,JSONArray actions){
         if(!value.optString("decision").equals("accept"))return "";
         String raw=value.optString("action"),intent=value.optString("intent",raw);
-        JSONObject affect=value.optJSONObject("affect");if((raw.isEmpty()||raw.equals("none"))&&intent.equals(raw)&&affect!=null&&affect.optDouble("intensity")>=.45)intent=switch(affect.optString("emotion")){case "shy","害羞"->"shy";case "affectionate","亲近"->"invite";case "curious","好奇"->"nod";default->intent;};
-        String[] choices=switch(intent){case "greet","招呼","farewell","告别"->new String[]{"snowbreak_home_login","hello","gesture_wave_right"};case "shy","害羞","羞一下"->new String[]{"snowbreak_home_shy","gesture_shy"};case "kiss","亲吻","亲亲"->new String[]{"snowbreak_home_kiss"};case "invite","邀请"->new String[]{"snowbreak_home_invite","gesture_open_arms"};case "comfort","安慰","nod","点头"->new String[]{"gesture_nod","Yes"};case "shake_head","摇头"->new String[]{"gesture_shake","No"};case "wave_left"->new String[]{"gesture_wave_left"};case "wave_right"->new String[]{"gesture_wave_right","hello"};case "open_arms","张开双臂"->new String[]{"gesture_open_arms"};default->new String[0];};
-        for(String choice:choices)if(contains(actions,choice)){raw=choice;break;}
+        JSONObject affect=value.optJSONObject("affect");if((raw.isEmpty()||raw.equals("none"))&&intent.equals(raw)&&affect!=null&&affect.optDouble("intensity")>=.45)intent=switch(affect.optString("emotion")){case "shy","害羞"->"shy";case "affectionate","亲近"->"invite";case "curious","好奇"->"nod";case "happy","开心"->"happy";case "sad","难过"->"sad";case "uncomfortable","不自在"->"troubled";default->intent;};
+        if(!contains(actions,raw)&&!raw.equals("stop")){
+            String[] choices=switch(intent){case "greet","招呼","farewell","告别"->new String[]{"snowbreak_home_login","hello","gesture_wave_right"};case "shy","害羞","羞一下"->new String[]{"snowbreak_home_shy","gesture_shy"};case "kiss","亲吻","亲亲"->new String[]{"snowbreak_home_kiss"};case "invite","邀请"->new String[]{"snowbreak_home_invite","gesture_open_arms"};case "comfort","安慰","nod","点头"->new String[]{"gesture_nod","Yes"};case "shake_head","摇头"->new String[]{"gesture_shake","No"};case "wave_left"->new String[]{"gesture_wave_left"};case "wave_right"->new String[]{"gesture_wave_right","hello"};case "open_arms","张开双臂"->new String[]{"gesture_open_arms"};default->new String[0];};
+            for(String choice:choices)if(contains(actions,choice)){raw=choice;break;}
+            if(!contains(actions,raw)){
+                String matched=resolvePortraitIntent(intent,actions);
+                if(!matched.isEmpty())raw=matched;
+            }
+        }
         if(raw.equals("stop"))return "stop";
         if(!contains(actions,raw))return "";
         if(raw.equals("procedural")&&!validMotion(value.optJSONObject("motion")))return "";
         return raw;
+    }
+    private static String resolvePortraitIntent(String intent,JSONArray actions){
+        if(intent==null||intent.trim().isEmpty())return "";
+        String key=intent.trim().toLowerCase(Locale.ROOT);
+        String[] tokens=switch(key){
+            case "surprised","shocked","吃惊","惊讶","震惊","jingya"->new String[]{"jingya","huangrandawu","mengdao","zhamao","shishen"};
+            case "happy","smile","laugh","开心","微笑","高兴","笑","xiao","kaixin"->new String[]{"xiao","weixiao","smile","kaixin","kaixn","daxiao","huanxi","yuyue","xingfen"};
+            case "sad","cry","悲伤","难过","伤心","哭","哭泣","委屈","beishang","kuqi"->new String[]{"beishang","sad","shangxin","aishang","kuqi","cry","weiqu","diluo","luomo"};
+            case "angry","mad","生气","愤怒","不满","shengqi","fennu"->new String[]{"shengqi","fennu","nuyi","nu","buman","xianqi","naobieniu"};
+            case "shy","blush","害羞","脸红","羞一下","haixiu"->new String[]{"haixiu","xiu","lianhong","ganga","xiunao","duzui"};
+            case "thinking","confused","serious","curious","思考","疑惑","严肃","认真","sikao","yansu"->new String[]{"sikao","yihuo","kunhuo","yiwen","yansu","renzheng","jianding"};
+            case "troubled","worried","sigh","uncomfortable","困扰","担心","苦笑","叹气","kunrao"->new String[]{"kunrao","danxin","kuxiao","buan","tanqi","jinzhang"};
+            case "proud","smug","teasing","得意","骄傲","调侃","deyi"->new String[]{"deyi","gaoao","tiaokan"};
+            case "wink","眨眼"->new String[]{"wink"};
+            case "greet","招呼","欢迎","打招呼"->new String[]{"dazhaohu","huanying","xiao","weixiao"};
+            default->new String[]{key};
+        };
+        String steadyFallback="";
+        for(String token:tokens){
+            for(int i=0;i<actions.length();i++){
+                String id=actions.optString(i,"");
+                if(!id.startsWith("sp_"))continue;
+                String lower=id.toLowerCase(Locale.ROOT);
+                if(lower.endsWith("_"+token)||lower.matches(".*_"+Pattern.quote(token)+"\\d+$")){
+                    if(!lower.contains("_stand_"))return id;
+                    if(steadyFallback.isEmpty())steadyFallback=id;
+                }
+            }
+        }
+        return steadyFallback;
     }
     static boolean validMotion(JSONObject motion){try{
         if(motion==null)return false;double duration=motion.getDouble("duration");JSONArray poses=motion.getJSONArray("poses");if(!Double.isFinite(duration)||duration<1||duration>8||poses.length()<2||poses.length()>8||poses.getJSONObject(0).getDouble("time")!=0||poses.getJSONObject(poses.length()-1).getDouble("time")!=duration)return false;

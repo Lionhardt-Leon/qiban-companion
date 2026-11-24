@@ -12,10 +12,11 @@ final class ChatModuleServer:@unchecked Sendable {
     private let bindPort:UInt16
     private let artRoot:URL?
     private let presentationRoot:URL?
+    private let stickerRoot:URL?
     let token=UUID().uuidString
     static let port:UInt16=49157
     var pageURL:URL {URL(string:"http://127.0.0.1:\(bindPort)/\(token)/index.html")!}
-    init(root:URL,port:UInt16=ChatModuleServer.port,artRoot:URL?=nil,presentationRoot:URL?=nil){self.root=root.standardizedFileURL;self.bindPort=port;self.artRoot=artRoot?.standardizedFileURL;self.presentationRoot=presentationRoot?.standardizedFileURL}
+    init(root:URL,port:UInt16=ChatModuleServer.port,artRoot:URL?=nil,presentationRoot:URL?=nil,stickerRoot:URL?=nil){self.root=root.standardizedFileURL;self.bindPort=port;self.artRoot=artRoot?.standardizedFileURL;self.presentationRoot=presentationRoot?.standardizedFileURL;self.stickerRoot=stickerRoot?.standardizedFileURL}
     func start() async throws {
         try await withCheckedThrowingContinuation { (continuation:CheckedContinuation<Void,Error>) in
             queue.async {
@@ -60,8 +61,9 @@ final class ChatModuleServer:@unchecked Sendable {
             let relative=String(path.dropFirst(token.count+2))
             if VoiceManifest.safePath(relative) {
                 let isPresentation=relative.hasPrefix("presentation-data/") && presentationRoot != nil
-                let base=isPresentation ? presentationRoot! : relative.hasPrefix("art/") ? (artRoot ?? root):root
-                let name=isPresentation ? String(relative.dropFirst(18)) : relative.hasPrefix("art/") && artRoot != nil ? String(relative.dropFirst(4)):relative
+                let isSticker=relative.hasPrefix("qiban-stickers/") && stickerRoot != nil
+                let base=isPresentation ? presentationRoot! : isSticker ? stickerRoot! : relative.hasPrefix("art/") ? (artRoot ?? root):root
+                let name=isPresentation ? String(relative.dropFirst(18)) : isSticker ? String(relative.dropFirst(15)) : relative.hasPrefix("art/") && artRoot != nil ? String(relative.dropFirst(4)):relative
                 let file=base.appendingPathComponent(name).standardizedFileURL
                 if file.path.hasPrefix(base.path+"/"),let size=try? file.resourceValues(forKeys:[.fileSizeKey]).fileSize,size<=64*1024*1024,
                    let data=try? Data(contentsOf:file,options:.mappedIfSafe) {body=data;status="200 OK";mime=Self.mime(file.pathExtension)}
@@ -87,6 +89,6 @@ final class ChatModuleServer:@unchecked Sendable {
         client.send(content:response,completion:.contentProcessed{[weak self] _ in self?.close(client,id)})
     }
     private static func mime(_ ext:String)->String {
-        ["html":"text/html; charset=utf-8","js":"text/javascript; charset=utf-8","mjs":"text/javascript; charset=utf-8","css":"text/css; charset=utf-8","json":"application/json; charset=utf-8","svg":"image/svg+xml","png":"image/png","jpg":"image/jpeg","jpeg":"image/jpeg","webp":"image/webp","ico":"image/x-icon","mp3":"audio/mpeg","m4a":"audio/mp4","wav":"audio/wav","txt":"text/plain; charset=utf-8","md":"text/plain; charset=utf-8","woff2":"font/woff2","pdf":"application/pdf" ][ext.lowercased()] ?? "application/octet-stream"
+        ["html":"text/html; charset=utf-8","js":"text/javascript; charset=utf-8","mjs":"text/javascript; charset=utf-8","css":"text/css; charset=utf-8","json":"application/json; charset=utf-8","svg":"image/svg+xml","png":"image/png","jpg":"image/jpeg","jpeg":"image/jpeg","webp":"image/webp","gif":"image/gif","ico":"image/x-icon","mp3":"audio/mpeg","m4a":"audio/mp4","wav":"audio/wav","txt":"text/plain; charset=utf-8","md":"text/plain; charset=utf-8","woff2":"font/woff2","pdf":"application/pdf" ][ext.lowercased()] ?? "application/octet-stream"
     }
 }

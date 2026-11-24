@@ -190,4 +190,24 @@ final class DialogueMotionTests: XCTestCase {
         XCTAssertEqual(store.dialogueAction?.action,"procedural")
         XCTAssertEqual(store.archive.messages.last?.content,"轻一点哦。")
     }
+
+    func testOfficial2DPortraitPinyinActionsMapAndResolveSemantics() throws {
+        let enya = ["sp_girl011_jingya", "sp_girl011_stand_jingya", "sp_girl011_xiao", "sp_girl011_kunrao", "sp_girl011_stand_sad", "sp_girl011_stand", "untrusted-action"]
+        let allowed = DialogueMotion.allowed(enya)
+        XCTAssertEqual(allowed, ["sp_girl011_jingya", "sp_girl011_stand_jingya", "sp_girl011_xiao", "sp_girl011_kunrao", "sp_girl011_stand_sad", "sp_girl011_stand"])
+        let mappings = DialogueMotion.semanticMappings(actions: enya)
+        XCTAssertEqual(mappings.count, 6)
+        XCTAssertTrue(mappings.contains { $0.id == "sp_girl011_jingya" && $0.label.contains("吃惊") && $0.label.contains("surprised") })
+        XCTAssertTrue(mappings.contains { $0.id == "sp_girl011_stand_jingya" && $0.label.contains("常驻") })
+        let prompt = DialogueMotion.instruction(actions: enya)
+        XCTAssertTrue(prompt.contains("sp_girl011_jingya"))
+        XCTAssertTrue(prompt.contains("吃惊"))
+        XCTAssertFalse(prompt.contains("untrusted-action"))
+        XCTAssertEqual(try DialogueMotion.parse(#"{"reply":"欸？！怎么突然这么说！","decision":"accept","action":"sp_girl011_jingya"}"#, actions: enya).action, "sp_girl011_jingya")
+        XCTAssertEqual(try DialogueMotion.parse(#"{"reply":"欸？！","decision":"accept","intent":"surprised","action":"none"}"#, actions: enya).action, "sp_girl011_jingya")
+        XCTAssertEqual(try DialogueMotion.parse(#"{"reply":"吓我一跳！","decision":"accept","intent":"吃惊","action":"none"}"#, actions: enya).action, "sp_girl011_jingya")
+        XCTAssertEqual(try DialogueMotion.parse(#"{"reply":"真拿你没办法呢。","decision":"accept","action":"sp_girl011_stand_jingya","intent":"surprised"}"#, actions: enya).action, "sp_girl011_stand_jingya")
+        XCTAssertEqual(try DialogueMotion.parse(#"{"reply":"有点难过…","decision":"accept","action":"none","affect":{"emotion":"sad","intensity":0.7}}"#, actions: enya).action, "sp_girl011_stand_sad")
+        XCTAssertNil(try DialogueMotion.parse(#"{"reply":"现在不想装吃惊。","decision":"refuse","intent":"surprised","action":"sp_girl011_jingya"}"#, actions: enya).action)
+    }
 }
