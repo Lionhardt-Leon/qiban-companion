@@ -339,7 +339,7 @@ enum StickerVisionAnalyzer {
         defer { session.invalidateAndCancel() }
         let rawText: String
         if let profile = settings.services?.vision, profile.enabled {
-            let key = APIKeyStore.read(kind: .vision, profile: profile)
+            let key = try APIKeyStore.read(kind: .vision, profile: profile)
             rawText = try await ServiceClient.vision(profile, key: key, question: prompt, images: [frame], session: session)
         } else {
             guard !settings.endpoint.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
