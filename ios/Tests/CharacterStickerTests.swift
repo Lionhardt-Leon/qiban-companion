@@ -83,9 +83,32 @@ final class CharacterStickerTests: XCTestCase {
         let renamed = try library.rename(stickerID: result.pack.items[0].id, label: "超开心", for: emiliaID)
         XCTAssertEqual(renamed.items[0].label, "超开心")
 
+        let enriched = try library.updateMetadata(
+            stickerID: result.pack.items[0].id,
+            label: "蕾丝",
+            tags: ["蕾丝", "害羞", "自拍"],
+            details: "身穿黑色蕾丝花边睡衣，微微低头露出害羞笑容",
+            background: "柔和暖光卧室背景",
+            usage: "对方想看蕾丝或晚上亲密聊天时发送",
+            analyzed: true,
+            for: emiliaID
+        )
+        XCTAssertEqual(enriched.items[0].tags, ["蕾丝", "害羞", "自拍"])
+        XCTAssertTrue(enriched.items[0].analyzed)
+
+        let parsedVision = StickerVisionAnalyzer.parseResult(
+            "```json\n{\"label\":\"白色蕾丝\",\"tags\":[\"蕾丝\",\"可爱\"],\"details\":\"穿着白色蕾丝裙微笑\",\"background\":\"明亮房间\",\"usage\":\"想看蕾丝穿搭时\"}\n```",
+            fallbackLabel: "蕾丝"
+        )
+        XCTAssertEqual(parsedVision.label, "白色蕾丝")
+        XCTAssertEqual(parsedVision.tags, ["蕾丝", "可爱"])
+        XCTAssertEqual(parsedVision.background, "明亮房间")
+
         let snapshot = library.webSnapshot(for: emiliaID)
         let items = try XCTUnwrap(snapshot["items"] as? [[String: Any]])
         XCTAssertEqual(items.count, 2)
+        XCTAssertEqual(items[0]["details"] as? String, "身穿黑色蕾丝花边睡衣，微微低头露出害羞笑容")
+        XCTAssertEqual(items[0]["analyzed"] as? Bool, true)
         XCTAssertTrue((items[0]["url"] as? String)?.hasPrefix("qiban-stickers/\(emiliaID.uuidString)/") == true)
 
         try library.clear(for: emiliaID)

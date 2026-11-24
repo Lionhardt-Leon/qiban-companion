@@ -216,6 +216,7 @@ enum ChatNativePane:String,Identifiable {case persona,api,speech,portrait;var id
         case "finishFile":return try await finishFile(body)
         case "cancelFile":if let id=body["id"] as? String,let write=writes.removeValue(forKey:id){try? write.handle.close();try? FileManager.default.removeItem(at:write.url)};return ["cancelled":true]
         case "clipboard":return ["text":UIPasteboard.general.string ?? ""]
+        case "analyzeSticker":return try await analyzeSticker(body)
         case "openURL":
             guard let raw=body["url"] as? String,let url=URL(string:raw),["https","http"].contains(url.scheme ?? "") else{throw CompanionError.message("外部链接无效。")}
             await UIApplication.shared.open(url);return ["opened":true]
@@ -311,6 +312,62 @@ enum ChatNativePane:String,Identifiable {case persona,api,speech,portrait;var id
             object["messages"]=turns
         }
         request.httpBody=try JSONSerialization.data(withJSONObject:object);return request
+    }
+    private func analyzeSticker(_ body:[String:Any]) async throws -> [String:Any] {
+        guard !suspended else { throw CompanionError.message("App 已挂起。") }
+        let name = body["name"] as? String ?? ""
+        let label = body["label"] as? String ?? ""
+        let characterName = body["characterName"] as? String ?? ""
+        let cardID = (body["cardID"] as? String).flatMap(UUID.init(uuidString:))
+        let stickerID = body["stickerID"] as? String
+        let imageData: Data
+        let originalName: String
+        let currentLabel: String
+        if let cardID = cardID, let stickerID = stickerID, !stickerID.isEmpty, (body["dataUrl"] as? String)?.isEmpty != false {
+            let loaded = try CharacterStickerLibrary().imageData(stickerID: stickerID, for: cardID)
+            imageData = loaded.data
+            originalName = loaded.item.originalName
+            currentLabel = label.isEmpty ? loaded.item.label : label
+        } else if let dataUrl = body["dataUrl"] as? String,
+                  let comma = dataUrl.firstIndex(of: ","),
+                  let decoded = Data(base64Encoded: String(dataUrl[dataUrl.index(after: comma)...])),
+                  decoded.count <= CharacterStickerLibrary.maxImageBytes {
+            imageData = decoded
+            originalName = name
+            currentLabel = label
+        } else {
+            throw CompanionError.message("无法读取待识别的表情图片。")
+        }
+        let settings = store.archive.settings
+        let mainKey = (try? store.mainKey()) ?? ""
+        let result = try await StickerVisionAnalyzer.analyze(
+            imageData: imageData,
+            originalName: originalName,
+            currentLabel: currentLabel,
+            characterName: characterName,
+            settings: settings,
+            mainKey: mainKey
+        )
+        if let cardID = cardID, let stickerID = stickerID, !stickerID.isEmpty {
+            _ = try? CharacterStickerLibrary().updateMetadata(
+                stickerID: stickerID,
+                label: result.label,
+                tags: result.tags,
+                details: result.details,
+                background: result.background,
+                usage: result.usage,
+                analyzed: true,
+                for: cardID
+            )
+        }
+        return [
+            "label": result.label,
+            "tags": result.tags,
+            "details": result.details,
+            "background": result.background,
+            "usage": result.usage,
+            "analyzed": true
+        ]
     }
     private func dialogueText(_ body:[String:Any]) throws -> String {
         let text=body["text"] as? String ?? "",chinese=body["spokenChinese"] as? String

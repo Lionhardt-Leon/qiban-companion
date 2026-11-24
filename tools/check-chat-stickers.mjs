@@ -1,10 +1,17 @@
 import assert from 'node:assert/strict';
 import zlib from 'node:zlib';
 import {
+  MAX_STICKER_ZIP_BYTES,
+  MAX_STICKERS_PER_CHARACTER,
   deriveStickerLabel,
   parseZipImageEntries,
+  streamZipImageEntries,
+  parseVisionMetadata,
   resolveCharacterStickerPack,
+  selectCandidateStickers,
   buildStickerCapabilityPrompt,
+  buildStickerDecisionMessages,
+  parseStickerDecision,
   extractStickerFromReply,
   formatHistoryStickerHint
 } from '../chat-adapter/stickers-core.js';
@@ -70,33 +77,62 @@ function buildZip(entries) {
   return Buffer.concat([...locals, centralBuf, eocd]);
 }
 
-// 1. ZIP extraction: Stored + Deflated + UTF-8 + GBK Chinese filename + skips __MACOSX and non-images
+// 1. 1 GB ZIP limit + chunked streaming ZIP extraction (UTF-8 + GBK + skips __MACOSX & txt)
+assert.equal(MAX_STICKER_ZIP_BYTES, 1024 * 1024 * 1024);
+assert.ok(MAX_STICKERS_PER_CHARACTER >= 500);
+
 const fakePng = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3, 4]);
-// GBK bytes for "吃惊.png": 吃(0xB3,0xD4) 惊(0xBE,0xAA) .png
-const gbkSurprised = Buffer.from([0xb3, 0xd4, 0xbe, 0xaa, 0x2e, 0x70, 0x6e, 0x67]);
+const gbkLace = Buffer.from([0xc0, 0xd9, 0xcb, 0xbf, 0x2e, 0x70, 0x6e, 0x67]); // "蕾丝.png" in GBK
 const zip = buildZip([
   { name: '爱蜜莉雅表情包/01_开心.png', data: fakePng, deflate: true },
-  { nameBytes: gbkSurprised, utf8Flag: false, data: fakePng, deflate: false },
+  { nameBytes: gbkLace, utf8Flag: false, data: fakePng, deflate: false },
   { name: '__MACOSX/._01_开心.png', data: fakePng, deflate: false },
   { name: '爱蜜莉雅表情包/readme.txt', data: 'ignore me', deflate: true }
 ]);
 
 const parsed = parseZipImageEntries(zip, payload => new Uint8Array(zlib.inflateRawSync(payload)));
 assert.equal(parsed.entries.length, 2);
-assert.equal(parsed.entries[0].name, '01_开心.png');
 assert.equal(deriveStickerLabel(parsed.entries[0].name, 1), '开心');
-assert.equal(parsed.entries[1].name, '吃惊.png');
-assert.equal(deriveStickerLabel(parsed.entries[1].name, 2), '吃惊');
+assert.equal(deriveStickerLabel(parsed.entries[1].name, 2), '蕾丝');
 
-// 2. Per-character isolation: Emilia has stickers, Enya has none
-const emilia = { id: 'char_emilia', qibanId: 'uuid-emilia', name: '爱蜜莉雅' };
+const streamed = [];
+let rangeReads = 0;
+const streamSummary = await streamZipImageEntries(
+  zip.byteLength,
+  async (start, end) => {
+    rangeReads++;
+    return new Uint8Array(zip.subarray(start, end));
+  },
+  payload => new Uint8Array(zlib.inflateRawSync(payload)),
+  async entry => {
+    streamed.push(entry.name);
+    return true;
+  }
+);
+assert.equal(streamSummary.total, 2);
+assert.deepEqual(streamed, ['01_开心.png', '蕾丝.png']);
+assert.ok(rangeReads >= 4);
+
+// 2. AI vision metadata parser
+const vision = parseVisionMetadata(
+  '```json\n{"label":"蕾丝","tags":["蕾丝","睡衣","害羞"],"details":"身穿黑色蕾丝花边睡衣，微微低头微笑","background":"暖光卧室","usage":"对方想看蕾丝或晚上聊天时"}\n```',
+  '蕾丝'
+);
+assert.equal(vision.label, '蕾丝');
+assert.deepEqual(vision.tags, ['蕾丝', '睡衣', '害羞']);
+assert.ok(vision.details.includes('蕾丝花边'));
+assert.equal(vision.background, '暖光卧室');
+assert.equal(vision.analyzed, true);
+
+// 3. Per-character isolation + rich vision metadata + Step-1 awareness prompt
+const emilia = { id: 'char_emilia', qibanId: 'uuid-emilia', name: '爱蜜莉雅', prompt: '温柔可爱的银发少女。' };
 const enya = { id: 'char_enya', qibanId: 'uuid-enya', name: '恩雅' };
 const webStore = {
   'qiban:uuid-emilia': {
     enabled: true,
     stickers: [
-      { id: 'w1', label: '开心', name: '开心.png', mime: 'image/png', size: 12, dataRef: 'media:1' },
-      { id: 'w2', label: '吃惊', name: '吃惊.png', mime: 'image/png', size: 12, dataRef: 'media:2' }
+      { id: 'w1', label: '开心', name: '开心.png', mime: 'image/png', size: 12, dataRef: 'media:1', tags: ['开心', '微笑'], details: '双手托腮开心笑着', background: '明亮客厅', usage: '心情好时', analyzed: true },
+      { id: 'w2', label: '蕾丝', name: '蕾丝.png', mime: 'image/png', size: 12, dataRef: 'media:2', tags: ['蕾丝', '睡衣', '害羞'], details: '身穿黑色蕾丝花边睡衣，眼神微羞', background: '暖光卧室', usage: '对方说想看蕾丝时', analyzed: true }
     ]
   }
 };
@@ -106,64 +142,75 @@ const nativeContacts = [
     qibanId: 'uuid-emilia',
     stickers: {
       enabled: true,
-      items: [{ id: 's1', label: '害羞', name: '害羞.webp', mime: 'image/webp', size: 20, url: 'qiban-stickers/uuid-emilia/s1.webp' }]
+      items: [{ id: 's1', label: '吃惊', name: '吃惊.webp', mime: 'image/webp', size: 20, url: 'qiban-stickers/uuid-emilia/s1.webp', tags: ['吃惊', '惊讶'], details: '睁大眼睛一脸震惊', background: '简洁纯色背景', usage: '听到意外消息时', analyzed: true }]
     }
   }
 ];
 
 const emiliaPack = resolveCharacterStickerPack(emilia, webStore, nativeContacts);
 assert.equal(emiliaPack.stickers.length, 3);
-const enyaPack = resolveCharacterStickerPack(enya, webStore, nativeContacts);
-assert.equal(enyaPack.stickers.length, 0);
+assert.equal(resolveCharacterStickerPack(enya, webStore, nativeContacts).stickers.length, 0);
 
-// 3. System capability prompt mapping (optional autonomous judgment, not mandatory every turn)
-const emiliaPrompt = buildStickerCapabilityPrompt(emilia, webStore, nativeContacts);
-assert.ok(emiliaPrompt.includes('爱蜜莉雅'));
-assert.ok(emiliaPrompt.includes('s1：害羞'));
-assert.ok(emiliaPrompt.includes('w2：吃惊'));
-assert.ok(emiliaPrompt.includes('绝对不要每条消息都发表情包'));
+const awareness = buildStickerCapabilityPrompt(emilia, webStore, nativeContacts);
+assert.ok(awareness.includes('蕾丝'));
+assert.ok(awareness.includes('绝不要说“我发不了图片'));
 assert.equal(buildStickerCapabilityPrompt(enya, webStore, nativeContacts), '');
 
-// 4. Reply extraction: normal text without sticker, valid ID, valid label, fullwidth tag, invalid ID, sticker-only, disabled pack
-const noSticker = extractStickerFromReply('今天天气真好呀。', emilia, webStore, nativeContacts);
-assert.equal(noSticker.text, '今天天气真好呀。');
-assert.equal(noSticker.attachments.length, 0);
+// 4. Candidate ranking even with 200+ stickers ensures "想看蕾丝" ranks "蕾丝" #1
+const hugeList = Array.from({ length: 200 }, (_, i) => ({
+  id: `b${i}`,
+  label: `日常${i}`,
+  tags: ['日常'],
+  details: '普通日常表情',
+  background: '白底',
+  usage: '普通聊天'
+}));
+hugeList.push(emiliaPack.stickers.find(s => s.id === 'w2'));
+const ranked = selectCandidateStickers(hugeList, '我想看蕾丝呀', 80);
+assert.equal(ranked.length, 80);
+assert.equal(ranked[0].id, 'w2');
 
-const byId = extractStickerFromReply('欸？！真的吗！ [sticker:w2]', emilia, webStore, nativeContacts);
-assert.equal(byId.text, '欸？！真的吗！');
-assert.equal(byId.attachments.length, 1);
-assert.equal(byId.attachments[0].source, 'sticker');
-assert.equal(byId.attachments[0].dataRef, 'media:2');
-assert.equal(byId.attachments[0].name, '吃惊');
+// 5. Step-2 follow-up decision prompt & parser
+const decisionMsgs = buildStickerDecisionMessages({
+  character: emilia,
+  stickers: emiliaPack.stickers,
+  recentMessages: [{ role: 'user', text: '晚上好' }],
+  userText: '想看蕾丝',
+  assistantText: '哼，真拿你没办法，给你看一眼好了～'
+});
+assert.equal(decisionMsgs.length, 2);
+assert.ok(decisionMsgs[0].content.includes('明确命中必发'));
+assert.ok(decisionMsgs[1].content.includes('身穿黑色蕾丝花边睡衣'));
+assert.ok(decisionMsgs[1].content.includes('暖光卧室'));
 
-const byNativeLabel = extractStickerFromReply('别这样看着我啦…【sticker:害羞】', emilia, webStore, nativeContacts);
-assert.equal(byNativeLabel.text, '别这样看着我啦…');
-assert.equal(byNativeLabel.attachments.length, 1);
-assert.equal(byNativeLabel.attachments[0].url, 'qiban-stickers/uuid-emilia/s1.webp');
+const sendYes = parseStickerDecision('{"send":true,"stickerId":"w2"}', emiliaPack.stickers);
+assert.equal(sendYes.send, true);
+assert.equal(sendYes.sticker.id, 'w2');
+assert.equal(sendYes.attachment.source, 'sticker');
+assert.equal(sendYes.attachment.dataRef, 'media:2');
 
-const unknownId = extractStickerFromReply('嗯嗯 [sticker:nonexistent]', emilia, webStore, nativeContacts);
-assert.equal(unknownId.text, '嗯嗯');
-assert.equal(unknownId.attachments.length, 0);
+const sendByLabel = parseStickerDecision('```json\n{"send":true,"stickerId":"蕾丝"}\n```', emiliaPack.stickers);
+assert.equal(sendByLabel.send, true);
+assert.equal(sendByLabel.sticker.id, 'w2');
 
-const crossChar = extractStickerFromReply('我也想用 [sticker:w2]', enya, webStore, nativeContacts);
-assert.equal(crossChar.text, '我也想用');
-assert.equal(crossChar.attachments.length, 0);
+const sendNo = parseStickerDecision('{"send":false}', emiliaPack.stickers);
+assert.equal(sendNo.send, false);
+assert.equal(sendNo.attachment, null);
 
-const stickerOnly = extractStickerFromReply('[sticker:w1]', emilia, webStore, nativeContacts);
-assert.equal(stickerOnly.text, '');
-assert.equal(stickerOnly.attachments.length, 1);
+const sendInvalid = parseStickerDecision('{"send":true,"stickerId":"nonexistent"}', emiliaPack.stickers);
+assert.equal(sendInvalid.send, false);
 
-const disabled = extractStickerFromReply('开心！[sticker:w1]', emilia, { 'qiban:uuid-emilia': { enabled: false, stickers: webStore['qiban:uuid-emilia'].stickers } }, nativeContacts);
-assert.equal(disabled.text, '开心！');
-assert.equal(disabled.attachments.length, 0);
+// 6. Inline tag fallback still strips cleanly from Step-1 text and preserves matched sticker for Step-2 follow-up
+const inline = extractStickerFromReply('给你看一眼哦 [sticker:w2]', emilia, webStore, nativeContacts);
+assert.equal(inline.text, '给你看一眼哦');
+assert.equal(inline.matchedSticker.id, 'w2');
 
-// 5. History hint avoids sending assistant image attachments back to strict text-only LLM APIs
 const historyHint = formatHistoryStickerHint({
   role: 'assistant',
-  text: '欸？！',
-  attachments: [byId.attachments[0]]
+  text: '',
+  attachments: [sendYes.attachment]
 });
 assert.equal(historyHint.attachments.length, 0);
-assert.ok(historyHint.text.includes('曾发送表情包：吃惊'));
+assert.ok(historyHint.text.includes('补发了表情包：蕾丝'));
 
-console.log('Per-character AI sticker pack & ZIP checks passed.');
+console.log('Per-character AI sticker pack, 1GB streaming ZIP, vision metadata & two-step follow-up checks passed.');

@@ -8,6 +8,56 @@ struct CharacterStickerItem: Codable, Identifiable, Equatable {
     let originalName: String
     let mime: String
     let size: Int
+    var tags: [String] = []
+    var details: String = ""
+    var background: String = ""
+    var usage: String = ""
+    var analyzed: Bool = false
+
+    init(
+        id: String,
+        label: String,
+        file: String,
+        originalName: String,
+        mime: String,
+        size: Int,
+        tags: [String] = [],
+        details: String = "",
+        background: String = "",
+        usage: String = "",
+        analyzed: Bool = false
+    ) {
+        self.id = id
+        self.label = label
+        self.file = file
+        self.originalName = originalName
+        self.mime = mime
+        self.size = size
+        self.tags = tags
+        self.details = details
+        self.background = background
+        self.usage = usage
+        self.analyzed = analyzed
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, label, file, originalName, mime, size, tags, details, background, usage, analyzed
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        label = try c.decode(String.self, forKey: .label)
+        file = try c.decode(String.self, forKey: .file)
+        originalName = try c.decodeIfPresent(String.self, forKey: .originalName) ?? file
+        mime = try c.decodeIfPresent(String.self, forKey: .mime) ?? "image/png"
+        size = try c.decodeIfPresent(Int.self, forKey: .size) ?? 0
+        tags = try c.decodeIfPresent([String].self, forKey: .tags) ?? []
+        details = try c.decodeIfPresent(String.self, forKey: .details) ?? ""
+        background = try c.decodeIfPresent(String.self, forKey: .background) ?? ""
+        usage = try c.decodeIfPresent(String.self, forKey: .usage) ?? ""
+        analyzed = try c.decodeIfPresent(Bool.self, forKey: .analyzed) ?? false
+    }
 }
 
 struct CharacterStickerPack: Codable, Equatable {
@@ -15,10 +65,18 @@ struct CharacterStickerPack: Codable, Equatable {
     var items: [CharacterStickerItem] = []
 }
 
+struct StickerVisionResult: Equatable {
+    let label: String
+    let tags: [String]
+    let details: String
+    let background: String
+    let usage: String
+}
+
 struct CharacterStickerLibrary {
-    static let maxPerCharacter = 120
-    static let maxImageBytes = 5 * 1024 * 1024
-    static let maxZipBytes = 80 * 1024 * 1024
+    static let maxPerCharacter = 500
+    static let maxImageBytes = 20 * 1024 * 1024
+    static let maxZipBytes: UInt64 = 1024 * 1024 * 1024 // 1 GB
     static let imageMimes: [String: String] = [
         "png": "image/png",
         "jpg": "image/jpeg",
@@ -65,6 +123,15 @@ struct CharacterStickerLibrary {
         try data.write(to: manifestURL(for: cardID), options: [.atomic, .completeFileProtection])
     }
 
+    func imageData(stickerID: String, for cardID: UUID) throws -> (item: CharacterStickerItem, data: Data) {
+        let pack = load(for: cardID)
+        guard let item = pack.items.first(where: { $0.id == stickerID }), Self.safeFileName(item.file) else {
+            throw CompanionError.message("找不到指定的表情包文件。")
+        }
+        let data = try Data(contentsOf: folder(for: cardID).appendingPathComponent(item.file))
+        return (item, data)
+    }
+
     func setEnabled(_ enabled: Bool, for cardID: UUID) throws -> CharacterStickerPack {
         var pack = load(for: cardID)
         pack.enabled = enabled
@@ -80,6 +147,41 @@ struct CharacterStickerLibrary {
             pack.items[index].label = trimmed
             try save(pack, for: cardID)
         }
+        return pack
+    }
+
+    func updateMetadata(
+        stickerID: String,
+        label: String? = nil,
+        tags: [String]? = nil,
+        details: String? = nil,
+        background: String? = nil,
+        usage: String? = nil,
+        analyzed: Bool? = nil,
+        for cardID: UUID
+    ) throws -> CharacterStickerPack {
+        var pack = load(for: cardID)
+        guard let index = pack.items.firstIndex(where: { $0.id == stickerID }) else { return pack }
+        if let label = label {
+            let trimmed = String(label.trimmingCharacters(in: .whitespacesAndNewlines).prefix(40))
+            if !trimmed.isEmpty { pack.items[index].label = trimmed }
+        }
+        if let tags = tags {
+            pack.items[index].tags = Array(tags.map { String($0.trimmingCharacters(in: .whitespacesAndNewlines).prefix(24)) }.filter { !$0.isEmpty }.prefix(12))
+        }
+        if let details = details {
+            pack.items[index].details = String(details.trimmingCharacters(in: .whitespacesAndNewlines).prefix(300))
+        }
+        if let background = background {
+            pack.items[index].background = String(background.trimmingCharacters(in: .whitespacesAndNewlines).prefix(160))
+        }
+        if let usage = usage {
+            pack.items[index].usage = String(usage.trimmingCharacters(in: .whitespacesAndNewlines).prefix(160))
+        }
+        if let analyzed = analyzed {
+            pack.items[index].analyzed = analyzed
+        }
+        try save(pack, for: cardID)
         return pack
     }
 
@@ -145,8 +247,9 @@ struct CharacterStickerLibrary {
                     throw CompanionError.message("压缩包中没有找到支持的表情图片（PNG / JPG / WEBP / GIF）。")
                 }
                 for entry in entries {
+                    try Task.checkCancellation()
                     if pack.items.count >= Self.maxPerCharacter { skipped += 1; continue }
-                    if entry.uncompressedSize <= 0 || entry.uncompressedSize > Self.maxImageBytes {
+                    if entry.uncompressedSize <= 0 || entry.uncompressedSize > UInt64(Self.maxImageBytes) {
                         skipped += 1
                         continue
                     }
@@ -181,6 +284,11 @@ struct CharacterStickerLibrary {
                 "name": item.originalName,
                 "mime": item.mime,
                 "size": item.size,
+                "tags": item.tags,
+                "details": item.details,
+                "background": item.background,
+                "usage": item.usage,
+                "analyzed": item.analyzed,
                 "url": "qiban-stickers/\(cardID.uuidString)/\(item.file)"
             ]
         }
@@ -210,13 +318,106 @@ struct CharacterStickerLibrary {
     }
 }
 
-/// Lightweight ZIP reader for user-imported sticker packs (supports Stored + Deflated + UTF-8/GB18030 filenames).
+enum StickerVisionAnalyzer {
+    static func analyze(
+        imageData: Data,
+        originalName: String,
+        currentLabel: String,
+        characterName: String,
+        settings: APISettings,
+        mainKey: String
+    ) async throws -> StickerVisionResult {
+        let frame = try ChatImage.prepare(imageData, source: .user)
+        let hint = [currentLabel, originalName].filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }.joined(separator: " / ")
+        let prompt = """
+        请仔细观察这张属于角色「\(characterName.isEmpty ? "当前角色" : characterName)」的聊天表情包或配图，为她建立图片内容知识档案，方便她在以后聊天中准确知道自己拥有这张图以及图里的细节。
+        原始文件名／当前标签参考：\(hint.isEmpty ? "无" : hint)（如果原名本身包含服装、材质、情绪或梗等关键词，例如“蕾丝”“吃惊”“害羞”，请保留在 label 或 tags 中）。
+        请只输出一个 JSON 对象，不要输出其他解释或 Markdown：
+        {"label":"简洁核心标题(2-10字)","tags":["关键词1","关键词2","关键词3","关键词4"],"details":"详细描述图中人物表情、姿势、服装与材质细节、动作和文字(30-90字)","background":"描述背景环境、光线与整体氛围(15-40字)","usage":"适合在什么聊天话题或对方说什么时补发这张图(15-40字)"}
+        """
+        let session = ServiceClient.session()
+        defer { session.invalidateAndCancel() }
+        let rawText: String
+        if let profile = settings.services?.vision, profile.enabled {
+            let key = APIKeyStore.read(kind: .vision, profile: profile)
+            rawText = try await ServiceClient.vision(profile, key: key, question: prompt, images: [frame], session: session)
+        } else {
+            guard !settings.endpoint.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                  !settings.model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                throw CompanionError.message("请先在设置中配置对话模型或独立识图服务，再进行 AI 识图打标。")
+            }
+            var request = URLRequest(url: try APIClient.endpoint(settings.endpoint))
+            request.httpMethod = "POST"
+            request.timeoutInterval = 90
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            if !mainKey.isEmpty {
+                request.setValue("Bearer " + mainKey, forHTTPHeaderField: "Authorization")
+            }
+            let turns: [ChatRequest.Turn] = [
+                .init(role: "system", content: "你是精确的图像识别与标注助手，只输出合法 JSON，如实描述画面内容、服装细节、背景与氛围。"),
+                .init(role: "user", content: prompt, image: frame)
+            ]
+            request.httpBody = try JSONEncoder().encode(ChatRequest(model: settings.model, messages: turns, temperature: 0.2, max_tokens: 700))
+            let body = try await ServiceClient.data(request, session: session, limit: 128_000, label: "表情包识图")
+            guard let response = try? JSONDecoder().decode(ChatResponse.self, from: body),
+                  let content = response.choices.first?.message.content,
+                  !content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                throw CompanionError.message("识图接口未返回有效结果，请检查当前模型是否支持图片输入或开启独立识图服务。")
+            }
+            rawText = content
+        }
+        return parseResult(rawText, fallbackLabel: currentLabel.isEmpty ? CharacterStickerLibrary.deriveLabel(from: originalName, fallbackIndex: 1) : currentLabel)
+    }
+
+    static func parseResult(_ raw: String, fallbackLabel: String) -> StickerVisionResult {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        var candidate = trimmed
+        if candidate.hasPrefix("```"), let nl = candidate.firstIndex(of: "\n"), candidate.hasSuffix("```") {
+            candidate = String(candidate[candidate.index(after: nl)..<candidate.index(candidate.endIndex, offsetBy: -3)]).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        if let start = candidate.firstIndex(of: "{"), let end = candidate.lastIndex(of: "}"), start < end {
+            let slice = String(candidate[start...end])
+            if let data = slice.data(using: .utf8),
+               let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] {
+                let label = String((obj["label"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines).prefix(40))
+                let rawTags: [String]
+                if let array = obj["tags"] as? [String] {
+                    rawTags = array
+                } else if let str = obj["tags"] as? String {
+                    rawTags = str.components(separatedBy: CharacterSet(charactersIn: ",，、;；/|"))
+                } else {
+                    rawTags = []
+                }
+                let tags = Array(rawTags.map { String($0.trimmingCharacters(in: .whitespacesAndNewlines).prefix(24)) }.filter { !$0.isEmpty }.prefix(12))
+                let details = String((obj["details"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines).prefix(300))
+                let background = String((obj["background"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines).prefix(160))
+                let usage = String((obj["usage"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines).prefix(160))
+                return StickerVisionResult(
+                    label: label.isEmpty ? fallbackLabel : label,
+                    tags: tags,
+                    details: details,
+                    background: background,
+                    usage: usage
+                )
+            }
+        }
+        return StickerVisionResult(
+            label: fallbackLabel,
+            tags: [fallbackLabel].filter { !$0.isEmpty },
+            details: String(trimmed.prefix(300)),
+            background: "",
+            usage: ""
+        )
+    }
+}
+
+/// Streaming ZIP reader for user-imported sticker packs up to 1 GB (supports Stored + Deflated + UTF-8/GB18030 filenames).
 final class StickerZipArchive {
     struct Entry {
         let name: String
         let method: UInt16
-        let compressedSize: Int
-        let uncompressedSize: Int
+        let compressedSize: UInt64
+        let uncompressedSize: UInt64
         let localHeaderOffset: UInt64
         let crc: UInt32
     }
@@ -232,8 +433,8 @@ final class StickerZipArchive {
     init(url: URL) throws {
         handle = try FileHandle(forReadingFrom: url)
         fileSize = try handle.seekToEnd()
-        guard fileSize >= 22, fileSize <= UInt64(CharacterStickerLibrary.maxZipBytes) else {
-            throw CompanionError.message("表情包压缩文件大小无效或超过 80MB 上限。")
+        guard fileSize >= 22, fileSize <= CharacterStickerLibrary.maxZipBytes else {
+            throw CompanionError.message("表情包压缩文件大小无效或超过 1GB 上限。")
         }
         let tailSize = Int(min(fileSize, 65_557))
         try handle.seek(toOffset: fileSize - UInt64(tailSize))
@@ -246,7 +447,7 @@ final class StickerZipArchive {
         let count = Int(Self.uint(tail, end + 10, 2))
         let centralSize = Int(Self.uint(tail, end + 12, 4))
         let centralOffset = Self.uint(tail, end + 16, 4)
-        guard count > 0, count <= 2048, centralSize <= 4 * 1024 * 1024,
+        guard count > 0, count <= 10_000, centralSize <= 16 * 1024 * 1024,
               centralOffset + UInt64(centralSize) <= fileSize else {
             throw CompanionError.message("ZIP 目录无效或文件数量过多。")
         }
@@ -261,8 +462,8 @@ final class StickerZipArchive {
             let flags = UInt16(Self.uint(central, at + 8, 2))
             let method = UInt16(Self.uint(central, at + 10, 2))
             let crc = UInt32(Self.uint(central, at + 16, 4))
-            let compSize = Int(Self.uint(central, at + 20, 4))
-            let uncompSize = Int(Self.uint(central, at + 24, 4))
+            let compSize = Self.uint(central, at + 20, 4)
+            let uncompSize = Self.uint(central, at + 24, 4)
             let nameLen = Int(Self.uint(central, at + 28, 2))
             let extraLen = Int(Self.uint(central, at + 30, 2))
             let commentLen = Int(Self.uint(central, at + 32, 2))
@@ -313,18 +514,17 @@ final class StickerZipArchive {
         let nameLen = Int(Self.uint(local, 26, 2))
         let extraLen = Int(Self.uint(local, 28, 2))
         let dataOffset = entry.localHeaderOffset + 30 + UInt64(nameLen + extraLen)
-        guard entry.compressedSize >= 0,
-              entry.compressedSize <= CharacterStickerLibrary.maxImageBytes + 1024,
-              dataOffset + UInt64(entry.compressedSize) <= fileSize else {
-            throw CompanionError.message("ZIP 图片数据范围无效或过大。")
+        guard entry.compressedSize <= UInt64(CharacterStickerLibrary.maxImageBytes + 4096),
+              dataOffset + entry.compressedSize <= fileSize else {
+            throw CompanionError.message("ZIP 图片数据范围无效或单张超过 20MB 上限。")
         }
         try handle.seek(toOffset: dataOffset)
-        let compressed = try Self.exact(handle, entry.compressedSize)
+        let compressed = try Self.exact(handle, Int(entry.compressedSize))
         let output: Data
         if entry.method == 0 {
             output = compressed
         } else if entry.method == 8 {
-            output = try Self.inflateRaw(compressed, expectedSize: entry.uncompressedSize)
+            output = try Self.inflateRaw(compressed, expectedSize: Int(entry.uncompressedSize))
         } else {
             throw CompanionError.message("ZIP 使用了不支持的压缩方式。")
         }
@@ -349,7 +549,7 @@ final class StickerZipArchive {
 
     private static func inflateRaw(_ input: Data, expectedSize: Int) throws -> Data {
         guard expectedSize >= 0, expectedSize <= CharacterStickerLibrary.maxImageBytes else {
-            throw CompanionError.message("表情包单张图片超过 5MB 上限。")
+            throw CompanionError.message("表情包单张图片超过 20MB 上限。")
         }
         if expectedSize == 0 { return Data() }
         var stream = z_stream()

@@ -22,8 +22,13 @@ struct PersonaView:View {
     @State private var stickerPack = CharacterStickerPack()
     @State private var importingStickers = false
     @State private var stickerBusy = false
+    @State private var stickerAnalyzeTask:Task<Void,Never>? = nil
+    @State private var stickerAnalyzeProgress = ""
     @State private var editingStickerID:String? = nil
     @State private var editingStickerLabel = ""
+    @State private var editingStickerDetails = ""
+    @State private var editingStickerBackground = ""
+    @State private var editingStickerUsage = ""
     private let stickerLibrary = CharacterStickerLibrary()
     private var card:Binding<PersonaCard> {
         Binding(get:{library.cards.first{$0.id == selected} ?? PersonaCard()},set:{value in
@@ -73,7 +78,8 @@ struct PersonaView:View {
                     selected = initialCardID ?? library.card(for:modelKey)?.id;loaded = true
                     reloadStickers()
                 }
-                .onChange(of:selected) { _ in reloadStickers() }
+                .onChange(of:selected) { _ in stickerAnalyzeTask?.cancel(); stickerAnalyzeTask = nil; stickerAnalyzeProgress = ""; reloadStickers() }
+                .onDisappear { stickerAnalyzeTask?.cancel(); stickerAnalyzeTask = nil }
                 .fileImporter(isPresented:$importingStickers,allowedContentTypes:[.zip,.image],allowsMultipleSelection:true) { result in
                     guard let cardID = selected else { return }
                     switch result {
@@ -217,9 +223,79 @@ struct PersonaView:View {
         guard let id = selected else { stickerPack = CharacterStickerPack(); return }
         stickerPack = stickerLibrary.load(for: id)
     }
+    private func startStickerAnalysis(reanalyzeAll:Bool) {
+        guard let cardID = selected, stickerAnalyzeTask == nil else { return }
+        let targets = stickerPack.items.filter { reanalyzeAll || !$0.analyzed }
+        guard !targets.isEmpty else {
+            notice = "当前角色的表情包已全部完成 AI 识图打标。"
+            return
+        }
+        let settings = store.archive.settings
+        let mainKey = (try? store.mainKey()) ?? ""
+        let charName = card.wrappedValue.name.isEmpty ? card.wrappedValue.title : card.wrappedValue.name
+        let lib = stickerLibrary
+        stickerAnalyzeProgress = "准备 AI 识图（0/\(targets.count)）…"
+        stickerAnalyzeTask = Task {
+            var done = 0
+            var failed = 0
+            var firstError = ""
+            for item in targets {
+                if Task.isCancelled { break }
+                await MainActor.run {
+                    stickerAnalyzeProgress = "AI 正在识别「\(item.label)」(\(done + 1)/\(targets.count))…"
+                }
+                do {
+                    let loaded = try await Task.detached(priority:.userInitiated) {
+                        try lib.imageData(stickerID:item.id,for:cardID)
+                    }.value
+                    let result = try await StickerVisionAnalyzer.analyze(
+                        imageData:loaded.data,
+                        originalName:loaded.item.originalName,
+                        currentLabel:loaded.item.label,
+                        characterName:charName,
+                        settings:settings,
+                        mainKey:mainKey
+                    )
+                    if Task.isCancelled { break }
+                    let updated = try await Task.detached(priority:.userInitiated) {
+                        try lib.updateMetadata(
+                            stickerID:item.id,
+                            label:result.label,
+                            tags:result.tags,
+                            details:result.details,
+                            background:result.background,
+                            usage:result.usage,
+                            analyzed:true,
+                            for:cardID
+                        )
+                    }.value
+                    done += 1
+                    await MainActor.run {
+                        if selected == cardID { stickerPack = updated }
+                    }
+                } catch {
+                    if Task.isCancelled { break }
+                    failed += 1
+                    if firstError.isEmpty { firstError = error.localizedDescription }
+                }
+            }
+            await MainActor.run {
+                stickerAnalyzeTask = nil
+                stickerAnalyzeProgress = ""
+                if selected == cardID { stickerPack = lib.load(for:cardID) }
+                if done > 0 {
+                    notice = "AI 识图打标完成：成功 \(done) 张" + (failed > 0 ? "，失败 \(failed) 张（\(firstError)）" : "。现在 AI 已了解这些表情包的画面细节与背景。")
+                } else if !firstError.isEmpty {
+                    store.error = "AI 识图打标失败：\(firstError)"
+                }
+            }
+        }
+    }
     private var stickerPanel:some View {
-        panel("通讯 AI 表情包（按角色独立）","导入表情包 .zip 或图片后会直接解压到当前角色；通讯时 AI 会根据表情含义自行判断是否发送，不会每句必发。") {
-            Toggle("允许此角色在通讯中自主发送表情包",isOn:Binding(
+        let analyzedCount = stickerPack.items.filter(\.analyzed).count
+        let pendingCount = stickerPack.items.count - analyzedCount
+        return panel("通讯 AI 表情包（按角色独立）","支持导入最高 1GB 的表情包 .zip 或图片并自动解压到当前角色。建议导入后点击「AI 识图打标」，让 AI 真正看懂每张图的内容、细节、服装与背景；通讯时 AI 会在文字回复后自主决定是否补发一张表情包。") {
+            Toggle("允许此角色在通讯中自主补发表情包",isOn:Binding(
                 get:{ stickerPack.enabled },
                 set:{ value in
                     guard let id = selected else { return }
@@ -230,42 +306,104 @@ struct PersonaView:View {
             HStack(spacing:10) {
                 Button { importingStickers = true } label:{
                     Label(stickerBusy ? "正在解压导入…":"导入表情包 .zip / 图片",systemImage:"archivebox.fill")
-                }.buttonStyle(.borderedProminent).tint(.indigo).disabled(stickerBusy || selected == nil)
+                }.buttonStyle(.borderedProminent).tint(.indigo).disabled(stickerBusy || stickerAnalyzeTask != nil || selected == nil)
                 if !stickerPack.items.isEmpty {
                     Button(role:.destructive) {
+                        stickerAnalyzeTask?.cancel(); stickerAnalyzeTask = nil; stickerAnalyzeProgress = ""
                         guard let id = selected else { return }
                         do { try stickerLibrary.clear(for:id); stickerPack = CharacterStickerPack(); notice = "已清空当前角色的表情包。" }
                         catch { store.error = error.localizedDescription }
-                    } label:{ Text("清空") }.buttonStyle(.bordered)
+                    } label:{ Text("清空") }.buttonStyle(.bordered).disabled(stickerBusy)
+                }
+            }
+            if !stickerPack.items.isEmpty {
+                HStack(spacing:10) {
+                    if stickerAnalyzeTask != nil {
+                        Button(role:.destructive) {
+                            stickerAnalyzeTask?.cancel(); stickerAnalyzeTask = nil; stickerAnalyzeProgress = ""
+                        } label:{ Label("停止识图",systemImage:"stop.fill") }.buttonStyle(.bordered)
+                    } else {
+                        Button { startStickerAnalysis(reanalyzeAll:false) } label:{
+                            Label(pendingCount > 0 ? "AI 识图打标（待识别 \(pendingCount) 张）":"AI 识图已全部完成",systemImage:"sparkles")
+                        }.buttonStyle(.borderedProminent).tint(.mint).disabled(pendingCount == 0 || stickerBusy)
+                        if analyzedCount > 0 {
+                            Button("全部重识") { startStickerAnalysis(reanalyzeAll:true) }.buttonStyle(.bordered).disabled(stickerBusy)
+                        }
+                    }
+                }
+                if !stickerAnalyzeProgress.isEmpty {
+                    HStack(spacing:8) {
+                        ProgressView().controlSize(.small)
+                        Text(stickerAnalyzeProgress).font(.caption).foregroundStyle(.mint)
+                    }
                 }
             }
             if stickerPack.items.isEmpty {
-                Text("当前角色尚未导入表情包。支持直接选择如「爱蜜莉雅表情包.zip」自动解压，文件名将作为 AI 识别表情含义的默认标签。")
+                Text("当前角色尚未导入表情包。支持直接选择最高 1GB 的「爱蜜莉雅表情包.zip」流式解压，导入后可一键让 AI 自动识图提取内容细节与背景。")
                     .font(.caption).foregroundStyle(.secondary)
             } else {
-                DisclosureGroup("已导入 \(stickerPack.items.count) 张表情包（可修改 AI 识别标签或删除）") {
-                    VStack(alignment:.leading,spacing:8) {
+                DisclosureGroup("已导入 \(stickerPack.items.count) 张 · 已 AI 识图 \(analyzedCount)/\(stickerPack.items.count) 张（点开查看或编辑）") {
+                    VStack(alignment:.leading,spacing:10) {
                         ForEach(stickerPack.items) { item in
-                            HStack(spacing:8) {
-                                Text(item.id).font(.caption.monospaced()).foregroundStyle(.secondary).frame(width:36,alignment:.leading)
-                                if editingStickerID == item.id {
-                                    TextField("语义标签",text:$editingStickerLabel).textFieldStyle(.roundedBorder)
-                                    Button("确定") {
-                                        guard let id = selected else { return }
-                                        do {
-                                            stickerPack = try stickerLibrary.rename(stickerID:item.id,label:editingStickerLabel,for:id)
-                                            editingStickerID = nil
-                                        } catch { store.error = error.localizedDescription }
-                                    }.buttonStyle(.bordered)
-                                } else {
-                                    Text(item.label).font(.subheadline).lineLimit(1)
+                            VStack(alignment:.leading,spacing:6) {
+                                HStack(spacing:8) {
+                                    Text(item.id).font(.caption.monospaced()).foregroundStyle(.secondary).frame(width:36,alignment:.leading)
+                                    Text(item.label).font(.subheadline.bold()).lineLimit(1)
+                                    if item.analyzed {
+                                        Text("已识图").font(.caption2).padding(.horizontal,6).padding(.vertical,2).background(.mint.opacity(0.2),in:Capsule()).foregroundStyle(.mint)
+                                    }
                                     Spacer()
-                                    Button("改标签") { editingStickerID = item.id; editingStickerLabel = item.label }.font(.caption)
+                                    Button(editingStickerID == item.id ? "收起":"编辑") {
+                                        if editingStickerID == item.id {
+                                            editingStickerID = nil
+                                        } else {
+                                            editingStickerID = item.id
+                                            editingStickerLabel = item.label
+                                            editingStickerDetails = item.details
+                                            editingStickerBackground = item.background
+                                            editingStickerUsage = item.usage
+                                        }
+                                    }.font(.caption)
                                     Button(role:.destructive) {
                                         guard let id = selected else { return }
                                         do { stickerPack = try stickerLibrary.remove(stickerID:item.id,for:id) }
                                         catch { store.error = error.localizedDescription }
                                     } label:{ Image(systemName:"trash") }.font(.caption)
+                                }
+                                if !item.tags.isEmpty {
+                                    Text("关键词：\(item.tags.joined(separator:"、"))").font(.caption2).foregroundStyle(.indigo)
+                                }
+                                if !item.details.isEmpty {
+                                    Text("画面细节：\(item.details)").font(.caption2).foregroundStyle(.secondary)
+                                }
+                                if !item.background.isEmpty {
+                                    Text("背景氛围：\(item.background)").font(.caption2).foregroundStyle(.secondary)
+                                }
+                                if !item.usage.isEmpty {
+                                    Text("适用场景：\(item.usage)").font(.caption2).foregroundStyle(.secondary)
+                                }
+                                if editingStickerID == item.id {
+                                    VStack(alignment:.leading,spacing:6) {
+                                        TextField("核心标签（如：蕾丝、吃惊）",text:$editingStickerLabel).textFieldStyle(.roundedBorder)
+                                        TextField("画面内容与细节（服装/神态/动作）",text:$editingStickerDetails).textFieldStyle(.roundedBorder)
+                                        TextField("背景与氛围",text:$editingStickerBackground).textFieldStyle(.roundedBorder)
+                                        TextField("适用聊天场景",text:$editingStickerUsage).textFieldStyle(.roundedBorder)
+                                        Button("保存此表情档案") {
+                                            guard let id = selected else { return }
+                                            do {
+                                                stickerPack = try stickerLibrary.updateMetadata(
+                                                    stickerID:item.id,
+                                                    label:editingStickerLabel,
+                                                    details:editingStickerDetails,
+                                                    background:editingStickerBackground,
+                                                    usage:editingStickerUsage,
+                                                    analyzed:true,
+                                                    for:id
+                                                )
+                                                editingStickerID = nil
+                                            } catch { store.error = error.localizedDescription }
+                                        }.buttonStyle(.borderedProminent).tint(.indigo)
+                                    }
                                 }
                             }
                             Divider()
