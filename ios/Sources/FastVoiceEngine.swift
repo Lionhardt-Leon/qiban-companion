@@ -3,7 +3,7 @@ import CryptoKit
 import OnnxRuntimeBindings
 import QibanG2P
 
-// MARK: - Track B1: Ultra-Fast Non-Autoregressive VITS-Lite Manifest & Package Library
+// MARK: - Track B1: Ultra-Fast Non-Autoregressive VITS-Lite / MeloTTS-VITS2 Manifest & Library
 
 struct FastVoiceManifest: Codable {
     struct Voice: Codable, Identifiable, Equatable {
@@ -52,7 +52,7 @@ struct FastVoiceManifest: Codable {
 
 struct FastVoiceConfig: Codable {
     let sampleRate: Int
-    let frontend: String           // "qiban_g2p" or "lexicon"
+    let frontend: String           // "qiban_g2p", "lexicon", or "melo_lexicon"
     let addBlank: Bool?
     let blankId: Int64?
     let noiseScale: Float?
@@ -62,15 +62,16 @@ struct FastVoiceConfig: Codable {
     let useScalesVector: Bool?     // true: single [3] tensor "scales", false: 3 separate [1] tensors
     let inputX: String?
     let inputLengths: String?
+    let inputTones: String?        // e.g. "tones" for MeloTTS VITS2
     let inputScales: String?
     let inputSid: String?
     let outputAudio: String?
     let vocabSize: Int?
-    let phoneMap: [String: Int64]? // optional remap from qiban_g2p ID -> VITS token ID
+    let phoneMap: [String: Int64]?
 
     func validate() throws {
         guard [16000, 22050, 24000, 32000, 44100].contains(sampleRate),
-              ["qiban_g2p", "lexicon"].contains(frontend) else {
+              ["qiban_g2p", "lexicon", "melo_lexicon"].contains(frontend) else {
             throw CompanionError.message("极速语音配置参数无效。")
         }
     }
@@ -162,7 +163,7 @@ struct FastVoicePackageLibrary {
     }
 }
 
-// MARK: - Single-Shot Non-Autoregressive VITS-Lite Engine (Resident in RAM, ~0.15s–0.30s per sentence)
+// MARK: - Single-Shot Non-Autoregressive VITS-Lite / MeloTTS Engine (~0.15s–0.30s per sentence)
 
 final class FastVoiceEngine {
     let voice: FastVoiceManifest.Voice
@@ -172,7 +173,7 @@ final class FastVoiceEngine {
     private let config: FastVoiceConfig
     private let env: ORTEnv
     private let session: AcceleratedVoiceSession
-    private let lexicon: [String: [Int64]]?
+    private let lexicon: [String: ([Int64], [Int64]?)]?
     private let punctuationIds: [Character: Int64]
 
     init(root: URL, voice: FastVoiceManifest.Voice, computeMode: VoiceComputeMode = .automatic, sharedResourcesRoot: URL? = nil) throws {
@@ -197,6 +198,10 @@ final class FastVoiceEngine {
             guard ok == 1 else { throw CompanionError.message("极速语音文字前端初始化失败。") }
             self.lexicon = nil
             self.punctuationIds = [:]
+        } else if decoded.frontend == "melo_lexicon" {
+            let (entries, punct) = try Self.loadMeloLexicon(directory: path)
+            self.lexicon = entries
+            self.punctuationIds = punct
         } else {
             let lexURL = path.appendingPathComponent("lexicon.json")
             let lexData = try Data(contentsOf: lexURL)
@@ -206,7 +211,10 @@ final class FastVoiceEngine {
                 let punctuation: [String: Int64]?
             }
             let parsed = try JSONDecoder().decode(LexiconFile.self, from: lexData)
-            self.lexicon = parsed.entries
+            var entries: [String: ([Int64], [Int64]?)] = [:]
+            entries.reserveCapacity(parsed.entries.count)
+            for (k, v) in parsed.entries { entries[k] = (v, nil) }
+            self.lexicon = entries
             var punct: [Character: Int64] = [:]
             for (k, v) in parsed.punctuation ?? [:] {
                 if let ch = k.first { punct[ch] = v }
@@ -226,21 +234,80 @@ final class FastVoiceEngine {
         )
     }
 
+    private static func loadMeloLexicon(directory: URL) throws -> ([String: ([Int64], [Int64]?)], [Character: Int64]) {
+        let tokData = try Data(contentsOf: directory.appendingPathComponent("tokens.txt"))
+        guard tokData.count <= 256 * 1024, let tokText = String(data: tokData, encoding: .utf8) else {
+            throw CompanionError.message("极速语音 tokens.txt 无效。")
+        }
+        var tokenMap: [String: Int64] = [:]
+        for line in tokText.split(whereSeparator: \.isNewline) {
+            let parts = line.split(separator: " ")
+            if parts.count == 2, let id = Int64(parts[1]) {
+                tokenMap[String(parts[0])] = id
+            }
+        }
+        let lexData = try Data(contentsOf: directory.appendingPathComponent("lexicon.txt"))
+        guard lexData.count <= 16 * 1024 * 1024, let lexText = String(data: lexData, encoding: .utf8) else {
+            throw CompanionError.message("极速语音 lexicon.txt 无效。")
+        }
+        var entries: [String: ([Int64], [Int64]?)] = [:]
+        entries.reserveCapacity(65_000)
+        for line in lexText.split(whereSeparator: \.isNewline) {
+            let parts = line.split(separator: " ")
+            guard parts.count >= 3 else { continue }
+            let restCount = parts.count - 1
+            guard restCount % 2 == 0 else { continue }
+            let half = restCount / 2
+            var phones: [Int64] = []
+            var tones: [Int64] = []
+            phones.reserveCapacity(half)
+            tones.reserveCapacity(half)
+            var ok = true
+            for i in 0..<half {
+                guard let pid = tokenMap[String(parts[1 + i])], let tid = Int64(parts[1 + half + i]) else {
+                    ok = false; break
+                }
+                phones.append(pid)
+                tones.append(tid)
+            }
+            if ok { entries[String(parts[0])] = (phones, tones) }
+        }
+        var punct: [Character: Int64] = [:]
+        let comma = tokenMap[","] ?? 1
+        let period = tokenMap["."] ?? comma
+        let question = tokenMap["?"] ?? period
+        let exclam = tokenMap["!"] ?? period
+        for c in [",", "，", "、", ";", "；", ":", "："] { punct[Character(c)] = comma }
+        for c in [".", "。"] { punct[Character(c)] = period }
+        for c in ["?", "？"] { punct[Character(c)] = question }
+        for c in ["!", "！"] { punct[Character(c)] = exclam }
+        return (entries, punct)
+    }
+
     func synthesize(_ text: String, speed: Float, cancellation: SpeechCancellation) throws -> [Float] {
         let started = ProcessInfo.processInfo.systemUptime
         try cancellation.check()
         session.resetMetrics()
 
-        var ids = try textToPhoneIds(text)
+        var (ids, tones) = try textToPhonesAndTones(text)
         if config.addBlank ?? true {
             let blank = config.blankId ?? 0
-            var interleaved: [Int64] = [blank]
-            interleaved.reserveCapacity(ids.count * 2 + 1)
+            var interleavedPhones: [Int64] = [blank]
+            interleavedPhones.reserveCapacity(ids.count * 2 + 1)
             for id in ids {
-                interleaved.append(id)
-                interleaved.append(blank)
+                interleavedPhones.append(id)
+                interleavedPhones.append(blank)
             }
-            ids = interleaved
+            ids = interleavedPhones
+            if let rawTones = tones {
+                var interleavedTones: [Int64] = [0]
+                interleavedTones.reserveCapacity(rawTones.count * 2 + 1)
+                for t in rawTones {
+                    interleavedTones.append(t)
+                    interleavedTones.append(0)
+                }
+                tones = interleavedTones
+            }
         }
         guard !ids.isEmpty, ids.count <= 900 else {
             throw CompanionError.message("极速语音音素长度无效，请拆成短句。")
@@ -248,7 +315,7 @@ final class FastVoiceEngine {
 
         try cancellation.check()
         let xName = config.inputX ?? "x"
-        let lenName = config.inputLengths ?? "x_length"
+        let lenName = config.inputLengths ?? "x_lengths"
         let outName = config.outputAudio ?? "y"
         let clampedSpeed = max(0.7, min(1.3, speed.isFinite ? speed : 1.0))
         let lengthScale = (config.lengthScale ?? 1.0) / clampedSpeed
@@ -259,7 +326,11 @@ final class FastVoiceEngine {
             xName: try Self.tensor(ids, [1, ids.count]),
             lenName: try Self.tensor([Int64(ids.count)], [1])
         ]
-        if config.useScalesVector ?? true {
+        if let tonesName = config.inputTones, !tonesName.isEmpty {
+            let toneVec = tones ?? Array(repeating: Int64(0), count: ids.count)
+            inputs[tonesName] = try Self.tensor(toneVec, [1, toneVec.count])
+        }
+        if config.useScalesVector ?? false {
             inputs[config.inputScales ?? "scales"] = try Self.tensor([noiseScale, lengthScale, noiseScaleW], [3])
         } else {
             inputs["noise_scale"] = try Self.tensor([noiseScale], [1])
@@ -289,7 +360,7 @@ final class FastVoiceEngine {
         return samples
     }
 
-    private func textToPhoneIds(_ text: String) throws -> [Int64] {
+    private func textToPhonesAndTones(_ text: String) throws -> ([Int64], [Int64]?) {
         if config.frontend == "qiban_g2p" {
             let data = try text.withCString { tp in
                 try voice.language.withCString { lp -> Data in
@@ -304,30 +375,44 @@ final class FastVoiceEngine {
                 throw CompanionError.message("极速音素为空。")
             }
             let vocab = Int64(config.vocabSize ?? 732)
-            if let map = config.phoneMap {
-                return rawIds.compactMap { map[String($0)] }.filter { $0 >= 0 && $0 < vocab }
-            }
-            return rawIds.filter { $0 >= 0 && $0 < vocab }
+            let mapped = config.phoneMap.map { map in rawIds.compactMap { map[String($0)] } } ?? rawIds
+            return (mapped.filter { $0 >= 0 && $0 < vocab }, nil)
         }
 
         guard let lex = lexicon else { throw CompanionError.message("极速语音词典未加载。") }
+        let useTones = config.inputTones != nil
         let chars = Array(text)
-        var result: [Int64] = []
+        var phones: [Int64] = []
+        var tones: [Int64] = []
         var i = 0
         while i < chars.count {
             let ch = chars[i]
             if ch.isWhitespace { i += 1; continue }
             if let pid = punctuationIds[ch] {
-                result.append(pid)
+                phones.append(pid)
+                if useTones { tones.append(0) }
                 i += 1
+                continue
+            }
+            // Match ASCII English word as one unit
+            if ch.isASCII && ch.isLetter {
+                var end = i + 1
+                while end < chars.count, chars[end].isASCII && (chars[end].isLetter || chars[end] == "'") { end += 1 }
+                let word = String(chars[i..<end]).lowercased()
+                if let hit = lex[word] {
+                    phones.append(contentsOf: hit.0)
+                    if useTones { tones.append(contentsOf: hit.1 ?? Array(repeating: Int64(0), count: hit.0.count)) }
+                }
+                i = end
                 continue
             }
             var matched = false
             let maxLen = min(4, chars.count - i)
             for len in stride(from: maxLen, through: 1, by: -1) {
                 let slice = String(chars[i..<(i + len)])
-                if let seq = lex[slice] ?? lex[slice.lowercased()] {
-                    result.append(contentsOf: seq)
+                if let hit = lex[slice] ?? lex[slice.lowercased()] {
+                    phones.append(contentsOf: hit.0)
+                    if useTones { tones.append(contentsOf: hit.1 ?? Array(repeating: Int64(0), count: hit.0.count)) }
                     i += len
                     matched = true
                     break
@@ -335,8 +420,8 @@ final class FastVoiceEngine {
             }
             if !matched { i += 1 }
         }
-        guard !result.isEmpty else { throw CompanionError.message("当前台词无法映射到极速语音音素。") }
-        return result
+        guard !phones.isEmpty else { throw CompanionError.message("当前台词无法映射到极速语音音素。") }
+        return (phones, useTones ? tones : nil)
     }
 
     private static func tensor(_ array: [Int64], _ shape: [Int]) throws -> ORTValue {
