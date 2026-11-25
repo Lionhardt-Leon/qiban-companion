@@ -160,7 +160,12 @@ struct VoiceCallOverlay: View {
 
     private var transcriptCard: some View {
         VStack(alignment: .leading, spacing: 6) {
-            if !call.lastUserText.isEmpty {
+            if !call.liveTranscript.isEmpty && !call.busy {
+                Text("正在听：\(call.liveTranscript)")
+                    .font(.caption.bold())
+                    .foregroundStyle(.mint)
+                    .lineLimit(3)
+            } else if !call.lastUserText.isEmpty {
                 Text("你：\(call.lastUserText)")
                     .font(.caption)
                     .foregroundStyle(.white.opacity(0.75))
@@ -172,11 +177,17 @@ struct VoiceCallOverlay: View {
                     .foregroundStyle(.white)
                     .lineLimit(4)
             }
-            HStack {
+            HStack(spacing: 8) {
                 Text("熄屏后仍可保持通话 · 说完自动发送")
                     .font(.caption2)
                     .foregroundStyle(.white.opacity(0.6))
                 Spacer()
+                if !call.liveTranscript.isEmpty && !call.busy {
+                    Button("立刻发送") { call.commitCurrentSpeechNow() }
+                        .font(.caption2.bold())
+                        .padding(.horizontal, 10).padding(.vertical, 5)
+                        .background(Color.mint.opacity(0.35), in: Capsule())
+                }
                 Button("打断并说话") { call.interruptAndListen() }
                     .font(.caption2.bold())
                     .padding(.horizontal, 10).padding(.vertical, 5)
@@ -370,6 +381,36 @@ struct VoiceCallThemeSheet: View {
                         }
                     }.pickerStyle(.segmented)
                     Text("选择「缩到左侧」或「缩到右侧」时，通话会收缩为横置挂断条，方便你同时操作其他页面。")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+
+                Section("语音识别与响应速度") {
+                    LabeledContent("当前识别引擎") {
+                        Text(call.usesRemoteASR ? "独立 ASR 接口" : (call.theme.isEnhancedRecognitionEnabled ? "苹果高精度（联网增强）" : "仅本机离线"))
+                            .foregroundStyle(.secondary)
+                    }
+                    Toggle("优先高精度语音识别（联网增强）", isOn: Binding(
+                        get: { call.theme.isEnhancedRecognitionEnabled },
+                        set: { call.theme.preferEnhancedRecognition = $0 }
+                    ))
+                    .disabled(call.usesRemoteASR)
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack {
+                            Text("说完停顿自动发送")
+                            Spacer()
+                            Text(String(format: "%.1f 秒", call.theme.effectiveSilenceSeconds))
+                                .foregroundStyle(.secondary)
+                        }
+                        Slider(
+                            value: Binding(
+                                get: { call.theme.effectiveSilenceSeconds },
+                                set: { call.theme.silenceSeconds = $0 }
+                            ),
+                            in: 0.8...2.5,
+                            step: 0.1
+                        )
+                    }
+                    Text("默认使用苹果高精度中文识别并自动注入角色名热词（断网时自动回退本机）。若追求更高准确率，也可在「模型与自定义 API → 独立接口」中启用 Whisper / SenseVoice 等独立 ASR。")
                         .font(.caption).foregroundStyle(.secondary)
                 }
 

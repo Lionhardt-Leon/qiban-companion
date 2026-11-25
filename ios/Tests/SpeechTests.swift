@@ -81,6 +81,15 @@ final class SpeechTests:XCTestCase {
         var keepAll = SpeechPreferences()
         keepAll.symbolFilter = SpeechSymbolFilter(skipParentheses: false, skipAsterisks: false, skipDoubleAsterisks: false, skipBoldBrackets: false, skipSquareBrackets: false, skipAngleBrackets: false, customPairs: "")
         XCTAssertEqual(try keepAll.text(for: Message(role: "assistant", content: "（轻笑）你好吗？"), inCall: true), "你好吗？")
+        var callSettings = APISettings()
+        var lib = PersonaLibrary.migrating("温柔的姐姐")
+        lib.cards[0].name = "宫宵月"
+        lib.modelBindings["native"] = lib.cards[0].id
+        callSettings.personas = lib
+        callSettings.runtimeContext = CompanionContext(modelKey: "native", modelName: "宫宵月", mode: "实时语音通话", origin: "实时语音通话", isVoiceCall: true)
+        let callPrompt = try PersonaPrompt.compose(settings: callSettings, memories: "", actions: [], hasImage: false)
+        XCTAssertTrue(callPrompt.contains("宫宵月"))
+        XCTAssertTrue(callPrompt.contains("实时语音通话模式"))
     }
 
     func testLegacyBilingualEnvelopeCanBeDisplayedAndReadWithoutEditingArchive() throws {

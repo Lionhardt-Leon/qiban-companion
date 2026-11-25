@@ -54,7 +54,11 @@ struct VoiceCallTheme: Codable, Equatable {
     var layout: VoiceCallLayout = .fullScreen
     var speakerphone: Bool = true
     var bluetoothOnly: Bool = false
+    var preferEnhancedRecognition: Bool? = nil
+    var silenceSeconds: Double? = nil
 
+    var isEnhancedRecognitionEnabled: Bool { preferEnhancedRecognition ?? true }
+    var effectiveSilenceSeconds: Double { min(max(silenceSeconds ?? 1.4, 0.8), 2.5) }
     var preset: VoiceCallColorPreset { VoiceCallColorPreset(rawValue: colorPreset) ?? .indigo }
 
     private static let defaultsKey = "qiban.voiceCall.theme.v1"
@@ -126,6 +130,7 @@ enum VoiceCallMediaStore {
     @Published private(set) var elapsedSeconds = 0
     @Published private(set) var lastUserText = ""
     @Published private(set) var lastReplyText = ""
+    @Published private(set) var liveTranscript = ""
     @Published private(set) var muted = false
     @Published private(set) var busy = false
     @Published private(set) var bluetoothConnected = false
@@ -137,6 +142,11 @@ enum VoiceCallMediaStore {
             theme.save()
             if active {
                 senses.configureCallAudio(speakerphone: theme.speakerphone, bluetoothOnly: theme.bluetoothOnly, keepSessionActive: mode == .fullPhone)
+                senses.updateRecognitionOptions(
+                    preferEnhanced: theme.isEnhancedRecognitionEnabled,
+                    silenceSeconds: theme.effectiveSilenceSeconds,
+                    contextualStrings: buildContextualStrings()
+                )
                 refreshAudioRoute()
             }
         }
@@ -154,11 +164,14 @@ enum VoiceCallMediaStore {
     private var onChatTurn: ((UUID, String, UUID, String, String?, String?, String?) -> Void)?
     private var utteranceSub: AnyCancellable?
     private var sensesStatusSub: AnyCancellable?
+    private var liveTranscriptSub: AnyCancellable?
     private var routeObserver: NSObjectProtocol?
     private var timer: Timer?
     private var startedAt: Date?
     private var turnTask: Task<Void, Never>?
     private var callTicket = UUID()
+
+    var usesRemoteASR: Bool { store?.archive.settings.services?.asr.enabled == true }
 
     init() {
         utteranceSub = senses.$utterance.compactMap { $0 }.sink { [weak self] event in
@@ -168,10 +181,38 @@ enum VoiceCallMediaStore {
             guard let self = self, self.active, !self.busy, !text.isEmpty else { return }
             self.phase = text
         }
+        liveTranscriptSub = senses.$liveTranscript.sink { [weak self] text in
+            guard let self = self else { return }
+            self.liveTranscript = text
+        }
         routeObserver = NotificationCenter.default.addObserver(forName: AVAudioSession.routeChangeNotification, object: nil, queue: .main) { [weak self] _ in
             Task { @MainActor [weak self] in self?.refreshAudioRoute() }
         }
         refreshAudioRoute()
+    }
+
+    private func buildContextualStrings() -> [String] {
+        var terms: [String] = []
+        func add(_ raw: String?) {
+            let v = (raw ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            if !v.isEmpty && v.count <= 24 && !terms.contains(v) { terms.append(v) }
+        }
+        add(characterName)
+        if let personas = store?.archive.settings.personas {
+            add(personas.userName)
+            if let cardID = cardID, let card = personas.cards.first(where: { $0.id == cardID }) {
+                add(card.name)
+                add(card.title)
+                add(card.userName)
+            }
+            for card in personas.cards.prefix(20) { add(card.name) }
+        }
+        return Array(terms.prefix(32))
+    }
+
+    func commitCurrentSpeechNow() {
+        guard active, !busy else { return }
+        senses.commitNow()
     }
 
     deinit {
@@ -256,7 +297,10 @@ enum VoiceCallMediaStore {
             remote: store.archive.settings.services?.asr,
             speakerphone: theme.speakerphone,
             bluetoothOnly: theme.bluetoothOnly,
-            keepSessionActive: mode == .fullPhone
+            keepSessionActive: mode == .fullPhone,
+            preferEnhancedRecognition: theme.isEnhancedRecognitionEnabled,
+            silenceSeconds: theme.effectiveSilenceSeconds,
+            contextualStrings: buildContextualStrings()
         )
     }
 
@@ -291,7 +335,10 @@ enum VoiceCallMediaStore {
                 remote: store?.archive.settings.services?.asr,
                 speakerphone: theme.speakerphone,
                 bluetoothOnly: theme.bluetoothOnly,
-                keepSessionActive: mode == .fullPhone
+                keepSessionActive: mode == .fullPhone,
+                preferEnhancedRecognition: theme.isEnhancedRecognitionEnabled,
+                silenceSeconds: theme.effectiveSilenceSeconds,
+                contextualStrings: buildContextualStrings()
             )
         }
     }
@@ -333,7 +380,10 @@ enum VoiceCallMediaStore {
             remote: store?.archive.settings.services?.asr,
             speakerphone: theme.speakerphone,
             bluetoothOnly: theme.bluetoothOnly,
-            keepSessionActive: mode == .fullPhone
+            keepSessionActive: mode == .fullPhone,
+            preferEnhancedRecognition: theme.isEnhancedRecognitionEnabled,
+            silenceSeconds: theme.effectiveSilenceSeconds,
+            contextualStrings: buildContextualStrings()
         )
     }
 
@@ -365,16 +415,21 @@ enum VoiceCallMediaStore {
             guard let self = self else { return }
             do {
                 var settings = store.archive.settings
-                if let cardID = self.cardID, var personas = settings.personas,
-                   personas.cards.contains(where: { $0.id == cardID }) {
-                    personas.defaultCardID = cardID
-                    personas.modelBindings["voice-call"] = cardID
+                if var personas = settings.personas, !personas.cards.isEmpty {
+                    let validIDs = Set(personas.cards.map(\.id))
+                    personas.modelBindings = personas.modelBindings.filter { PersonaLibrary.validModelKey($0.key) && validIDs.contains($0.value) }
+                    if let cardID = self.cardID, validIDs.contains(cardID) {
+                        personas.defaultCardID = cardID
+                        personas.modelBindings["native"] = cardID
+                    } else if personas.defaultCardID == nil || !validIDs.contains(personas.defaultCardID!) {
+                        personas.defaultCardID = personas.cards.first?.id
+                    }
                     settings.personas = personas
                 }
                 let actions = self.actionsProvider?() ?? []
                 let speechPrefs = settings.speech ?? SpeechPreferences()
                 var context = CompanionContext(
-                    modelKey: self.cardID != nil ? "voice-call" : "native",
+                    modelKey: "native",
                     modelName: self.characterName,
                     mode: self.mode == .fullPhone ? "实时语音通话" : "App 内实时轻通话",
                     origin: "实时语音通话",
@@ -465,7 +520,10 @@ enum VoiceCallMediaStore {
                         remote: store.archive.settings.services?.asr,
                         speakerphone: self.theme.speakerphone,
                         bluetoothOnly: self.theme.bluetoothOnly,
-                        keepSessionActive: self.mode == .fullPhone
+                        keepSessionActive: self.mode == .fullPhone,
+                        preferEnhancedRecognition: self.theme.isEnhancedRecognitionEnabled,
+                        silenceSeconds: self.theme.effectiveSilenceSeconds,
+                        contextualStrings: self.buildContextualStrings()
                     )
                 }
             }
