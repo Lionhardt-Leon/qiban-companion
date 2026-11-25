@@ -62,13 +62,16 @@ final class SpeechTests:XCTestCase {
 
     func testSymbolFilterControlsNarrationAndStrictCallMode() throws {
         var filter = SpeechSymbolFilter()
-        XCTAssertEqual(SpeechPreferences.clean("（我微微一笑）你好啊**轻轻挥手**【系统提示】", filter: filter), "你好啊")
+        XCTAssertEqual(SpeechPreferences.clean("（我微微一笑）你好啊*轻轻挥手*【系统提示】", filter: filter), "你好啊")
         XCTAssertEqual(SpokenDialogue.dialogue("（我轻声叹气）其实我一直都在。", filter: filter), "其实我一直都在。")
+        filter.skipDoubleAsterisks = true
+        XCTAssertEqual(SpeechPreferences.clean("你好啊**轻轻挥手**", filter: filter), "你好啊")
+        filter.skipDoubleAsterisks = false
         filter.skipParentheses = false
         filter.skipAsterisks = false
         filter.skipBoldBrackets = false
-        XCTAssertEqual(SpeechPreferences.clean("（轻轻点头）你好啊**哈哈**【真好】", filter: filter), "（轻轻点头）你好啊哈哈【真好】")
-        XCTAssertEqual(SpeechPreferences.clean("（轻轻点头）你好啊**哈哈**【真好】", filter: filter, strictCall: true), "你好啊")
+        XCTAssertEqual(SpeechPreferences.clean("（轻轻点头）你好啊*哈哈*【真好】", filter: filter), "轻轻点头你好啊哈哈真好")
+        XCTAssertEqual(SpeechPreferences.clean("（轻轻点头）你好啊*哈哈*【真好】", filter: filter, strictCall: true), "你好啊")
         filter.skipParentheses = true
         filter.customPairs = "「」,{}"
         XCTAssertEqual(SpeechPreferences.clean("「旁白」{动作}听得到吗？", filter: filter), "听得到吗？")
@@ -76,7 +79,7 @@ final class SpeechTests:XCTestCase {
         prefs.symbolFilter = filter
         XCTAssertEqual(try prefs.text(for: Message(role: "assistant", content: "（微笑）你好「旁白」"), inCall: false), "你好")
         var keepAll = SpeechPreferences()
-        keepAll.symbolFilter = SpeechSymbolFilter(skipParentheses: false, skipAsterisks: false, skipBoldBrackets: false, skipSquareBrackets: false, skipAngleBrackets: false, customPairs: "")
+        keepAll.symbolFilter = SpeechSymbolFilter(skipParentheses: false, skipAsterisks: false, skipDoubleAsterisks: false, skipBoldBrackets: false, skipSquareBrackets: false, skipAngleBrackets: false, customPairs: "")
         XCTAssertEqual(try keepAll.text(for: Message(role: "assistant", content: "（轻笑）你好吗？"), inCall: true), "你好吗？")
     }
 

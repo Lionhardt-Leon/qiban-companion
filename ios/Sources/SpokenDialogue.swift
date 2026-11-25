@@ -1,5 +1,16 @@
 import Foundation
 
+struct SpeechSymbolFilter:Codable,Equatable {
+    var skipParentheses = true      // () / （）
+    var skipAsterisks = true        // *...*
+    var skipDoubleAsterisks = false // **...** (Markdown bold by default; toggle on if used for narration)
+    var skipBoldBrackets = true     // 【...】
+    var skipSquareBrackets = true   // [...]
+    var skipAngleBrackets = false   // 《...》 / <...>
+    var customPairs = ""            // space/comma separated pairs, e.g. "~~ {} 「」"
+    static let defaultCall = SpeechSymbolFilter(skipParentheses:true,skipAsterisks:true,skipDoubleAsterisks:false,skipBoldBrackets:true,skipSquareBrackets:true,skipAngleBrackets:false,customPairs:"")
+}
+
 /// Display prose and spoken dialogue are different inputs. New replies supply
 /// speech_zh explicitly; this parser is the conservative fallback for old text.
 enum SpokenDialogue {
@@ -35,12 +46,15 @@ enum SpokenDialogue {
         var value=input
         let skipParen=strictCall || filter.skipParentheses
         let skipStar=strictCall || filter.skipAsterisks
+        let skipDoubleStar=filter.skipDoubleAsterisks
         let skipBold=strictCall || filter.skipBoldBrackets
         let skipSquare=strictCall || filter.skipSquareBrackets
         let skipAngle=filter.skipAngleBrackets
-        // 1. Asterisks (*...* and **...**)
-        if skipStar {
+        // 1. Asterisks (**...** optional, *...* stage directions)
+        if skipDoubleStar {
             value=value.replacingOccurrences(of:#"(?s)\*\*[^*\n]{1,300}\*\*"#,with:"",options:.regularExpression)
+        }
+        if skipStar {
             value=value.replacingOccurrences(of:#"(?s)(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)"#,with:"",options:.regularExpression)
         }
         // 2. Bracketed pairs

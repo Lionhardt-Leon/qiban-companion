@@ -52,7 +52,8 @@ struct SpeechSettingsView:View {
                         set:{draft.symbolFilter=$0}
                     )
                     Toggle("不朗读圆括号 ( ) / （ ） 内内容",isOn:Binding(get:{filterBinding.wrappedValue.skipParentheses},set:{var f=filterBinding.wrappedValue;f.skipParentheses=$0;filterBinding.wrappedValue=f}))
-                    Toggle("不朗读星号 * / ** 内内容",isOn:Binding(get:{filterBinding.wrappedValue.skipAsterisks},set:{var f=filterBinding.wrappedValue;f.skipAsterisks=$0;filterBinding.wrappedValue=f}))
+                    Toggle("不朗读单星号 *描写* 内内容",isOn:Binding(get:{filterBinding.wrappedValue.skipAsterisks},set:{var f=filterBinding.wrappedValue;f.skipAsterisks=$0;filterBinding.wrappedValue=f}))
+                    Toggle("不朗读双星号 **加粗／描写** 内内容",isOn:Binding(get:{filterBinding.wrappedValue.skipDoubleAsterisks},set:{var f=filterBinding.wrappedValue;f.skipDoubleAsterisks=$0;filterBinding.wrappedValue=f}))
                     Toggle("不朗读方头括号 【 】 内内容",isOn:Binding(get:{filterBinding.wrappedValue.skipBoldBrackets},set:{var f=filterBinding.wrappedValue;f.skipBoldBrackets=$0;filterBinding.wrappedValue=f}))
                     Toggle("不朗读方括号 [ ] 内内容",isOn:Binding(get:{filterBinding.wrappedValue.skipSquareBrackets},set:{var f=filterBinding.wrappedValue;f.skipSquareBrackets=$0;filterBinding.wrappedValue=f}))
                     Toggle("不朗读书名号／尖括号 《 》 / < > 内内容",isOn:Binding(get:{filterBinding.wrappedValue.skipAngleBrackets},set:{var f=filterBinding.wrappedValue;f.skipAngleBrackets=$0;filterBinding.wrappedValue=f}))

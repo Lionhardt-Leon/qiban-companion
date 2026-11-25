@@ -1,13 +1,6 @@
 import Foundation
 
-struct SpeechSymbolFilter:Codable,Equatable {
-    var skipParentheses = true      // () / （）
-    var skipAsterisks = true        // *...* / **...**
-    var skipBoldBrackets = true     // 【...】
-    var skipSquareBrackets = true   // [...]
-    var skipAngleBrackets = false   // 《...》 / <...>
-    var customPairs = ""            // space/comma separated pairs, e.g. "~~ {} 「」"
-    static let defaultCall = SpeechSymbolFilter(skipParentheses:true,skipAsterisks:true,skipBoldBrackets:true,skipSquareBrackets:true,skipAngleBrackets:false,customPairs:"")
+extension SpeechSymbolFilter {
     func validate() throws {
         guard customPairs.count <= 120 else {throw CompanionError.message("自定义朗读过滤符号过长。")}
     }
