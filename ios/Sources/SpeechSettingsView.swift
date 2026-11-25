@@ -107,12 +107,12 @@ struct SpeechSettingsView: View {
         Section("离线语音包（高保真 + 极速双轨共存）") {
             LabeledContent("高保真语音包") {
                 Text(speech.packageName.isEmpty ? "未导入" : speech.packageName)
-                    .foregroundStyle(speech.packageName.isEmpty ? .secondary : .primary)
+                    .foregroundStyle(speech.packageName.isEmpty ? Color.secondary : Color.primary)
                     .accessibilityIdentifier("speechPackageStatus")
             }
             LabeledContent("极速轻量语音包") {
                 Text(speech.fastPackageName.isEmpty ? "未导入（可选）" : speech.fastPackageName)
-                    .foregroundStyle(speech.fastPackageName.isEmpty ? .secondary : .mint)
+                    .foregroundStyle(speech.fastPackageName.isEmpty ? Color.secondary : Color.mint)
             }
             Button("导入语音包（.qvoice 高保真／极速轻量）") { picking = true }
                 .disabled(speech.importing || store.busy)
@@ -180,7 +180,7 @@ struct SpeechSettingsView: View {
                     Text("自动朗读 AI 回复")
                     Spacer()
                     Label(draft.autoPlay ? "已开启" : "已关闭", systemImage: draft.autoPlay ? "checkmark.circle.fill" : "circle")
-                        .foregroundStyle(draft.autoPlay ? .green : .secondary)
+                        .foregroundStyle(draft.autoPlay ? Color.green : Color.secondary)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .contentShape(Rectangle())
