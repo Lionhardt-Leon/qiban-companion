@@ -46,6 +46,21 @@ struct SpeechSettingsView:View {
                         if !notice.isEmpty {Text(notice).font(.caption).accessibilityIdentifier("speechSettingsNotice")}
                     }
                 }
+                Section("朗读符号过滤（描写／旁白控制）") {
+                    let filterBinding=Binding<SpeechSymbolFilter>(
+                        get:{draft.effectiveFilter},
+                        set:{draft.symbolFilter=$0}
+                    )
+                    Toggle("不朗读圆括号 ( ) / （ ） 内内容",isOn:Binding(get:{filterBinding.wrappedValue.skipParentheses},set:{var f=filterBinding.wrappedValue;f.skipParentheses=$0;filterBinding.wrappedValue=f}))
+                    Toggle("不朗读星号 * / ** 内内容",isOn:Binding(get:{filterBinding.wrappedValue.skipAsterisks},set:{var f=filterBinding.wrappedValue;f.skipAsterisks=$0;filterBinding.wrappedValue=f}))
+                    Toggle("不朗读方头括号 【 】 内内容",isOn:Binding(get:{filterBinding.wrappedValue.skipBoldBrackets},set:{var f=filterBinding.wrappedValue;f.skipBoldBrackets=$0;filterBinding.wrappedValue=f}))
+                    Toggle("不朗读方括号 [ ] 内内容",isOn:Binding(get:{filterBinding.wrappedValue.skipSquareBrackets},set:{var f=filterBinding.wrappedValue;f.skipSquareBrackets=$0;filterBinding.wrappedValue=f}))
+                    Toggle("不朗读书名号／尖括号 《 》 / < > 内内容",isOn:Binding(get:{filterBinding.wrappedValue.skipAngleBrackets},set:{var f=filterBinding.wrappedValue;f.skipAngleBrackets=$0;filterBinding.wrappedValue=f}))
+                    TextField("自定义不朗读符号对（空格分隔，如 ~~ {} 「」）",text:Binding(get:{filterBinding.wrappedValue.customPairs},set:{var f=filterBinding.wrappedValue;f.customPairs=$0;filterBinding.wrappedValue=f}))
+                        .textInputAutocapitalization(.never).autocorrectionDisabled()
+                    Text("开启后 TTS 朗读会自动跳过该符号内的动作／神态／心理描写；关闭则会照常朗读其中文字。通话模式下始终强制跳过描写符号，只念角色说出口的话。修改后请点击上方「保存语音设置」。")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
                 Section("苹果硬件加速") {
                     Picker("本机合成后端",selection:Binding(get:{draft.acceleration.rawValue},set:{draft.computeMode=$0})) {ForEach(VoiceComputeMode.allCases){Text($0.title).tag($0.rawValue)}}
                     Text("自动模式优先使用 CPU 并分阶段加载模型，以降低合成时的内存峰值。神经引擎／GPU 可手动选择；首次编译可能较慢，部分计算仍会回退 CPU。每段结束释放大模型，首次出声可能变慢。切换后保存，再试听同一句比较。")

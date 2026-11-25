@@ -10,6 +10,93 @@ enum SpokenDialogue {
     private static let speechTags = ["台词：","台词:","对白：","对白:","对话：","对话:","说：","说:","答：","答:","speech:"]
 
     static func explicit(_ input:String)->String {finish(withoutStages(prepare(input,stageEmphasis:false)))}
+    static func explicit(_ input:String,filter:SpeechSymbolFilter,strictCall:Bool=false)->String {
+        finish(applySymbolFilter(prepare(input,stageEmphasis:false),filter:filter,strictCall:strictCall))
+    }
+    static func dialogue(_ input:String,filter:SpeechSymbolFilter,strictCall:Bool=false)->String {
+        let filtered=applySymbolFilter(prepare(input,stageEmphasis:false),filter:filter,strictCall:strictCall)
+        let quotes=quoted(filtered)
+        guard !quotes.isEmpty else{return finish(remainder(filtered))}
+        var outside="",cursor=filtered.startIndex
+        for quote in quotes {outside+=filtered[cursor..<quote.start];cursor=quote.end};outside+=filtered[cursor...]
+        let wrapped=outside.trimmingCharacters(in:.whitespacesAndNewlines.union(.punctuationCharacters)).isEmpty
+        guard wrapped || narration(outside) || quotes.contains(where:{isMental($0.before)}) else{return finish(remainder(filtered))}
+        var pieces:[String]=[],previous=filtered.startIndex
+        for quote in quotes {
+            let prose=remainder(String(filtered[previous..<quote.start]))
+            if hasWords(prose){pieces.append(prose)}
+            if !isMental(quote.before) {let line=explicit(quote.text,filter:filter,strictCall:strictCall);if hasWords(line){pieces.append(line)}}
+            previous=quote.end
+        }
+        let tail=remainder(String(filtered[previous...]));if hasWords(tail){pieces.append(tail)}
+        return finish(pieces.joined(separator:"\n"))
+    }
+    private static func applySymbolFilter(_ input:String,filter:SpeechSymbolFilter,strictCall:Bool)->String {
+        var value=input
+        let skipParen=strictCall || filter.skipParentheses
+        let skipStar=strictCall || filter.skipAsterisks
+        let skipBold=strictCall || filter.skipBoldBrackets
+        let skipSquare=strictCall || filter.skipSquareBrackets
+        let skipAngle=filter.skipAngleBrackets
+        // 1. Asterisks (*...* and **...**)
+        if skipStar {
+            value=value.replacingOccurrences(of:#"(?s)\*\*[^*\n]{1,300}\*\*"#,with:"",options:.regularExpression)
+            value=value.replacingOccurrences(of:#"(?s)(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)"#,with:"",options:.regularExpression)
+        }
+        // 2. Bracketed pairs
+        var closing:[Character:Character]=[:]
+        if skipParen {closing["（"]="）";closing["("]=")"}
+        if skipBold {closing["【"]="】"}
+        if skipSquare {closing["["]="]"}
+        if skipAngle {closing["《"]="》";closing["<"]=">"}
+        if !closing.isEmpty {
+            value=stripBracketPairs(value,closing:closing)
+        }
+        // 3. Unwrap brackets that user opted to READ aloud (strip punctuation marks only, keep inner text)
+        var unwrap=""
+        if !skipParen {unwrap+="()（）"}
+        if !skipBold {unwrap+="【】"}
+        if !skipSquare {unwrap+="[]"}
+        if !unwrap.isEmpty {
+            value=value.filter{!unwrap.contains($0)}
+        }
+        // 4. Custom pairs (e.g. "~~ {} 「」 //")
+        let tokens=filter.customPairs.components(separatedBy:CharacterSet.whitespacesAndNewlines.union(CharacterSet(charactersIn:",，;；"))).filter{!$0.isEmpty}
+        for token in tokens.prefix(12) {
+            let open:String,close:String
+            if token.contains("|") {
+                let parts=token.split(separator:"|",maxSplits:1).map(String.init)
+                guard parts.count==2,!parts[0].isEmpty,!parts[1].isEmpty else{continue}
+                open=parts[0];close=parts[1]
+            } else {
+                let chars=Array(token)
+                if chars.count==2 {open=String(chars[0]);close=String(chars[1])}
+                else if chars.count==4 {open=String(chars[0...1]);close=String(chars[2...3])}
+                else if chars.count==1 {open=token;close=token}
+                else {continue}
+            }
+            let pattern="(?s)"+NSRegularExpression.escapedPattern(for:open)+".*?"+NSRegularExpression.escapedPattern(for:close)
+            value=value.replacingOccurrences(of:pattern,with:"",options:.regularExpression)
+        }
+        return value
+    }
+    private static func stripBracketPairs(_ text:String,closing:[Character:Character])->String {
+        var result="",index=text.startIndex
+        while index<text.endIndex {
+            let c=text[index]
+            guard let end=closing[c] else{result.append(c);index=text.index(after:index);continue}
+            var stack=[end],scan=text.index(after:index)
+            while scan<text.endIndex {
+                let item=text[scan]
+                if let close=closing[item]{stack.append(close);if stack.count>32{return result}}
+                else if item==stack.last {stack.removeLast();if stack.isEmpty{break}}
+                scan=text.index(after:scan)
+            }
+            guard scan<text.endIndex else{break}
+            index=text.index(after:scan)
+        }
+        return result
+    }
     static func dialogue(_ input:String)->String {
         let text=withoutStages(prepare(input)),quotes=quoted(text)
         guard !quotes.isEmpty else{return finish(remainder(text))}

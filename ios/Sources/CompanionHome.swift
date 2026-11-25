@@ -9,6 +9,7 @@ private enum HomeSheet: String, Identifiable {
 struct CompanionHome: View {
     @EnvironmentObject private var store: LocalStore
     @EnvironmentObject private var speech:CompanionSpeech
+    @EnvironmentObject private var callManager: VoiceCallManager
     @Environment(\.scenePhase) private var scenePhase
     @StateObject private var stage = CompanionStage()
     @StateObject private var snowbreak = SnowbreakStage()
@@ -255,7 +256,7 @@ struct CompanionHome: View {
             case .games: CardGameView(store:store,onClose:{sheet=nil})
             }
         }
-        .onChange(of: sheet) { if $0 != nil { clearTouches();camera.stop();senses.suspend();speech.stop();stage.stop();snowbreak.pause();portrait.pause() } }
+        .onChange(of: sheet) { if $0 != nil { clearTouches();camera.stop();senses.suspend();if !callManager.active { speech.stop() };stage.stop();snowbreak.pause();portrait.pause() } }
         .onChange(of:camera.enabled) { value in if !value { store.discardCameraFrame() } }
         .onChange(of:senses.utterance?.id) { _ in
             guard let event=senses.utterance,!store.busy else{return};send(event.text,origin:"语音转录")
@@ -314,8 +315,15 @@ struct CompanionHome: View {
         .task { resumeStage() }
         .onDisappear { localVisionTicket=UUID();localVisionBusy=false;waitingBodyAction=nil;clearTouches();camera.stop();senses.suspend();speech.stop();stage.stop();snowbreak.pause();portrait.pause() }
         .onChange(of: scenePhase) { phase in
-            if phase == .active, sheet == nil { resumeStage() } else { clearTouches();camera.stop();senses.suspend();speech.stop();stage.stop();snowbreak.pause();portrait.pause() }
+            callManager.handleScenePhase(phase)
+            if phase == .active, sheet == nil { resumeStage() }
+            else {
+                clearTouches();camera.stop();senses.suspend()
+                if !(callManager.active && callManager.mode == .fullPhone) { speech.stop() }
+                stage.stop();snowbreak.pause();portrait.pause()
+            }
         }
+        .overlay { if sheet == nil { VoiceCallOverlay() } }
     }
 
     private func analyzeLocally(){
@@ -399,7 +407,26 @@ struct CompanionHome: View {
                     .background(.ultraThinMaterial, in: Capsule()).overlay(Capsule().stroke(.white.opacity(0.2)))
                     .accessibilityIdentifier("homeMessageInput")
                 circle(camera.enabled ? "video.fill" : "video.slash", label:camera.enabled || camera.starting ? "关闭后置视频" : "开启后置视频") { camera.toggle() }
-                circle(senses.conversation ? "phone.down.fill" : "mic", label:senses.conversation ? "结束语音通话" : "开始语音通话",enabled: !store.busy || senses.conversation) { if store.archive.settings.endpoint.isEmpty {sheet = .api}else{speech.stop();senses.toggleVoice(remote:store.archive.settings.services?.asr)} }
+                if callManager.active {
+                    circle("phone.down.fill", label: "挂断语音通话") { callManager.hangUp() }
+                } else {
+                    Menu {
+                        Button {
+                            startHomeCall(mode: .fullPhone)
+                        } label: { Label("电话模式（独立界面 · 支持熄屏／蓝牙／视频）", systemImage: "phone.fill") }
+                        Button {
+                            startHomeCall(mode: .inAppLite)
+                        } label: { Label("轻通话模式（保留画面 · 退后台自动挂断）", systemImage: "waveform.circle") }
+                        Divider()
+                        Button {
+                            callManager.showingThemeSheet = true
+                        } label: { Label("通话主题／头像与仅蓝牙设置", systemImage: "paintbrush.pointed") }
+                    } label: {
+                        Image(systemName: "phone.fill").font(.system(size: 21, weight: .regular))
+                            .foregroundStyle(.white).frame(width: 46, height: 46)
+                            .background(.ultraThinMaterial, in: Circle()).overlay(Circle().stroke(.white.opacity(0.23)))
+                    }.accessibilityLabel("开始语音通话")
+                }
             }.padding(.horizontal, 14)
         }.padding(.top, 28).padding(.bottom, 12)
             .background(LinearGradient(colors: [.clear, .black.opacity(0.6)], startPoint: .top, endPoint: .bottom))
@@ -442,6 +469,19 @@ struct CompanionHome: View {
                 } else { senses.replyFailed() }
             } catch { store.error = error.localizedDescription;senses.replyFailed() }
         }
+    }
+    private func startHomeCall(mode: VoiceCallMode) {
+        guard !store.archive.settings.endpoint.isEmpty else { sheet = .api; return }
+        senses.stop(); camera.stop(); speech.stop()
+        callManager.start(
+            mode: mode,
+            store: store,
+            speech: speech,
+            cardID: store.currentCard?.id,
+            characterName: store.currentCard?.name ?? modelLabel,
+            actionsProvider: { availableActions },
+            onHomeAction: { event in performMotion(event) }
+        )
     }
     private func ownPortrait() async throws -> CameraFrame {if isPortrait{return try await portrait.portrait()};if isSnowbreak{return try await snowbreak.portrait()};return try stage.portrait()}
     private func performBody(_ command:BodyCommand) async {

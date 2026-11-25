@@ -97,6 +97,30 @@ export async function initQibanChat() {
     }
     if(changed)saveAppStore(store);
   });
+  document.addEventListener('qiban-call-turn',event=>{
+    const d=event.detail||{};if(!d.conversationID)return;
+    const store=loadAppStore();const list=store.messages[d.conversationID];if(!Array.isArray(list))return;
+    const character=store.characters.find(c=>c.id===store.conversations.find(cv=>cv.id===d.conversationID)?.memberIds?.[0]);
+    const nowMs=Date.now();
+    if(d.userText){
+      const uid=d.userID||crypto.randomUUID();
+      if(!list.some(m=>m.id===uid)){
+        const msg={id:uid,role:'user',speakerId:'player',speakerName:profile?.userName||'你',text:d.userText,createdAt:nowMs-50,status:'sent',meta:{qibanNativeId:uid,qibanVoiceCall:true}};
+        list.push(msg);seen.add(playKey(msg));
+      }
+    }
+    if(d.assistantText){
+      const aid=d.assistantID||crypto.randomUUID();
+      if(!list.some(m=>m.id===aid)){
+        const expr=window.QibanNative?.extractGalExpression ? window.QibanNative.extractGalExpression(d.assistantText,character) : {text:d.assistantText,expressionId:null};
+        const expressionId=d.expressionId||expr.expressionId||null;
+        const msg={id:aid,role:'assistant',speakerId:character?.id||'assistant',speakerName:character?.name||'伙伴',text:expr.text||d.assistantText,createdAt:nowMs,status:'sent',meta:{qibanNativeId:aid,qibanVoiceCall:true,qibanSpokenChinese:d.spokenChinese||undefined,qibanSpokenJapanese:d.spokenJapanese||undefined,...(expressionId?{qibanGalExpression:expressionId}:{})}};
+        list.push(msg);seen.add(playKey(msg));
+        if(expressionId)window.QibanNative?.playGalExpression?.(expressionId);
+      }
+    }
+    saveAppStore(store);
+  });
   document.addEventListener('submit',()=>window.QibanNative.stopAllSpeech().catch(()=>{}),true);
   window.QibanNative.markDeletedContact=id=>{const hidden=new Set(read(HIDDEN,[]));hidden.add(id);localStorage.setItem(HIDDEN,JSON.stringify([...hidden]));};
   window.QibanNative.flush=flush;

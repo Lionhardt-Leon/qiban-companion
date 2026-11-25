@@ -352,6 +352,36 @@ enum APIKeyStore {
         }
     }
 
+    func voiceCallHistory(for cardID: UUID?) -> [Message] {
+        guard let cardID = cardID else { return archive.messages }
+        if archive.personaSessionKey == cardID.uuidString { return archive.messages }
+        if let activeID = archive.activeSessionIDs?[cardID.uuidString] {
+            return archive.sessionContents(activeID).messages
+        }
+        return archive.personaConversations?[cardID.uuidString]?.messages ?? archive.messages
+    }
+    func voiceCallMemories(for cardID: UUID?) -> String {
+        guard let cardID = cardID else { return archive.memories }
+        if archive.personaSessionKey == cardID.uuidString { return archive.memories }
+        if let activeID = archive.activeSessionIDs?[cardID.uuidString] {
+            return archive.sessionContents(activeID).memories
+        }
+        return archive.personaConversations?[cardID.uuidString]?.memories ?? archive.memories
+    }
+    func appendVoiceCallTurn(cardID: UUID?, user: Message, assistant: Message) {
+        var next = archive
+        if let cardID = cardID, next.personaSessionKey != cardID.uuidString,
+           let activeID = next.activeSessionIDs?[cardID.uuidString] {
+            var session = next.sessionContents(activeID)
+            session.messages.append(user)
+            session.messages.append(assistant)
+            next.setSessionContents(session, id: activeID)
+        } else {
+            next.messages.append(user)
+            next.messages.append(assistant)
+        }
+        try? commit(next)
+    }
     func cancel() {
         requestTask?.cancel(); requestID = nil; requestTask = nil; busy = false; dialogueAction = nil;replyForSpeech=nil; pendingImage = nil;pendingExtraImages = [];pendingSearch=false
     }

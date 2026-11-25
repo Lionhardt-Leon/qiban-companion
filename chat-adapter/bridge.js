@@ -78,6 +78,7 @@
     if(event.type==='stopWebSpeech'){stopWebSpeech();return;}
     if(event.type==='ttsState'){if(profile)profile.speechEnabled=event.enabled;if(!event.enabled)stopWebSpeech();document.dispatchEvent(new CustomEvent('qiban-tts-state',{detail:event}));return;}
     if(event.type==='level'){document.dispatchEvent(new CustomEvent('qiban-speech-level',{detail:event}));return;}
+    if(event.type==='callTurn'){document.dispatchEvent(new CustomEvent('qiban-call-turn',{detail:event}));return;}
     if (event.type==='speech') {
       document.dispatchEvent(new CustomEvent('qiban-speech-state',{detail:event}));
       speechState=event;

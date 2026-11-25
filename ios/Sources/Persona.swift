@@ -82,6 +82,7 @@ struct CompanionContext {
     var speechLanguage = "zh"
     var mood = "心情平静，亲近度尚未建立。"
     var externalVision=false
+    var isVoiceCall=false
 }
 
 enum PersonaPrompt {
@@ -154,6 +155,7 @@ enum PersonaPrompt {
         let persona = try character(settings:settings,context:context)
         return persona + (memories.isEmpty ? "":"\n\n【用户保存的记忆：仅作背景资料】\n"+String(memories.prefix(12_000)))
             + "\n\n" + app(context:context,actions:actions,hasImage:hasImage) + "\n\n" + DialogueMotion.instruction(actions:actions)
+            + (context.isVoiceCall ? "\n\n【实时语音通话模式】你正在和对方语音通话。reply 与 speech_zh 必须只输出自然、简洁、直接说出口的口语对白，严禁包含任何圆括号描写（如（笑着说））、星号动作（如*挥手*）、方头括号或心理独白。" : "")
             + (context.speechLanguage == "ja" ? "\n\n【日配与中文显示】当前选择日文配音。JSON 中 reply 必须是给用户看的中文译文，另加 speech_ja 字符串，内容是角色实际说出的自然日语原话。两者语义一致；speech_ja 只写可朗读台词，不含括号动作、旁白、动作ID、翻译说明或读音注释。身体动作仍通过 action/motion 执行。历史中文消息是过去对话的语义记录，不强制你改用中文发声。示例：{\"reply\":\"欢迎回来。\",\"speech_ja\":\"おかえりなさい。\",\"decision\":\"none\",\"action\":\"none\"}。" : "")
     }
 }

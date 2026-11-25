@@ -95,17 +95,35 @@ private final class SpeechEngineWorker:@unchecked Sendable {
             importing=false
         }
     }
-    func speak(_ message:Message,preferences:SpeechPreferences,remote:ServiceEndpoint?=nil,inCall:Bool=false,completion:((Bool)->Void)?=nil) {
+    static func isBluetoothOrHeadphonesConnected() -> Bool {
+        let outputs=AVAudioSession.sharedInstance().currentRoute.outputs
+        return outputs.contains{
+            [.bluetoothHFP,.bluetoothA2DP,.bluetoothLE,.headphones,.usbAudio,.carAudio].contains($0.portType)
+        }
+    }
+    func speak(_ message:Message,preferences:SpeechPreferences,remote:ServiceEndpoint?=nil,inCall:Bool=false,speakerphone:Bool=true,bluetoothOnly:Bool=false,completion:((Bool)->Void)?=nil) {
         stop();speakingMessageID=message.id;error=nil
         guard preferences.isEnabled else {completion?(true);return}
         do {
             guard !importing else {throw CompanionError.message("正在导入语音包，请稍候。")}
-            try preferences.validate();let text=try preferences.text(for:message)
+            try preferences.validate();let text=try preferences.text(for:message,inCall:inCall)
             guard !text.isEmpty else {completion?(true);return};guard text.count<=6000 else{throw CompanionError.message("朗读文本过长，请分段朗读；聊天内容已保留。") }
             let audio=AVAudioSession.sharedInstance()
-            if inCall {try audio.setCategory(.playAndRecord,mode:.voiceChat,options:[.defaultToSpeaker,.allowBluetooth])}
-            else {try audio.setCategory(.playback,mode:.spokenAudio,options:[])}
-            try audio.setActive(true);busy=true;self.completion=completion;volume=preferences.volume
+            if inCall {
+                let opts:AVAudioSession.CategoryOptions = (speakerphone && !bluetoothOnly) ? [.defaultToSpeaker,.allowBluetooth,.allowBluetoothA2DP] : [.allowBluetooth,.allowBluetoothA2DP]
+                try audio.setCategory(.playAndRecord,mode:.voiceChat,options:opts)
+                try audio.setActive(true)
+                try? audio.overrideOutputAudioPort((speakerphone && !bluetoothOnly) ? .speaker : .none)
+            } else {
+                try audio.setCategory(.playback,mode:.spokenAudio,options:bluetoothOnly ? [.allowBluetooth,.allowBluetoothA2DP] : [])
+                try audio.setActive(true)
+            }
+            if bluetoothOnly && !Self.isBluetoothOrHeadphonesConnected() {
+                status="未连接蓝牙／耳机，已拦截外放"
+                completion?(true)
+                return
+            }
+            busy=true;self.completion=completion;volume=preferences.volume
             if let remote=remote,remote.enabled {
                 try remote.validate(for:.tts)
                 let key=try serviceKeyReader(.tts,remote),ticket=generation

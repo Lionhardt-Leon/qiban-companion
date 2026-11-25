@@ -30,8 +30,8 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: $(COMPAT_APP_BUNDLE)
-        MARKETING_VERSION: "0.33.0"
-        CURRENT_PROJECT_VERSION: "56"
+        MARKETING_VERSION: "0.34.0"
+        CURRENT_PROJECT_VERSION: "57"
         GENERATE_INFOPLIST_FILE: YES
     dependencies:
       - package: ONNXRuntime
@@ -67,6 +67,7 @@ targets:
         UIFileSharingEnabled: true
         LSSupportsOpeningDocumentsInPlace: true
         UILaunchScreen: {}
+        UIBackgroundModes: [audio]
         UTExportedTypeDeclarations:
           - UTTypeIdentifier: com.qiban.portraitstage
             UTTypeDescription: 栖伴2D动态立绘素材包

@@ -153,7 +153,7 @@ public final class MainActivity extends Activity {
     }
     void show(String name){runOnUiThread(()->safe(()->{
         if(!name.equals("home")&&!name.equals("chat")&&!name.equals("game"))return;
-        if(name.equals("chat")&&!packs.hasChat()){notice("请先导入随本版提供的 Fritia-Chat-Mobile-v11.qchat。");pickImport();return;}
+        if(name.equals("chat")&&!packs.hasChat()){notice("请先导入随本版提供的 Fritia-Chat-Mobile-v12.qchat。");pickImport();return;}
         if(conversation.busy()&&!name.equals(surface)){notice("请先停止或等待当前回复。");return;}
         if(rendererFailure!=null){content.removeView(rendererFailure);rendererFailure=null;}
         speech.stop();network.cancelAll();String previous=surface;surface=name;

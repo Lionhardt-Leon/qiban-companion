@@ -21,8 +21,25 @@ struct SenseTextEvent { let id=UUID();let text:String }
     private var remoteProfile:ServiceEndpoint?
     private var remoteCapture:RemoteVoiceCapture?
     private var remoteTask:Task<Void,Never>?
+    private var speakerphone = true
+    private var bluetoothOnly = false
+    private var keepSessionActive = false
     override init(){super.init()}
+    func configureCallAudio(speakerphone:Bool,bluetoothOnly:Bool,keepSessionActive:Bool) {
+        self.speakerphone=speakerphone;self.bluetoothOnly=bluetoothOnly;self.keepSessionActive=keepSessionActive
+        if conversation || listening {
+            let audio=AVAudioSession.sharedInstance()
+            let opts:AVAudioSession.CategoryOptions = (speakerphone && !bluetoothOnly) ? [.defaultToSpeaker,.allowBluetooth,.allowBluetoothA2DP] : [.allowBluetooth,.allowBluetoothA2DP]
+            try? audio.setCategory(.playAndRecord,mode:.voiceChat,options:opts)
+            try? audio.overrideOutputAudioPort((speakerphone && !bluetoothOnly) ? .speaker : .none)
+        }
+    }
     func toggleVoice(remote:ServiceEndpoint?=nil){if conversation {stop()}else{remoteProfile=remote?.enabled == true ? remote:nil;conversation=true;Task{await startAudio(ambient:false)}}}
+    func startVoice(remote:ServiceEndpoint?=nil,speakerphone:Bool=true,bluetoothOnly:Bool=false,keepSessionActive:Bool=false){
+        self.speakerphone=speakerphone;self.bluetoothOnly=bluetoothOnly;self.keepSessionActive=keepSessionActive
+        remoteProfile=remote?.enabled == true ? remote:nil;conversation=true
+        Task{await startAudio(ambient:false)}
+    }
     func toggleEnvironment(){if environment {stop()}else{stop();Task{await startAudio(ambient:true)}}}
     private func startAudio(ambient:Bool) async {
         stopAudio();let ticket=generation
@@ -35,7 +52,10 @@ struct SenseTextEvent { let id=UUID();let text:String }
             guard authorization == .authorized,recognizer?.supportsOnDeviceRecognition == true else{status="当前设备或中文语音资源不支持本机识别，请检查系统语音资源";conversation=false;return}
         }
         do{
-            let audio=AVAudioSession.sharedInstance();try audio.setCategory(.playAndRecord,mode:.voiceChat,options:[.defaultToSpeaker,.allowBluetooth]);try audio.setActive(true)
+            let audio=AVAudioSession.sharedInstance()
+            let opts:AVAudioSession.CategoryOptions = (speakerphone && !bluetoothOnly) ? [.defaultToSpeaker,.allowBluetooth,.allowBluetoothA2DP] : [.allowBluetooth,.allowBluetoothA2DP]
+            try audio.setCategory(.playAndRecord,mode:.voiceChat,options:opts);try audio.setActive(true)
+            try? audio.overrideOutputAudioPort((speakerphone && !bluetoothOnly) ? .speaker : .none)
             let engine=AVAudioEngine();self.engine=engine;let input=engine.inputNode;try? input.setVoiceProcessingEnabled(true);let format=input.outputFormat(forBus:0)
             guard format.sampleRate>0,format.channelCount>0 else{throw CompanionError.message("麦克风暂不可用")}
             if remote != nil {guard format.commonFormat == .pcmFormatFloat32,!format.isInterleaved else {throw CompanionError.message("当前麦克风格式不支持独立语音识别。")}}
@@ -75,11 +95,11 @@ struct SenseTextEvent { let id=UUID();let text:String }
             }
         }catch{stop();status=error.localizedDescription}
     }
-    private func stopAudio(){generation+=1;remoteTask?.cancel();remoteTask=nil;remoteCapture=nil;silence?.cancel();silence=nil;engine?.stop();if tapInstalled{engine?.inputNode.removeTap(onBus:0);tapInstalled=false};engine=nil;request?.endAudio();speechTask?.cancel();speechTask=nil;request=nil;analyzer?.removeAllRequests();analyzer=nil;listening=false;environment=false;try? AVAudioSession.sharedInstance().setActive(false,options:.notifyOthersOnDeactivation)}
-    func prepareReply(){if conversation{stopAudio();status="等待回复…"}}
+    private func stopAudio(deactivateSession:Bool=false){generation+=1;remoteTask?.cancel();remoteTask=nil;remoteCapture=nil;silence?.cancel();silence=nil;engine?.stop();if tapInstalled{engine?.inputNode.removeTap(onBus:0);tapInstalled=false};engine=nil;request?.endAudio();speechTask?.cancel();speechTask=nil;request=nil;analyzer?.removeAllRequests();analyzer=nil;listening=false;environment=false;if deactivateSession || !keepSessionActive {try? AVAudioSession.sharedInstance().setActive(false,options:.notifyOthersOnDeactivation)}}
+    func prepareReply(){if conversation{stopAudio(deactivateSession:false);status="等待回复…"}}
     func preparePlayback(){
         resumeAmbientAfterPlayback = resumeAmbientAfterPlayback || environment
-        if conversation || environment {stopAudio();status="正在朗读回复…"}
+        if conversation || environment {stopAudio(deactivateSession:false);status="正在朗读回复…"}
     }
     func resumeAfterPlayback(){
         let ambient=resumeAmbientAfterPlayback && !conversation;resumeAmbientAfterPlayback=false
@@ -87,7 +107,7 @@ struct SenseTextEvent { let id=UUID();let text:String }
         if conversation || ambient {Task{guard ticket==generation else{return};await startAudio(ambient:ambient)}}
     }
     func replyFailed(){if conversation{stop();status="AI回复失败，请检查接口后重试"}}
-    func stop(){resumeAmbientAfterPlayback=false;conversation=false;stopAudio();status=""}
+    func stop(){resumeAmbientAfterPlayback=false;keepSessionActive=false;conversation=false;stopAudio(deactivateSession:true);status=""}
     func suspend(){stop()}
     nonisolated func request(_ request:SNRequest,didProduce result:SNResult){
         guard let result=result as? SNClassificationResult,let best=result.classifications.first,best.confidence>=0.85 else{return}

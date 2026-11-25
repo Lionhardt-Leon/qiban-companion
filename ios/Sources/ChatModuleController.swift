@@ -24,6 +24,7 @@ enum ChatNativePane:String,Identifiable {case persona,api,speech,portrait;var id
     let appearance:String
     var selectedCardID:UUID?
     var onClose:(()->Void)?
+    var onStartCall:((VoiceCallMode,UUID?,String,String,Bool,[String])->Void)?
     private(set) var webView:WKWebView?
     private var server:ChatModuleServer?
     private var requests:[String:Task<Void,Never>]=[:]
@@ -113,6 +114,7 @@ enum ChatNativePane:String,Identifiable {case persona,api,speech,portrait;var id
         }
     }
     func dispose() {
+        GameOrientation.setGame(false)
         sessionID=UUID();refreshID=nil;contentProcessTerminated=false;cancelRequests();stopSpeech();observation=nil;settingsObservation=nil;mouthObservation=nil
         webView?.configuration.userContentController.removeScriptMessageHandler(forName:"qibanChat",contentWorld:.page)
         webView?.stopLoading();webView?.navigationDelegate=nil;webView=nil;ready=false;server?.stop();server=nil
@@ -217,6 +219,21 @@ enum ChatNativePane:String,Identifiable {case persona,api,speech,portrait;var id
         case "cancelFile":if let id=body["id"] as? String,let write=writes.removeValue(forKey:id){try? write.handle.close();try? FileManager.default.removeItem(at:write.url)};return ["cancelled":true]
         case "clipboard":return ["text":UIPasteboard.general.string ?? ""]
         case "analyzeSticker":return try await analyzeSticker(body)
+        case "setOrientation":
+            let landscape = body["landscape"] as? Bool ?? false
+            GameOrientation.setGame(landscape)
+            return ["landscape": landscape]
+        case "startCall":
+            let modeRaw = body["mode"] as? String ?? "full"
+            let inGal = body["inGal"] as? Bool ?? false
+            let mode: VoiceCallMode = (modeRaw == "lite" && inGal) ? .inAppLite : .fullPhone
+            let cardID = (body["cardID"] as? String).flatMap(UUID.init(uuidString:)) ?? selectedCardID
+            let characterName = body["characterName"] as? String ?? ""
+            let conversationID = body["conversationID"] as? String ?? ""
+            let animations = body["animations"] as? [String] ?? []
+            stopSpeech()
+            onStartCall?(mode, cardID, characterName, conversationID, inGal, animations)
+            return ["started": true]
         case "openURL":
             guard let raw=body["url"] as? String,let url=URL(string:raw),["https","http"].contains(url.scheme ?? "") else{throw CompanionError.message("外部链接无效。")}
             await UIApplication.shared.open(url);return ["opened":true]
@@ -369,11 +386,26 @@ enum ChatNativePane:String,Identifiable {case persona,api,speech,portrait;var id
             "analyzed": true
         ]
     }
+    func emitCallTurn(conversationID: String, userID: UUID, userText: String, assistantID: UUID, assistantText: String, spokenChinese: String?, spokenJapanese: String?, expressionId: String?) {
+        var payload: [String: Any] = [
+            "type": "callTurn",
+            "conversationID": conversationID,
+            "userID": userID.uuidString,
+            "userText": userText,
+            "assistantID": assistantID.uuidString,
+            "assistantText": assistantText
+        ]
+        if let spokenChinese = spokenChinese { payload["spokenChinese"] = spokenChinese }
+        if let spokenJapanese = spokenJapanese { payload["spokenJapanese"] = spokenJapanese }
+        if let expressionId = expressionId { payload["expressionId"] = expressionId }
+        Task { try? await emit(payload) }
+    }
     private func dialogueText(_ body:[String:Any]) throws -> String {
         let text=body["text"] as? String ?? "",chinese=body["spokenChinese"] as? String
         guard text.count<=100_000,(chinese?.count ?? 0)<=100_000 else{throw CompanionError.message("朗读正文过长。")}
+        let filter=(store.archive.settings.speech ?? SpeechPreferences()).effectiveFilter
         let message=Message(role:"assistant",content:text,spokenChinese:chinese)
-        return message.resolvedSpokenChinese.map{SpeechPreferences.clean($0)} ?? SpokenDialogue.dialogue(message.displayContent)
+        return message.resolvedSpokenChinese.map{SpeechPreferences.clean($0,filter:filter)} ?? SpokenDialogue.dialogue(message.displayContent,filter:filter)
     }
     private func speak(_ body:[String:Any]) async throws -> [String:Any] {
         guard !suspended else{throw CompanionError.message("App 已挂起，已停止朗读。")}

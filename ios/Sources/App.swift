@@ -5,6 +5,7 @@ import UniformTypeIdentifiers
     @UIApplicationDelegateAdaptor(CompanionAppDelegate.self) private var appDelegate
     @StateObject private var store = LocalStore()
     @StateObject private var speech = CompanionSpeech()
+    @StateObject private var callManager = VoiceCallManager()
     init() {
         #if DEBUG
         if ProcessInfo.processInfo.arguments.contains("--ui-enya-fixture") {
@@ -76,7 +77,7 @@ import UniformTypeIdentifiers
     }
     var body: some Scene {
         WindowGroup {
-            RootView().environmentObject(store).environmentObject(speech)
+            RootView().environmentObject(store).environmentObject(speech).environmentObject(callManager)
                 .alert("提示", isPresented: Binding(get: { store.error != nil }, set: { if !$0 { store.error = nil } })) {
                     Button("知道了") { store.error = nil }
                 } message: { Text(store.error ?? "") }

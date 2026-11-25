@@ -3,6 +3,7 @@ import WebKit
 import UniformTypeIdentifiers
 
 @MainActor struct ChatModuleView:View {
+    @EnvironmentObject private var callManager: VoiceCallManager
     @StateObject private var controller:ChatModuleController
     @Environment(\.scenePhase) private var scenePhase
     @State private var importing=false
@@ -23,6 +24,16 @@ import UniformTypeIdentifiers
                 }.accessibilityLabel(controller.speechEnabled ? "关闭 TTS 语音":"开启 TTS 语音").accessibilityIdentifier("chatSpeechToggle")
                 Menu {
                     Button("面对面对话"){controller.openGal()}.disabled(!controller.ready)
+                    Button("语音通话（电话模式）") {
+                        callManager.start(
+                            mode: .fullPhone,
+                            store: controller.store,
+                            speech: controller.speech,
+                            cardID: controller.selectedCardID
+                        )
+                    }
+                    Button("通话主题与防外放设置"){callManager.showingThemeSheet=true}
+                    Divider()
                     Button("导入官方2D动态立绘"){controller.openPane(.portrait)}
                     Button("开启新对话"){controller.conversationMenu(new:true)}.disabled(!controller.ready)
                     Button("历史对话／切换对话"){controller.conversationMenu(new:false)}.disabled(!controller.ready)
@@ -51,9 +62,43 @@ import UniformTypeIdentifiers
                     .padding(12).frame(maxWidth:.infinity).background(.white)
             }
         }.frame(maxWidth:.infinity,maxHeight:.infinity).background(Color(red:0.96,green:0.97,blue:1)).preferredColorScheme(.light).tint(.indigo)
-        .task{await controller.start()}
+        .task {
+            controller.onStartCall = { mode, cardID, characterName, conversationID, _, animations in
+                callManager.start(
+                    mode: mode,
+                    store: controller.store,
+                    speech: controller.speech,
+                    cardID: cardID,
+                    characterName: characterName,
+                    conversationID: conversationID,
+                    actionsProvider: animations.isEmpty ? nil : { animations },
+                    onChatTurn: { userID, userText, assistantID, assistantText, spokenChinese, spokenJapanese, expressionId in
+                        guard !conversationID.isEmpty else { return }
+                        controller.emitCallTurn(
+                            conversationID: conversationID,
+                            userID: userID,
+                            userText: userText,
+                            assistantID: assistantID,
+                            assistantText: assistantText,
+                            spokenChinese: spokenChinese,
+                            spokenJapanese: spokenJapanese,
+                            expressionId: expressionId
+                        )
+                    }
+                )
+            }
+            await controller.start()
+        }
         .onDisappear{controller.dispose()}
-        .onChange(of:scenePhase){controller.suspend($0 == .background)}
+        .onChange(of:scenePhase){ phase in
+            callManager.handleScenePhase(phase)
+            if phase == .background && callManager.active && callManager.mode == .fullPhone {
+                controller.cancelRequests()
+            } else {
+                controller.suspend(phase == .background)
+            }
+        }
+        .overlay { VoiceCallOverlay() }
         .sheet(isPresented:$importing) {CharacterDocumentPicker {result in
             importing=false
             do {if let url=try result.get(){controller.install(url)}else{controller.reopen()}}catch{controller.error=error.localizedDescription}
