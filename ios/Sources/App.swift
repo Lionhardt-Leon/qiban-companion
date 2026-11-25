@@ -199,26 +199,96 @@ struct MemoryView: View {
 
 struct DiaryView: View {
     @EnvironmentObject private var store: LocalStore
+    @ObservedObject private var tracker = DailyInteractionTracker.shared
     @State private var draft = ""
+    @State private var notice = ""
+
+    private var activeCharacterName: String {
+        store.currentCard?.name.isEmpty == false ? store.currentCard!.name : "伙伴"
+    }
+
     var body: some View {
         NavigationStack {
             List {
-                Section("写下今天") {
-                    TextEditor(text: $draft).frame(minHeight: 110)
-                    Button("保存日记") {
-                        do { try store.addDiary(draft); draft = "" }
+                todaySummarySection
+                Section("手动写下今天") {
+                    TextEditor(text: $draft).frame(minHeight: 96)
+                    Button("保存手动日记") {
+                        do { try store.addDiary(draft); draft = ""; notice = "已保存手动日记。" }
                         catch { store.error = error.localizedDescription }
                     }.disabled(!store.storageReady || draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
-                Section("本地日记") {
+                Section("本地日记（共 \(store.archive.diary.count) 篇）") {
+                    if store.archive.diary.isEmpty {
+                        Text("还没有日记，点击上方「立即用 AI 总结今日日记」或开启 24 小时自动记录。")
+                            .font(.footnote).foregroundStyle(.secondary)
+                    }
                     ForEach(store.archive.diary) { entry in
                         VStack(alignment: .leading, spacing: 8) {
                             Text(entry.createdAt, style: .date).font(.caption).foregroundStyle(.secondary)
                             Text(entry.text).textSelection(.enabled)
                         }.padding(.vertical, 6)
                     }
+                    .onDelete { offsets in
+                        do { try store.deleteDiary(at: offsets) }
+                        catch { store.error = error.localizedDescription }
+                    }
                 }
-            }.navigationTitle("日记")
+            }
+            .navigationTitle("日记")
+            .onAppear { tracker.autoGenerateIfDue(store: store) }
+        }
+    }
+
+    @ViewBuilder
+    private var todaySummarySection: some View {
+        let today = tracker.todayRecord(cardID: store.currentCard?.id, characterName: activeCharacterName)
+        Section("今日与「\(activeCharacterName)」的互动统计") {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 14) {
+                    Label("通话 \(today.callMinutes) 分钟", systemImage: "phone.fill")
+                        .font(.caption.bold())
+                        .foregroundStyle(Color.indigo)
+                    Label("触碰 \(today.touchCount) 次", systemImage: "hand.tap.fill")
+                        .font(.caption.bold())
+                        .foregroundStyle(Color.pink)
+                    Label("对话 \(today.totalMessages) 轮", systemImage: "bubble.left.and.bubble.right.fill")
+                        .font(.caption.bold())
+                        .foregroundStyle(Color.mint)
+                }
+                Text(today.summaryLine)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.vertical, 4)
+
+            Toggle("每 24 小时自动生成互动日记", isOn: $tracker.autoDiaryEnabled)
+
+            Button {
+                notice = ""
+                Task {
+                    do {
+                        _ = try await tracker.generateDiary(store: store)
+                        notice = "已根据今日互动数据生成「\(activeCharacterName)」的日记。"
+                    } catch {
+                        store.error = error.localizedDescription
+                    }
+                }
+            } label: {
+                if tracker.generating {
+                    HStack(spacing: 8) {
+                        ProgressView()
+                        Text("正在总结今日互动日记…")
+                    }
+                } else {
+                    Label("立即用 AI 总结今日日记", systemImage: "sparkles")
+                }
+            }
+            .disabled(tracker.generating || !store.storageReady)
+
+            if !notice.isEmpty {
+                Text(notice).font(.caption).foregroundStyle(Color.mint)
+            }
         }
     }
 }
@@ -242,93 +312,230 @@ struct SettingsView: View {
     @State private var backup = BackupDocument(data: Data())
     @State private var pendingImport: Data?
     @State private var saved = false
+    @State private var presets: [APIPreset] = []
+    @State private var presetName = ""
+    @State private var selectedPresetID: UUID? = nil
+    @State private var presetNotice = ""
 
     var body: some View {
         NavigationStack {
             Form {
-                Section {NavigationLink {ServiceSettingsView()} label:{Label("独立功能接口",systemImage:"network")}.accessibilityIdentifier("independentServices")
-                    Text("分别配置识图、联网搜索、TTS 和语音识别。未启用的功能沿用原设置。") .font(.caption).foregroundStyle(.secondary)}
                 Section {
-                    TextField("HTTPS 接口地址", text: Binding(get:{settings.endpoint},set:{ address in
-                        if APIKeyStore.identity(address) != APIKeyStore.identity(settings.endpoint) { key = "" }
-                        settings.endpoint = address
-                    }))
-                        .keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
-                    SecureField("API Key（本地服务可留空）", text: $key)
-                        .textInputAutocapitalization(.never).autocorrectionDisabled()
-                    TextField("模型名称", text: $settings.model)
-                        .textInputAutocapitalization(.never).autocorrectionDisabled()
-                    Slider(value: $settings.temperature, in: 0...2, step: 0.1)
-                    Text("温度：\(settings.temperature, specifier: "%.1f")").font(.caption)
-                } header: { Text("主对话 API") } footer: {
-                    Text("支持 OpenAI 兼容的 Chat Completions。填写完整接口路径或以 /v1 结尾的地址；当前仅支持 HTTPS。密钥保存在本机钥匙串，不包含在备份中。")
+                    NavigationLink { ServiceSettingsView() } label: {
+                        Label("独立功能接口", systemImage: "network")
+                    }.accessibilityIdentifier("independentServices")
+                    Text("分别配置识图、联网搜索、TTS 和语音识别。未启用的功能沿用原设置。")
+                        .font(.caption).foregroundStyle(.secondary)
                 }
-                Section {Text("系统提示词、用户身份、AI 角色卡与身体能力，请在主页设置 → 人设与陪伴中管理。 ").font(.footnote).foregroundStyle(.secondary)}
+                apiPresetManagerSection
+                mainAPISection
+                Section {
+                    Text("系统提示词、用户身份、AI 角色卡与身体能力，请在主页设置 → 人设与陪伴中管理。 ")
+                        .font(.footnote).foregroundStyle(.secondary)
+                }
                 Section {
                     Button(saved ? "已保存" : "保存设置") {
                         do { try store.saveSettings(settings, key: key); saved = true }
                         catch { store.error = error.localizedDescription }
                     }.disabled(store.busy || !store.storageReady || !keyReady)
                 }
-                Section {
-                    Button("导出本地备份") {
-                        do { backup = BackupDocument(data: try store.export()); exporting = true }
-                        catch { store.error = error.localizedDescription }
-                    }.disabled(!store.storageReady)
-                    Button("从备份恢复") { importing = true }.disabled(store.busy || !store.storageReady)
-                } header: { Text("数据") } footer: {
-                    Text("备份包含聊天、记忆、日记、人设和接口地址，不含密钥。恢复前自动保留当前资料快照。备份文件为明文，请妥善保管。")
-                }
+                backupSection
                 Section {
                     Text("仅在发起对话时连接你配置的服务。最近最多 30 条消息及人设、记忆用于上下文；日记不会自动发送。没有官方登录或自动更新。")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
-            }.navigationTitle("设置").navigationBarTitleDisplayMode(.inline)
-                .preferredColorScheme(.dark).tint(Color(red:0.71,green:0.69,blue:1))
-                .toolbar {if let close=onClose {ToolbarItem(placement:.confirmationAction) {Button("完成",action:close)}}}
-                .onAppear {
-                    settings = store.archive.settings
-                    do { key = try store.mainKey(); keyReady = true }
-                    catch { keyReady = false; store.error = error.localizedDescription }
+            }
+            .navigationTitle("设置")
+            .navigationBarTitleDisplayMode(.inline)
+            .preferredColorScheme(.dark)
+            .tint(Color(red: 0.71, green: 0.69, blue: 1))
+            .toolbar { if let close = onClose { ToolbarItem(placement: .confirmationAction) { Button("完成", action: close) } } }
+            .onAppear {
+                settings = store.archive.settings
+                presets = APIPresetStore.load()
+                if let match = presets.first(where: { $0.endpoint == settings.endpoint && $0.model == settings.model }) {
+                    selectedPresetID = match.id
+                    presetName = match.name
                 }
-                .onChange(of: settings.endpoint) { _ in saved = false }
-                .onChange(of: settings.model) { _ in saved = false }
-                .onChange(of: key) { _ in saved = false }
-                .onChange(of: settings.persona) { _ in saved = false }
-                .onChange(of: settings.temperature) { _ in saved = false }
-                .fileExporter(isPresented: $exporting, document: backup, contentType: .json, defaultFilename: "companion-backup") { result in
-                    if case .failure(let error) = result { store.error = error.localizedDescription }
-                }
-                .fileImporter(isPresented: $importing, allowedContentTypes: [.json]) { result in
-                    do {
-                        let url = try result.get()
-                        let granted = url.startAccessingSecurityScopedResource()
-                        defer { if granted { url.stopAccessingSecurityScopedResource() } }
-                        if let size = try url.resourceValues(forKeys: [.fileSizeKey]).fileSize {
-                            try LocalStore.checkBackupSize(size)
-                        }
-                        let file = try FileHandle(forReadingFrom: url)
-                        defer { try? file.close() }
-                        let data = try file.read(upToCount: LocalStore.backupByteLimit + 1) ?? Data()
-                        try LocalStore.checkBackupSize(data.count)
-                        pendingImport = data
-                    } catch { store.error = error.localizedDescription }
-                }
-                .confirmationDialog("恢复将替换当前聊天、记忆、日记和设置。接口地址改变时会清除旧密钥，需重新填写。", isPresented: Binding(
-                    get: { pendingImport != nil }, set: { if !$0 { pendingImport = nil } })) {
-                    Button("确认恢复", role: .destructive) {
-                        guard let data = pendingImport else { return }
-                        do {
-                            try store.restore(data)
-                            settings = store.archive.settings
-                            key = try store.mainKey()
-                            saved = false
-                        }
-                        catch { store.error = error.localizedDescription }
-                        pendingImport = nil
+                do { key = try store.mainKey(); keyReady = true }
+                catch { keyReady = false; store.error = error.localizedDescription }
+            }
+            .onChange(of: settings.endpoint) { _ in saved = false }
+            .onChange(of: settings.model) { _ in saved = false }
+            .onChange(of: key) { _ in saved = false }
+            .onChange(of: settings.persona) { _ in saved = false }
+            .onChange(of: settings.temperature) { _ in saved = false }
+            .fileExporter(isPresented: $exporting, document: backup, contentType: .json, defaultFilename: "companion-backup") { result in
+                if case .failure(let error) = result { store.error = error.localizedDescription }
+            }
+            .fileImporter(isPresented: $importing, allowedContentTypes: [.json]) { result in
+                do {
+                    let url = try result.get()
+                    let granted = url.startAccessingSecurityScopedResource()
+                    defer { if granted { url.stopAccessingSecurityScopedResource() } }
+                    if let size = try url.resourceValues(forKeys: [.fileSizeKey]).fileSize {
+                        try LocalStore.checkBackupSize(size)
                     }
-                    Button("取消", role: .cancel) { pendingImport = nil }
+                    let file = try FileHandle(forReadingFrom: url)
+                    defer { try? file.close() }
+                    let data = try file.read(upToCount: LocalStore.backupByteLimit + 1) ?? Data()
+                    try LocalStore.checkBackupSize(data.count)
+                    pendingImport = data
+                } catch { store.error = error.localizedDescription }
+            }
+            .confirmationDialog("恢复将替换当前聊天、记忆、日记和设置。接口地址改变时会清除旧密钥，需重新填写。", isPresented: Binding(
+                get: { pendingImport != nil }, set: { if !$0 { pendingImport = nil } })) {
+                Button("确认恢复", role: .destructive) {
+                    guard let data = pendingImport else { return }
+                    do {
+                        try store.restore(data)
+                        settings = store.archive.settings
+                        key = try store.mainKey()
+                        saved = false
+                    }
+                    catch { store.error = error.localizedDescription }
+                    pendingImport = nil
                 }
-        }.frame(maxWidth:.infinity,maxHeight:.infinity)
+                Button("取消", role: .cancel) { pendingImport = nil }
+            }
+        }.frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    @ViewBuilder
+    private var apiPresetManagerSection: some View {
+        Section {
+            if presets.isEmpty {
+                Text("暂无已保存的 API 配置。可在下方填好地址、密钥和模型后点「存为新预设」，以后一键切换。")
+                    .font(.caption).foregroundStyle(.secondary)
+            } else {
+                ForEach(presets) { preset in
+                    HStack(spacing: 10) {
+                        Button {
+                            applyPreset(preset)
+                        } label: {
+                            HStack(spacing: 8) {
+                                Image(systemName: (settings.endpoint == preset.endpoint && settings.model == preset.model) ? "checkmark.circle.fill" : "circle")
+                                    .foregroundStyle((settings.endpoint == preset.endpoint && settings.model == preset.model) ? Color.mint : Color.secondary)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(preset.name).font(.subheadline.bold()).foregroundStyle(Color.primary)
+                                    Text("\(preset.model) · \(URL(string: preset.endpoint)?.host ?? preset.endpoint)")
+                                        .font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                                }
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+
+                        Button(role: .destructive) {
+                            do {
+                                presets = try APIPresetStore.delete(id: preset.id)
+                                if selectedPresetID == preset.id { selectedPresetID = nil }
+                                presetNotice = "已删除预设「\(preset.name)」。"
+                            } catch {
+                                store.error = error.localizedDescription
+                            }
+                        } label: {
+                            Image(systemName: "trash").font(.caption)
+                        }
+                        .buttonStyle(.borderless)
+                    }
+                }
+            }
+            TextField("预设名称（如 DeepSeek 官方 / Gemini 中转）", text: $presetName)
+                .textInputAutocapitalization(.never)
+            HStack(spacing: 12) {
+                Button("存为新预设") {
+                    savePreset(updatingID: nil)
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(settings.endpoint.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || settings.model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+
+                if let selectedID = selectedPresetID, presets.contains(where: { $0.id == selectedID }) {
+                    Button("覆盖当前预设") {
+                        savePreset(updatingID: selectedID)
+                    }
+                    .buttonStyle(.bordered)
+                }
+            }
+            if !presetNotice.isEmpty {
+                Text(presetNotice).font(.caption).foregroundStyle(Color.mint)
+            }
+        } header: {
+            Text("API 配置管理器（一键切换）")
+        } footer: {
+            Text("每套预设的 API Key 独立加密保存在本机钥匙串，切换时自动填入并生效。")
+        }
+    }
+
+    @ViewBuilder
+    private var mainAPISection: some View {
+        Section {
+            TextField("HTTPS 接口地址", text: Binding(get: { settings.endpoint }, set: { address in
+                if APIKeyStore.identity(address) != APIKeyStore.identity(settings.endpoint) { key = "" }
+                settings.endpoint = address
+            }))
+            .keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
+            SecureField("API Key（本地服务可留空）", text: $key)
+                .textInputAutocapitalization(.never).autocorrectionDisabled()
+            TextField("模型名称", text: $settings.model)
+                .textInputAutocapitalization(.never).autocorrectionDisabled()
+            Slider(value: $settings.temperature, in: 0...2, step: 0.1)
+            Text("温度：\(settings.temperature, specifier: "%.1f")").font(.caption)
+        } header: { Text("主对话 API") } footer: {
+            Text("支持 OpenAI 兼容的 Chat Completions。填写完整接口路径或以 /v1 结尾的地址；当前仅支持 HTTPS。密钥保存在本机钥匙串，不包含在备份中。")
+        }
+    }
+
+    @ViewBuilder
+    private var backupSection: some View {
+        Section {
+            Button("导出本地备份") {
+                do { backup = BackupDocument(data: try store.export()); exporting = true }
+                catch { store.error = error.localizedDescription }
+            }.disabled(!store.storageReady)
+            Button("从备份恢复") { importing = true }.disabled(store.busy || !store.storageReady)
+        } header: { Text("数据") } footer: {
+            Text("备份包含聊天、记忆、日记、人设和接口地址，不含密钥。恢复前自动保留当前资料快照。备份文件为明文，请妥善保管。")
+        }
+    }
+
+    private func applyPreset(_ preset: APIPreset) {
+        do {
+            let loadedKey = try APIPresetStore.readKey(id: preset.id)
+            settings.endpoint = preset.endpoint
+            settings.model = preset.model
+            settings.temperature = preset.temperature
+            key = loadedKey
+            selectedPresetID = preset.id
+            presetName = preset.name
+            try store.saveSettings(settings, key: loadedKey)
+            saved = true
+            presetNotice = "已切换并启用「\(preset.name)」。"
+        } catch {
+            store.error = error.localizedDescription
+        }
+    }
+
+    private func savePreset(updatingID: UUID?) {
+        let fallbackName = settings.model.isEmpty ? (URL(string: settings.endpoint)?.host ?? "新接口") : settings.model
+        let finalName = presetName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? fallbackName : presetName
+        do {
+            presets = try APIPresetStore.upsert(
+                id: updatingID,
+                name: finalName,
+                endpoint: settings.endpoint,
+                model: settings.model,
+                temperature: settings.temperature,
+                apiKey: key
+            )
+            if let match = presets.first(where: { $0.endpoint == settings.endpoint && $0.model == settings.model && $0.name == finalName.trimmingCharacters(in: .whitespacesAndNewlines) }) {
+                selectedPresetID = match.id
+            }
+            presetName = finalName
+            presetNotice = updatingID == nil ? "已保存 API 预设「\(finalName)」。" : "已更新 API 预设「\(finalName)」。"
+        } catch {
+            store.error = error.localizedDescription
+        }
     }
 }

@@ -112,6 +112,10 @@ final class SpeechTests:XCTestCase {
         XCTAssertEqual(dualPrefs.effectiveEngineMode, .autoCallFast)
         let eagerParts = SpeechPreferences.sentences("欢迎回来指挥官，今天过得怎么样？我一直在这里等你。")
         XCTAssertTrue((eagerParts.first?.count ?? 99) <= 18)
+        let rec = DailyInteractionRecord(dateKey: "2026-11-26", cardKey: "enya", characterName: "恩雅", callCount: 1, callSeconds: 3180, touchCount: 4, touchBreakdown: ["摸头": 4], homeMessageCount: 5, chatMessageCount: 3)
+        XCTAssertEqual(rec.callMinutes, 53)
+        XCTAssertTrue(rec.summaryLine.contains("53 分钟"))
+        XCTAssertTrue(rec.summaryLine.contains("摸头4次"))
     }
 
     func testLegacyBilingualEnvelopeCanBeDisplayedAndReadWithoutEditingArchive() throws {

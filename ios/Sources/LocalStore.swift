@@ -86,6 +86,32 @@ enum APIKeyStore {
         }else {status=SecItemDelete(query as CFDictionary)}
         guard status==errSecSuccess || status==errSecItemNotFound else {throw CompanionError.message("独立接口密钥保存失败。")}
     }
+    static func readPresetKey(id:UUID) throws -> String {
+        var query=base;query[kSecAttrAccount as String]="api-preset-"+id.uuidString
+        query[kSecReturnData as String]=true;query[kSecMatchLimit as String]=kSecMatchLimitOne
+        var item:CFTypeRef?;let status=SecItemCopyMatching(query as CFDictionary,&item)
+        if status==errSecItemNotFound {return ""}
+        guard status==errSecSuccess,let data=item as? Data,let text=String(data:data,encoding:.utf8) else {throw CompanionError.message("无法读取预设密钥，请解锁设备后重试。")}
+        return text
+    }
+    static func writePresetKey(_ key:String,id:UUID) throws {
+        var query=base;query[kSecAttrAccount as String]="api-preset-"+id.uuidString
+        let status:OSStatus
+        if key.isEmpty {
+            status=SecItemDelete(query as CFDictionary)
+        } else {
+            guard key.utf8.count<=8192,!key.contains("\n"),!key.contains("\r") else {throw CompanionError.message("预设密钥格式无效。")}
+            let attributes:[String:Any]=[kSecValueData as String:Data(key.utf8),kSecAttrAccessible as String:kSecAttrAccessibleWhenUnlockedThisDeviceOnly]
+            let updated=SecItemUpdate(query as CFDictionary,attributes as CFDictionary)
+            status=updated==errSecItemNotFound ? SecItemAdd(query.merging(attributes){_,new in new} as CFDictionary,nil):updated
+        }
+        guard status==errSecSuccess || status==errSecItemNotFound else {throw CompanionError.message("预设密钥保存失败。")}
+    }
+    static func deletePresetKey(id:UUID) throws {
+        var query=base;query[kSecAttrAccount as String]="api-preset-"+id.uuidString
+        let status=SecItemDelete(query as CFDictionary)
+        guard status==errSecSuccess || status==errSecItemNotFound else {throw CompanionError.message("删除预设密钥失败。")}
+    }
 }
 
 @MainActor final class LocalStore: ObservableObject {
@@ -293,6 +319,9 @@ enum APIKeyStore {
             var next = archive
             next.messages.append(Message(role: "user", content: text))
             try commit(next)
+            if !context.origin.contains("触碰") && !context.origin.contains("环境") {
+                DailyInteractionTracker.shared.recordChatTurn(cardID: currentCard?.id, characterName: currentCard?.name ?? context.modelName, isCommunications: false, userText: text)
+            }
             availableActions = DialogueMotion.allowed(actions)
             pendingImage = image
             pendingExtraImages = images
@@ -381,6 +410,8 @@ enum APIKeyStore {
             next.messages.append(assistant)
         }
         try? commit(next)
+        let name = archive.settings.personas?.cards.first(where: { $0.id == cardID })?.name ?? currentCard?.name ?? "伙伴"
+        DailyInteractionTracker.shared.recordChatTurn(cardID: cardID ?? currentCard?.id, characterName: name, isCommunications: false, userText: user.content)
     }
     func cancel() {
         requestTask?.cancel(); requestID = nil; requestTask = nil; busy = false; dialogueAction = nil;replyForSpeech=nil; pendingImage = nil;pendingExtraImages = [];pendingSearch=false
@@ -407,6 +438,9 @@ enum APIKeyStore {
     func addDiary(_ text: String) throws {
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         var next = archive; next.diary.insert(JournalEntry(text: text), at: 0); try commit(next)
+    }
+    func deleteDiary(at offsets: IndexSet) throws {
+        var next = archive; next.diary.remove(atOffsets: offsets); try commit(next)
     }
     static let backupByteLimit = 100 * 1024 * 1024
 

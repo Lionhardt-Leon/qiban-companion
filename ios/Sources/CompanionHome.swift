@@ -312,11 +312,17 @@ struct CompanionHome: View {
         .onChange(of:stage.name){_ in greetIfReady()}
         .onReceive(NotificationCenter.default.publisher(for:ProcessInfo.thermalStateDidChangeNotification)){_ in snowbreak.applyHardwareBudget();stage.applyHardwareBudget()}
         .onReceive(NotificationCenter.default.publisher(for:Notification.Name.NSProcessInfoPowerStateDidChange)){_ in snowbreak.applyHardwareBudget();stage.applyHardwareBudget()}
-        .task { resumeStage() }
+        .task {
+            resumeStage()
+            DailyInteractionTracker.shared.autoGenerateIfDue(store: store)
+        }
         .onDisappear { localVisionTicket=UUID();localVisionBusy=false;waitingBodyAction=nil;clearTouches();camera.stop();senses.suspend();speech.stop();stage.stop();snowbreak.pause();portrait.pause() }
         .onChange(of: scenePhase) { phase in
             callManager.handleScenePhase(phase)
-            if phase == .active, sheet == nil { resumeStage() }
+            if phase == .active, sheet == nil {
+                resumeStage()
+                DailyInteractionTracker.shared.autoGenerateIfDue(store: store)
+            }
             else {
                 clearTouches();camera.stop();senses.suspend()
                 if !(callManager.active && callManager.mode == .fullPhone) { speech.stop() }
@@ -496,7 +502,9 @@ struct CompanionHome: View {
     }
     private func clearTouches(){touchTicket=UUID();pendingTouches.removeAll();lastTouchAt=0;lastTouchSummary="尚无本轮触碰记录"}
     private func queueTouch(_ message:String){
-        guard sheet == nil,scenePhase == .active,touchAI else{return};lastTouchSummary=message;lastTouchAt=ProcessInfo.processInfo.systemUptime
+        guard sheet == nil,scenePhase == .active else{return}
+        DailyInteractionTracker.shared.recordTouch(cardID: store.currentCard?.id, characterName: store.currentCard?.name ?? modelLabel, rawSummary: message)
+        guard touchAI else{return};lastTouchSummary=message;lastTouchAt=ProcessInfo.processInfo.systemUptime
         guard !store.archive.settings.endpoint.isEmpty else{return}
         pendingTouches.append(message);scheduleTouches()
     }

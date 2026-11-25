@@ -59,12 +59,13 @@ for path in ['src/js/chat_engine.js','src/js/tool_chat_engine.js']:
     patch(path,'const memoryMessage = await buildLongTermMemoryMessage({','const memoryMessage = await buildLongTermMemoryMessage({\n    qibanMessageIds:window.QibanNative?.memoryIDs?.(store),')
 patch('src/js/long_term_memory.js','    if (result.memories.length === 0 && result.edges.length === 0) return null;', '    const limited=window.QibanNative?.limitMemory?.(result,loadRawStore(),options.qibanMessageIds);\n    if(limited)Object.assign(result,limited);\n    if (result.memories.length === 0 && result.edges.length === 0) return null;')
 patch('src/js/tts_engine.js','response = await fetch(request.url, request.init);',"response = await fetch(request.url,{...request.init,...(window.QibanNative?.available ? {signal:window.QibanNative.ttsSignal()}:{})});")
-files['src/js/ui.js']=b"import {initQibanGal} from './qiban_gal.js';\nimport {initQibanSessions} from './qiban_sessions.js';\nimport {initQibanMessageActions,decorateQibanMessage} from './qiban_messages.js';\nimport {initQibanCharacterStickers,commitStagedStickersToCharacter,resetStagedStickers,refreshCharacterStickerEditPanel,updateDetailStickerButton} from './qiban_stickers.js';\n"+files['src/js/ui.js']
+files['src/js/ui.js']=b"import {initQibanGal} from './qiban_gal.js';\nimport {initQibanSessions} from './qiban_sessions.js';\nimport {initQibanMessageActions,decorateQibanMessage} from './qiban_messages.js';\nimport {initQibanCharacterStickers,commitStagedStickersToCharacter,resetStagedStickers,refreshCharacterStickerEditPanel,updateDetailStickerButton} from './qiban_stickers.js';\nimport {initQibanKbMemory} from './qiban_kb_memory.js';\n"+files['src/js/ui.js']
 patch('src/js/ui.js','  state.store = loadAppStore();',"""  state.store = loadAppStore();
   initQibanGal({getStore:()=>state.store,isBusy:()=>pendingConversationReplies>0 || Boolean(state.activeToolRun),send:text=>{const committed=commitOutgoingMessage(text);if(!committed)return false;updateStore(committed.store);continueConversationAfterOutgoing(committed);return true;},selectCharacter:id=>{const card=getCharacterById(state.store.characters,id);if(!card)throw Error('角色不存在');const conversation=ensurePrivateConversation(state.store,card);updateStore(loadAppStore());selectConversation(conversation.id,true);return conversation;}});
   initQibanSessions({getStore:()=>state.store,isBusy:()=>pendingConversationReplies>0 || Boolean(state.activeToolRun),replace:updateStore,select:id=>selectConversation(id,true)});
   initQibanMessageActions({getStore:()=>state.store,isBusy:()=>pendingConversationReplies>0 || Boolean(state.activeToolRun),changeBusy:delta=>{pendingConversationReplies=Math.max(0,pendingConversationReplies+delta);},refresh:()=>renderAll(),stopPlayback:()=>stopVoicePlayback(),chatSettings:key=>buildCharacterChatSettings(key)});
-  initQibanCharacterStickers({getStore:()=>state.store,getActivePrivateCharacter:()=>getActivePrivateCharacter(),notice:text=>window.QibanNative?.notice?.(text)});""")
+  initQibanCharacterStickers({getStore:()=>state.store,getActivePrivateCharacter:()=>getActivePrivateCharacter(),notice:text=>window.QibanNative?.notice?.(text)});
+  initQibanKbMemory({getStore:()=>state.store,getActivePrivateCharacter:()=>getActivePrivateCharacter()});""")
 patch('src/js/ui.js','    requestAnimationFrame(resetCharacterImportPreview);','    requestAnimationFrame(resetCharacterImportPreview);\n    resetStagedStickers();')
 patch('src/js/ui.js','    const next = upsertCharacter(state.store, character);','    const next = upsertCharacter(state.store, character);\n    commitStagedStickersToCharacter(character);')
 patch('src/js/ui.js',"  document.getElementById('character-edit-panel')?.classList.remove('hidden');","  refreshCharacterStickerEditPanel(character);\n  document.getElementById('character-edit-panel')?.classList.remove('hidden');")
@@ -99,8 +100,8 @@ patch('src/js/chat_engine.js','async function buildVoiceReplyAttachment(text, ch
   }catch(error){if(!window.QibanNative.ttsEnabled() || ticket!==window.QibanNative.speechTicket())return null;throw error;}
 }
 async function qibanOriginalVoiceAttachment(text, character) {""")
-files['src/js/chat_engine.js']=b"import {buildCharacterStickerPrompt,applyCharacterStickerReply,sanitizeHistoryForStickers,dispatchFollowUpSticker} from './qiban_stickers.js';\n"+files['src/js/chat_engine.js']
-files['src/js/tool_chat_engine.js']=b"import {buildCharacterStickerPrompt,applyCharacterStickerReply,sanitizeHistoryForStickers,dispatchFollowUpSticker} from './qiban_stickers.js';\n"+files['src/js/tool_chat_engine.js']
+files['src/js/chat_engine.js']=b"import {buildCharacterStickerPrompt,applyCharacterStickerReply,sanitizeHistoryForStickers,dispatchFollowUpSticker} from './qiban_stickers.js';\nimport {buildQibanKbMemoryPrompt} from './qiban_kb_memory.js';\n"+files['src/js/chat_engine.js']
+files['src/js/tool_chat_engine.js']=b"import {buildCharacterStickerPrompt,applyCharacterStickerReply,sanitizeHistoryForStickers,dispatchFollowUpSticker} from './qiban_stickers.js';\nimport {buildQibanKbMemoryPrompt} from './qiban_kb_memory.js';\n"+files['src/js/tool_chat_engine.js']
 files['src/js/roundtable.js']=b"import {buildCharacterStickerPrompt,applyCharacterStickerReply,dispatchFollowUpSticker} from './qiban_stickers.js';\n"+files['src/js/roundtable.js']
 patch('src/js/chat_engine.js',"    const reply = typeof result === 'string' ? result : result.text;",'''    const rawReply = typeof result === 'string' ? result : result.text;
     const galExpr = window.QibanNative?.extractGalExpression ? window.QibanNative.extractGalExpression(rawReply, character) : { text: rawReply, expressionId: null };
@@ -111,7 +112,7 @@ patch('src/js/chat_engine.js',"    const baseMeta = {\n      modelReplySucceeded
 patch('src/js/chat_engine.js','        const voiceAttachment = await buildVoiceReplyAttachment(reply, character);','        const voiceAttachment = reply.trim() ? await buildVoiceReplyAttachment(reply, character) : null;')
 patch('src/js/chat_engine.js','attachments: [voiceAttachment]','attachments: [voiceAttachment].filter(Boolean)')
 patch('src/js/chat_engine.js','voiceReply: true','voiceReply: Boolean(voiceAttachment)')
-patch('src/js/chat_engine.js','    onStore?.(nextStore);\n    return reply;','    onStore?.(nextStore);\n    await dispatchFollowUpSticker({ store: nextStore, conversation, character, userText: text, assistantText: reply, presetSticker: stickerParsed.matchedSticker, chatSettings, onStore });\n    return reply;')
+patch('src/js/chat_engine.js','    onStore?.(nextStore);\n    return reply;','    onStore?.(nextStore);\n    if(window.QibanNative?.available) window.QibanNative.call("recordInteraction",{cardID:character?.qibanId||"",characterName:character?.name||"",userText:text||""}).catch(()=>{});\n    await dispatchFollowUpSticker({ store: nextStore, conversation, character, userText: text, assistantText: reply, presetSticker: stickerParsed.matchedSticker, chatSettings, onStore });\n    return reply;')
 patch('src/js/chat_engine.js','      content: await buildModelMessageContent({\n        speakerName: item.speakerName || (item.role === \'user\' ? PLAYER_NAME : character.name),\n        text: item.text || \'\',\n        historical: true, attachmentIssues,\n        provider,\n        attachments: item.meta?.voiceReply === true ? [] : (item.attachments || [])\n      })','      content: await buildModelMessageContent((() => {\n        const safeItem = sanitizeHistoryForStickers(item);\n        return {\n          speakerName: item.speakerName || (item.role === \'user\' ? PLAYER_NAME : character.name),\n          text: safeItem.text,\n          historical: true, attachmentIssues,\n          provider,\n          attachments: item.meta?.voiceReply === true ? [] : safeItem.attachments\n        };\n      })())')
 patch('src/js/tool_chat_engine.js','    const reply = sanitizeReply(finalText, character.name, { allowEmpty: finalAttachments.length > 0 });','    const rawToolReply = sanitizeReply(finalText, character.name, { allowEmpty: finalAttachments.length > 0 });\n    const toolGalExpr = window.QibanNative?.extractGalExpression ? window.QibanNative.extractGalExpression(rawToolReply, character) : { text: rawToolReply, expressionId: null };\n    const toolStickerParsed = applyCharacterStickerReply(toolGalExpr.text, character);\n    const reply = toolStickerParsed.text || toolGalExpr.text;\n    if (toolGalExpr.expressionId) window.QibanNative?.playGalExpression?.(toolGalExpr.expressionId);')
 patch('src/js/tool_chat_engine.js',"    if (!trace.interrupted) {\n      if(!window.QibanNative?.isDraftStore?.(nextStore)) recordLongTermMemoryTurn({","    if (!trace.interrupted) {\n      await dispatchFollowUpSticker({ store: nextStore, conversation, character, userText: text, assistantText: reply, presetSticker: toolStickerParsed.matchedSticker, chatSettings, onStore });\n      if(!window.QibanNative?.isDraftStore?.(nextStore)) recordLongTermMemoryTurn({")
@@ -129,8 +130,8 @@ patch('src/js/roundtable.js', '${speaker.prompt || `你正在扮演 ${speaker.na
 for path in ['src/js/chat_engine.js','src/js/tool_chat_engine.js']:
     patch(path, '${character.examples}', r'${window.QibanNative?.available ? character.examples.replace(/\{\{\s*(char|user)\s*\}\}/gi, (_, name) => name.toLowerCase() === "char" ? character.name : PLAYER_NAME) : character.examples}')
 patch('src/js/chat_engine.js','  const system = [','  const system = [\n    window.QibanNative?.available ? window.QibanNative.nativeMemory(character,mode) : \'\',')
-patch('src/js/chat_engine.js',"    event?.botChainLimit ? `互聊进度：${event.interBotDebt || 0}/${event.botChainLimit}` : ''","    event?.botChainLimit ? `互聊进度：${event.interBotDebt || 0}/${event.botChainLimit}` : '',\n    buildCharacterStickerPrompt(character, { roundtable: mode === 'roundtable' && event?.expectsJson })")
-patch('src/js/tool_chat_engine.js',"    character.examples ? `示例对话：\\n${window.QibanNative?.available ? character.examples.replace(/\\{\\{\\s*(char|user)\\s*\\}\\}/gi, (_, name) => name.toLowerCase() === \"char\" ? character.name : PLAYER_NAME) : character.examples}` : ''\n  ].filter(Boolean).join('\\n\\n');","    character.examples ? `示例对话：\\n${window.QibanNative?.available ? character.examples.replace(/\\{\\{\\s*(char|user)\\s*\\}\\}/gi, (_, name) => name.toLowerCase() === \"char\" ? character.name : PLAYER_NAME) : character.examples}` : '',\n    buildCharacterStickerPrompt(character)\n  ].filter(Boolean).join('\\n\\n');")
+patch('src/js/chat_engine.js',"    event?.botChainLimit ? `互聊进度：${event.interBotDebt || 0}/${event.botChainLimit}` : ''","    event?.botChainLimit ? `互聊进度：${event.interBotDebt || 0}/${event.botChainLimit}` : '',\n    buildQibanKbMemoryPrompt(character, userText, history),\n    buildCharacterStickerPrompt(character, { roundtable: mode === 'roundtable' && event?.expectsJson })")
+patch('src/js/tool_chat_engine.js',"    character.examples ? `示例对话：\\n${window.QibanNative?.available ? character.examples.replace(/\\{\\{\\s*(char|user)\\s*\\}\\}/gi, (_, name) => name.toLowerCase() === \"char\" ? character.name : PLAYER_NAME) : character.examples}` : ''\n  ].filter(Boolean).join('\\n\\n');","    character.examples ? `示例对话：\\n${window.QibanNative?.available ? character.examples.replace(/\\{\\{\\s*(char|user)\\s*\\}\\}/gi, (_, name) => name.toLowerCase() === \"char\" ? character.name : PLAYER_NAME) : character.examples}` : '',\n    buildQibanKbMemoryPrompt(character, userText, history),\n    buildCharacterStickerPrompt(character)\n  ].filter(Boolean).join('\\n\\n');")
 patch('src/js/ui.js','async function toggleVoicePlayback(messageId, attachment) {', '''async function toggleVoicePlayback(messageId, attachment) {
   if(window.QibanNative?.available && !window.QibanNative.ttsEnabled() && attachment?.source==='tts-reply'){window.QibanNative.notice('TTS 已关闭。');return;}
   if (attachment?.path?.startsWith('qiban-speech:') && window.QibanNative?.available) {
@@ -157,13 +158,14 @@ patch('src/js/announcements.js',"export const ANNOUNCEMENT_URL = 'https://chat.f
 # The native container does not fetch upstream announcements or self-update.
 files['src/public/announcement.json']=b'{}'
 files['qiban_gal.css']=(ROOT/'chat-adapter/gal.css').read_bytes()
-patch('index.html','</head>','<link rel="stylesheet" href="qiban_gal.css">\n</head>')
+files['qiban_kb_memory.css']=(ROOT/'chat-adapter/kb-memory.css').read_bytes()
+patch('index.html','</head>','<link rel="stylesheet" href="qiban_gal.css">\n<link rel="stylesheet" href="qiban_kb_memory.css">\n</head>')
 files['qiban_bridge.js']=(ROOT/'chat-adapter/bridge.js').read_bytes()
 files['qiban_boot.js']="""try {await window.QibanNative.initialize(); await import('./src/js/main.js');}
 catch(error) {document.body.textContent='通讯模块启动失败：'+error.message;if(window.QibanNative?.available)await window.QibanNative.call('pageError',{message:error.message});}
 """.encode('utf-8')
 files['src/js/qiban_native.js']=(ROOT/'chat-adapter/native.js').read_bytes()
-for name,target in [('identity.js','qiban_identity.js'),('contact-repair.js','qiban_contact_repair.js'),('message-ops.js','qiban_message_ops.js'),('message-actions.js','qiban_messages.js'),('session-ops.js','qiban_session_ops.js'),('sessions.js','qiban_sessions.js'),('gal.js','qiban_gal.js'),('gal-state.js','qiban_gal_state.js'),('stickers-core.js','qiban_stickers_core.js'),('stickers.js','qiban_stickers.js')]:
+for name,target in [('identity.js','qiban_identity.js'),('contact-repair.js','qiban_contact_repair.js'),('message-ops.js','qiban_message_ops.js'),('message-actions.js','qiban_messages.js'),('session-ops.js','qiban_session_ops.js'),('sessions.js','qiban_sessions.js'),('gal.js','qiban_gal.js'),('gal-state.js','qiban_gal_state.js'),('stickers-core.js','qiban_stickers_core.js'),('stickers.js','qiban_stickers.js'),('kb-memory-core.js','qiban_kb_memory_core.js'),('kb-memory.js','qiban_kb_memory.js')]:
     files['src/js/'+target]=(ROOT/'chat-adapter'/name).read_bytes()
 files['qiban_ios.css']=(ROOT/'chat-adapter/ios.css').read_bytes()
 files['LICENSE.txt']=files['LICENSE']
@@ -192,7 +194,7 @@ for path in (ROOT/'chat-adapter').glob('*'):
     if path.is_file():site['source/adapters/'+path.name]=path.read_bytes()
 site['source/README.txt']=notice.encode('utf-8')
 manifest={'schema':'qiban-chat-module/1','revision':REVISION,'upstream':UPSTREAM,'license':'GPL-3.0','files':{name:hashlib.sha256(data).hexdigest() for name,data in site.items()}}
-out=ROOT/'dist/Fritia-Chat-Mobile-v12.qchat'
+out=ROOT/'dist/Fritia-Chat-Mobile-v13.qchat'
 out.parent.mkdir(parents=True,exist_ok=True)
 with zipfile.ZipFile(out,'w',compression=zipfile.ZIP_STORED) as z:
     def write(name,data):
@@ -204,5 +206,5 @@ digest=hashlib.sha256(out.read_bytes()).hexdigest()
 native=ROOT/'ios/Sources/ChatModuleLibrary.swift'
 native.write_text(re.sub(r'static let packageSHA256 = "[^"]+"','static let packageSHA256 = "'+digest+'"',native.read_text(encoding='utf-8')),encoding='utf-8')
 report={'file':str(out),'bytes':out.stat().st_size,'sha256':digest,'files':len(site)+1,'upstreamRevision':REVISION,'upstreamZipSHA256':hashlib.sha256(archive.read_bytes()).hexdigest(),'originalAssetsPubliclyUploaded':False,'licenseAndSourceIncluded':True}
-(ROOT/'dist/Chat-Module-v12-manifest.json').write_text(json.dumps(report,ensure_ascii=False,indent=2),encoding='utf-8')
+(ROOT/'dist/Chat-Module-v13-manifest.json').write_text(json.dumps(report,ensure_ascii=False,indent=2),encoding='utf-8')
 print(json.dumps(report,ensure_ascii=True))

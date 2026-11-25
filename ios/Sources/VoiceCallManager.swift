@@ -306,6 +306,9 @@ enum VoiceCallMediaStore {
     }
 
     func hangUp() {
+        if active, elapsedSeconds >= 3 {
+            DailyInteractionTracker.shared.recordCall(cardID: cardID, characterName: characterName, seconds: elapsedSeconds)
+        }
         callTicket = UUID()
         turnTask?.cancel()
         turnTask = nil

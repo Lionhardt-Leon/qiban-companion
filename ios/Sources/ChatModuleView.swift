@@ -24,6 +24,8 @@ import UniformTypeIdentifiers
                 }.accessibilityLabel(controller.speechEnabled ? "关闭 TTS 语音":"开启 TTS 语音").accessibilityIdentifier("chatSpeechToggle")
                 Menu {
                     Button("面对面对话"){controller.openGal()}.disabled(!controller.ready)
+                    Button("智能知识库（AI 自动导入整理）"){controller.openSmartKB()}.disabled(!controller.ready)
+                    Button("智能长期记忆（分类与提炼）"){controller.openSmartMemory()}.disabled(!controller.ready)
                     Button("语音通话（电话模式）") {
                         callManager.start(
                             mode: .fullPhone,

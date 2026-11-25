@@ -7,7 +7,7 @@ import AVFoundation
 struct ChatFileExport:Identifiable {let id=UUID();let url:URL}
 enum ChatNativePane:String,Identifiable {case persona,api,speech,portrait;var id:String{rawValue}}
 
-@MainActor final class ChatModuleController:NSObject,ObservableObject,WKScriptMessageHandlerWithReply,WKNavigationDelegate {
+@MainActor final class ChatModuleController:NSObject,ObservableObject,WKScriptMessageHandlerWithReply,WKNavigationDelegate,WKUIDelegate {
     @Published var status=""
     @Published var error:String?
     @Published var ready=false
@@ -55,7 +55,7 @@ enum ChatNativePane:String,Identifiable {case persona,api,speech,portrait;var id
             let content=WKUserContentController();content.addScriptMessageHandler(self,contentWorld:.page,name:"qibanChat")
             let config=WKWebViewConfiguration();config.userContentController=content;config.websiteDataStore = .default()
             config.allowsInlineMediaPlayback=true;config.mediaTypesRequiringUserActionForPlayback=[]
-            let view=WKWebView(frame:.zero,configuration:config);view.navigationDelegate=self
+            let view=WKWebView(frame:.zero,configuration:config);view.navigationDelegate=self;view.uiDelegate=self
             view.scrollView.contentInsetAdjustmentBehavior = .never;view.isOpaque=false;view.backgroundColor = .white
             webView=view
             observation=speech.$busy.combineLatest(speech.$status).sink{[weak self] busy,status in
@@ -117,7 +117,7 @@ enum ChatNativePane:String,Identifiable {case persona,api,speech,portrait;var id
         GameOrientation.setGame(false)
         sessionID=UUID();refreshID=nil;contentProcessTerminated=false;cancelRequests();stopSpeech();observation=nil;settingsObservation=nil;mouthObservation=nil
         webView?.configuration.userContentController.removeScriptMessageHandler(forName:"qibanChat",contentWorld:.page)
-        webView?.stopLoading();webView?.navigationDelegate=nil;webView=nil;ready=false;server?.stop();server=nil
+        webView?.stopLoading();webView?.navigationDelegate=nil;webView?.uiDelegate=nil;webView=nil;ready=false;server?.stop();server=nil
         finishExport(saved:false)
         for write in writes.values{try? write.handle.close()};writes.removeAll()
         try? FileManager.default.removeItem(at:temp)
@@ -150,6 +150,8 @@ enum ChatNativePane:String,Identifiable {case persona,api,speech,portrait;var id
     }
     func setAppSpeech(_ enabled:Bool){appTTSMode=enabled;stopSpeech();Task{try? await emit(["type":"ttsMode","enabled":enabled])}}
     func openGal(){Task{do{guard let view=webView else{return};_ = try await view.callAsyncJavaScript("if(!window.QibanNative?.openGal)throw Error('请导入随本版提供的通讯模块');await window.QibanNative.openGal();",arguments:[:],in:nil,contentWorld:.page)}catch{self.error=error.localizedDescription}}}
+    func openSmartKB(){Task{do{guard let view=webView else{return};_ = try await view.callAsyncJavaScript("if(!window.QibanNative?.openSmartKB)throw Error('请先导入新版 v13 通讯模块');window.QibanNative.openSmartKB();",arguments:[:],in:nil,contentWorld:.page)}catch{self.error=error.localizedDescription}}}
+    func openSmartMemory(){Task{do{guard let view=webView else{return};_ = try await view.callAsyncJavaScript("if(!window.QibanNative?.openSmartMemory)throw Error('请先导入新版 v13 通讯模块');window.QibanNative.openSmartMemory();",arguments:[:],in:nil,contentWorld:.page)}catch{self.error=error.localizedDescription}}}
     func conversationMenu(new:Bool){Task{do{stopSpeech();guard let view=webView else{return};_ = try await view.callAsyncJavaScript("if(!window.QibanNative?.conversationSessions)throw Error('请导入新版通讯模块'); await window.QibanNative.conversationSessions(action);",arguments:["action":new ? "new":"history"],in:nil,contentWorld:.page)}catch{self.error=error.localizedDescription}}}
     func openPane(_ value:ChatNativePane) {
         Task {
@@ -234,6 +236,12 @@ enum ChatNativePane:String,Identifiable {case persona,api,speech,portrait;var id
             stopSpeech()
             onStartCall?(mode, cardID, characterName, conversationID, inGal, animations)
             return ["started": true]
+        case "recordInteraction":
+            let cardID = (body["cardID"] as? String).flatMap(UUID.init(uuidString:)) ?? selectedCardID
+            let charName = body["characterName"] as? String ?? "伙伴"
+            let userText = body["userText"] as? String ?? ""
+            DailyInteractionTracker.shared.recordChatTurn(cardID: cardID, characterName: charName, isCommunications: true, userText: userText)
+            return ["recorded": true]
         case "openURL":
             guard let raw=body["url"] as? String,let url=URL(string:raw),["https","http"].contains(url.scheme ?? "") else{throw CompanionError.message("外部链接无效。")}
             await UIApplication.shared.open(url);return ["opened":true]
@@ -482,5 +490,34 @@ enum ChatNativePane:String,Identifiable {case persona,api,speech,portrait;var id
         cancelRequests()
         stopSpeech()
         error = "通讯页面被系统回收，可点重新打开；已写入的资料仍保存在本机。"
+    }
+    private func topPresenter() -> UIViewController? {
+        let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+        let root = scenes.first(where: { $0.activationState == .foregroundActive })?.windows.first(where: { $0.isKeyWindow })?.rootViewController
+            ?? scenes.first?.windows.first?.rootViewController
+        var current = root
+        while let presented = current?.presentedViewController { current = presented }
+        return current
+    }
+    func webView(_ webView: WKWebView, runJavaScriptAlertPanelWithMessage message: String, initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping () -> Void) {
+        guard let presenter = topPresenter() else { completionHandler(); return }
+        let alert = UIAlertController(title: "提示", message: message, preferredStyle: .alert)
+        alert.addAction(UIAlertAction(title: "好", style: .default) { _ in completionHandler() })
+        presenter.present(alert, animated: true)
+    }
+    func webView(_ webView: WKWebView, runJavaScriptConfirmPanelWithMessage message: String, initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping (Bool) -> Void) {
+        guard let presenter = topPresenter() else { completionHandler(false); return }
+        let alert = UIAlertController(title: "确认操作", message: message, preferredStyle: .alert)
+        alert.addAction(UIAlertAction(title: "取消", style: .cancel) { _ in completionHandler(false) })
+        alert.addAction(UIAlertAction(title: "确认", style: .destructive) { _ in completionHandler(true) })
+        presenter.present(alert, animated: true)
+    }
+    func webView(_ webView: WKWebView, runJavaScriptTextInputPanelWithPrompt prompt: String, defaultText: String?, initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping (String?) -> Void) {
+        guard let presenter = topPresenter() else { completionHandler(nil); return }
+        let alert = UIAlertController(title: prompt, message: nil, preferredStyle: .alert)
+        alert.addTextField { $0.text = defaultText }
+        alert.addAction(UIAlertAction(title: "取消", style: .cancel) { _ in completionHandler(nil) })
+        alert.addAction(UIAlertAction(title: "确定", style: .default) { _ in completionHandler(alert.textFields?.first?.text) })
+        presenter.present(alert, animated: true)
     }
 }

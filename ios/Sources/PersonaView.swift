@@ -29,6 +29,9 @@ struct PersonaView:View {
     @State private var editingStickerDetails = ""
     @State private var editingStickerBackground = ""
     @State private var editingStickerUsage = ""
+    @State private var systemPresets: [SystemRulePreset] = []
+    @State private var systemPresetName = ""
+    @State private var selectedSystemPresetID: UUID? = nil
     private let stickerLibrary = CharacterStickerLibrary()
     private var card:Binding<PersonaCard> {
         Binding(get:{library.cards.first{$0.id == selected} ?? PersonaCard()},set:{value in
@@ -76,6 +79,7 @@ struct PersonaView:View {
                     guard !loaded else{return}
                     library = store.archive.settings.personas ?? PersonaLibrary.migrating(store.archive.settings.persona)
                     selected = initialCardID ?? library.card(for:modelKey)?.id;loaded = true
+                    systemPresets = SystemRulePresetStore.load()
                     reloadStickers()
                 }
                 .onChange(of:selected) { _ in stickerAnalyzeTask?.cancel(); stickerAnalyzeTask = nil; stickerAnalyzeProgress = ""; reloadStickers() }
@@ -175,6 +179,7 @@ struct PersonaView:View {
     }
     private var systemFields:some View {
         VStack(spacing:16) {
+            systemRulePresetPanel
             editor("全局系统提示词",text:$library.systemPrompt,hint:"所有角色共用的语言、回复长度及相处规则。正文单字段最多100万字，当前人设拼接最多200万字；字数不是token，实际容量取决于所选模型和接口。",id:"personaSystemInput")
             editor("当前角色补充规则",text:card.systemRules,hint:"仅针对当前角色的特殊要求")
             editor("回复补充规则",text:card.replyRules,hint:"角色卡的 post_history_instructions 在此作为系统补充规则使用。")
@@ -187,6 +192,88 @@ struct PersonaView:View {
                     preview = true
                 } catch {store.error = error.localizedDescription}
             }.buttonStyle(.bordered).accessibilityIdentifier("previewPersonaPrompt")
+        }
+    }
+    private var systemRulePresetPanel: some View {
+        panel("系统规则管理器（一键切换提示词）", "保存多套全局系统提示词，切换风格时无需反复复制粘贴；套用后点底部「保存」即可生效。") {
+            if systemPresets.isEmpty {
+                Text("暂无预设。填写下方「全局系统提示词」后输入名称点「存为新预设」即可。")
+                    .font(.caption).foregroundStyle(.secondary)
+            } else {
+                VStack(spacing: 8) {
+                    ForEach(systemPresets) { preset in
+                        HStack(spacing: 8) {
+                            Button {
+                                library.systemPrompt = preset.content
+                                selectedSystemPresetID = preset.id
+                                systemPresetName = preset.name
+                                notice = "已套用系统规则「\(preset.name)」，点击底部保存按钮生效。"
+                            } label: {
+                                HStack(spacing: 8) {
+                                    Image(systemName: library.systemPrompt == preset.content ? "checkmark.circle.fill" : "doc.text")
+                                        .foregroundStyle(library.systemPrompt == preset.content ? Color.mint : Color.indigo)
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(preset.name).font(.subheadline.bold()).foregroundStyle(Color.primary)
+                                        Text("\(preset.content.count) 字 · \(preset.content.prefix(26))")
+                                            .font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                                    }
+                                }
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+
+                            Button(role: .destructive) {
+                                do {
+                                    systemPresets = try SystemRulePresetStore.delete(id: preset.id)
+                                    if selectedSystemPresetID == preset.id { selectedSystemPresetID = nil }
+                                    notice = "已删除系统规则预设「\(preset.name)」。"
+                                } catch {
+                                    store.error = error.localizedDescription
+                                }
+                            } label: {
+                                Image(systemName: "trash").font(.caption)
+                            }
+                            .buttonStyle(.borderless)
+                        }
+                        .padding(10)
+                        .background(.white.opacity(0.04), in: RoundedRectangle(cornerRadius: 12))
+                    }
+                }
+            }
+            TextField("规则预设名称（如 日常温柔 / 沉浸剧情 / 简洁口语）", text: $systemPresetName)
+                .textFieldStyle(.roundedBorder)
+            HStack(spacing: 10) {
+                Button("存为新预设") {
+                    let finalName = systemPresetName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                        ? "系统规则 \(systemPresets.count + 1)" : systemPresetName
+                    do {
+                        systemPresets = try SystemRulePresetStore.upsert(id: nil, name: finalName, content: library.systemPrompt)
+                        if let created = systemPresets.first(where: { $0.name == finalName.trimmingCharacters(in: .whitespacesAndNewlines) }) {
+                            selectedSystemPresetID = created.id
+                        }
+                        systemPresetName = finalName
+                        notice = "已保存系统规则预设「\(finalName)」。"
+                    } catch {
+                        store.error = error.localizedDescription
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(library.systemPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+
+                if let sid = selectedSystemPresetID, systemPresets.contains(where: { $0.id == sid }) {
+                    Button("覆盖当前预设") {
+                        let finalName = systemPresetName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "已选规则" : systemPresetName
+                        do {
+                            systemPresets = try SystemRulePresetStore.upsert(id: sid, name: finalName, content: library.systemPrompt)
+                            notice = "已更新系统规则预设「\(finalName)」。"
+                        } catch {
+                            store.error = error.localizedDescription
+                        }
+                    }
+                    .buttonStyle(.bordered)
+                }
+            }
         }
     }
     private var bodyFields:some View {
