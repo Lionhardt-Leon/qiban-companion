@@ -14,29 +14,70 @@ enum SpeechWAV {
 private final class SpeechEngineWorker:@unchecked Sendable {
     private let queue=DispatchQueue(label:"qiban.offline-speech",qos:.userInitiated)
     private var engine:OfflineVoiceEngine?
-    func render(root:URL,voice:VoiceManifest.Voice,parts:[String],speed:Float,computeMode:VoiceComputeMode,cancellation:SpeechCancellation,gate:SpeechBackpressure,chunk:@escaping(Data,String)->Void,finish:@escaping(Error?)->Void) {
+    private var fastEngine:FastVoiceEngine?
+    func prewarm(root:URL,voice:VoiceManifest.Voice,computeMode:VoiceComputeMode,residentCache:Bool,skipChineseBert:Bool) {
+        queue.async {
+            if self.engine?.voice.id != voice.id || self.engine?.computeMode != computeMode || self.engine?.residentCache != residentCache || self.engine?.skipChineseBert != skipChineseBert {
+                self.engine = try? OfflineVoiceEngine(root:root,voice:voice,computeMode:computeMode,residentCache:residentCache,skipChineseBert:skipChineseBert)
+            }
+            self.engine?.prewarm()
+        }
+    }
+    func prewarmFast(root:URL,sharedResourcesRoot:URL?,voice:FastVoiceManifest.Voice,computeMode:VoiceComputeMode) {
+        queue.async {
+            if self.fastEngine?.voice.id != voice.id || self.fastEngine?.computeMode != computeMode {
+                self.fastEngine = try? FastVoiceEngine(root:root,voice:voice,computeMode:computeMode,sharedResourcesRoot:sharedResourcesRoot)
+            }
+        }
+    }
+    func render(root:URL,voice:VoiceManifest.Voice,parts:[String],speed:Float,computeMode:VoiceComputeMode,residentCache:Bool,skipChineseBert:Bool,cancellation:SpeechCancellation,gate:SpeechBackpressure,chunk:@escaping(Data,String)->Void,finish:@escaping(Error?)->Void) {
         queue.async {
             do {
                 let renderStarted=ProcessInfo.processInfo.systemUptime
                 try cancellation.check()
-                if self.engine?.voice.id != voice.id || self.engine?.computeMode != computeMode {self.engine=nil;self.engine=try OfflineVoiceEngine(root:root,voice:voice,computeMode:computeMode)}
+                if self.engine?.voice.id != voice.id || self.engine?.computeMode != computeMode || self.engine?.residentCache != residentCache || self.engine?.skipChineseBert != skipChineseBert {
+                    self.engine=nil
+                    self.engine=try OfflineVoiceEngine(root:root,voice:voice,computeMode:computeMode,residentCache:residentCache,skipChineseBert:skipChineseBert)
+                }
                 guard let engine=self.engine else {throw CompanionError.message("离线语音引擎没有就绪。")}
                 for (partIndex,text) in parts.enumerated() {
                     try gate.acquire()
                     try cancellation.check()
-                    let audio=try autoreleasepool {SpeechWAV.encode(try engine.synthesize(text,speed:speed,cancellation:cancellation))}
-                    try cancellation.check();chunk(audio,(partIndex==0 ? String(format:"首段可播耗时 %.2fs（含加载／编译）\n",ProcessInfo.processInfo.systemUptime-renderStarted):"")+engine.diagnostics)
+                    let audio=try autoreleasepool {SpeechWAV.encode(try engine.synthesize(text,speed:speed,cancellation:cancellation),rate:32000)}
+                    try cancellation.check();chunk(audio,(partIndex==0 ? String(format:"首段可播耗时 %.2fs\n",ProcessInfo.processInfo.systemUptime-renderStarted):"")+engine.diagnostics)
                 }
                 VoiceBreadcrumb.record(voice:voice.id,stage:"finished",state:"complete");finish(nil)
             }catch {VoiceBreadcrumb.record(voice:voice.id,stage:"finished",state:error is CancellationError ? "cancelled":"failed");finish(error)}
         }
     }
-    func unload() async {await withCheckedContinuation {continuation in queue.async{self.engine=nil;continuation.resume()}}}
+    func renderFast(root:URL,sharedResourcesRoot:URL?,voice:FastVoiceManifest.Voice,parts:[String],speed:Float,computeMode:VoiceComputeMode,cancellation:SpeechCancellation,gate:SpeechBackpressure,chunk:@escaping(Data,String)->Void,finish:@escaping(Error?)->Void) {
+        queue.async {
+            do {
+                let renderStarted=ProcessInfo.processInfo.systemUptime
+                try cancellation.check()
+                if self.fastEngine?.voice.id != voice.id || self.fastEngine?.computeMode != computeMode {
+                    self.fastEngine=nil
+                    self.fastEngine=try FastVoiceEngine(root:root,voice:voice,computeMode:computeMode,sharedResourcesRoot:sharedResourcesRoot)
+                }
+                guard let engine=self.fastEngine else {throw CompanionError.message("极速轻量化语音引擎未就绪。")}
+                for (partIndex,text) in parts.enumerated() {
+                    try gate.acquire()
+                    try cancellation.check()
+                    let audio=try autoreleasepool {SpeechWAV.encode(try engine.synthesize(text,speed:speed,cancellation:cancellation),rate:engine.sampleRate)}
+                    try cancellation.check();chunk(audio,(partIndex==0 ? String(format:"首段可播耗时 %.2fs（极速引擎）\n",ProcessInfo.processInfo.systemUptime-renderStarted):"")+engine.diagnostics)
+                }
+                VoiceBreadcrumb.record(voice:voice.id,stage:"finished",state:"complete");finish(nil)
+            }catch {VoiceBreadcrumb.record(voice:voice.id,stage:"finished",state:error is CancellationError ? "cancelled":"failed");finish(error)}
+        }
+    }
+    func unload() async {await withCheckedContinuation {continuation in queue.async{self.engine?.clearSessionCache();self.engine=nil;self.fastEngine=nil;continuation.resume()}}}
 }
 
 @MainActor final class CompanionSpeech:NSObject,ObservableObject,AVAudioPlayerDelegate,AVSpeechSynthesizerDelegate {
     @Published private(set) var voices:[VoiceManifest.Voice]=[]
     @Published private(set) var packageName=""
+    @Published private(set) var fastVoices:[FastVoiceManifest.Voice]=[]
+    @Published private(set) var fastPackageName=""
     @Published private(set) var busy=false
     @Published private(set) var mouthLevel:Float=0
     @Published private(set) var playbackStarted:SpeechPlaybackStart?
@@ -49,6 +90,7 @@ private final class SpeechEngineWorker:@unchecked Sendable {
     @Published private(set) var importProgress=0.0
     @Published var error:String?
     let library:VoicePackageLibrary
+    let fastLibrary:FastVoicePackageLibrary
     private let worker=SpeechEngineWorker()
     private var cancellation:SpeechCancellation?
     private var player:AVAudioPlayer?
@@ -65,14 +107,38 @@ private final class SpeechEngineWorker:@unchecked Sendable {
     typealias RemoteSynthesizer = @MainActor (ServiceEndpoint,String,String,Float) async throws -> Data
     private let remoteSynthesizer:RemoteSynthesizer?
     private let serviceKeyReader:ServiceClient.KeyReader
-    override convenience init(){self.init(library:VoicePackageLibrary())}
-    init(library:VoicePackageLibrary,remoteSynthesizer:RemoteSynthesizer?=nil,serviceKeyReader:@escaping ServiceClient.KeyReader=ServiceClient.readKey){self.library=library;self.remoteSynthesizer=remoteSynthesizer;self.serviceKeyReader=serviceKeyReader;super.init();reload();if let previous=VoiceBreadcrumb.previousStatus {diagnostics=previous}
+    override convenience init(){self.init(library:VoicePackageLibrary(),fastLibrary:FastVoicePackageLibrary())}
+    init(library:VoicePackageLibrary,fastLibrary:FastVoicePackageLibrary=FastVoicePackageLibrary(),remoteSynthesizer:RemoteSynthesizer?=nil,serviceKeyReader:@escaping ServiceClient.KeyReader=ServiceClient.readKey){self.library=library;self.fastLibrary=fastLibrary;self.remoteSynthesizer=remoteSynthesizer;self.serviceKeyReader=serviceKeyReader;super.init();reload();if let previous=VoiceBreadcrumb.previousStatus {diagnostics=previous}
         memoryObserver=NotificationCenter.default.addObserver(forName:UIApplication.didReceiveMemoryWarningNotification,object:nil,queue:.main){[weak self] _ in
             Task{@MainActor [weak self] in guard let self=self else{return};self.stop();self.status="系统内存紧张，已停止本机合成并释放语音资源。";await self.worker.unload()}
         }
     }
     deinit{if let observer=memoryObserver{NotificationCenter.default.removeObserver(observer)}}
-    func reload(){if let manifest=try? library.manifest(){voices=manifest.voices;packageName=manifest.title}else{voices=[];packageName=""}}
+    func reload(){
+        if let manifest=try? library.manifest(){voices=manifest.voices;packageName=manifest.title}else{voices=[];packageName=""}
+        if let fast=try? fastLibrary.manifest(){fastVoices=fast.voices;fastPackageName=fast.title}else{fastVoices=[];fastPackageName=""}
+    }
+    func prewarm(preferences:SpeechPreferences,inCall:Bool=false) {
+        guard preferences.isEnabled,!preferences.voiceID.hasPrefix("system.") else{return}
+        if let fastVoice=resolvedFastVoice(preferences:preferences,inCall:inCall) {
+            worker.prewarmFast(root:fastLibrary.current,sharedResourcesRoot:library.current.appendingPathComponent("resources",isDirectory:true),voice:fastVoice,computeMode:preferences.acceleration)
+            return
+        }
+        if let voice=voices.first(where:{$0.id==preferences.voiceID && $0.language==preferences.language}) {
+            worker.prewarm(root:library.current,voice:voice,computeMode:preferences.acceleration,residentCache:preferences.isResidentCacheEnabled,skipChineseBert:preferences.isSkipChineseBertEnabled)
+        }
+    }
+    private func resolvedFastVoice(preferences:SpeechPreferences,inCall:Bool)->FastVoiceManifest.Voice? {
+        let wantFast:Bool
+        switch preferences.effectiveEngineMode {
+        case .highQuality: wantFast = false
+        case .fastLite: wantFast = true
+        case .autoCallFast: wantFast = inCall
+        }
+        guard wantFast,!fastVoices.isEmpty else {return nil}
+        if let id=preferences.fastVoiceID,let exact=fastVoices.first(where:{$0.id==id && $0.language==preferences.language}) {return exact}
+        return fastVoices.first(where:{$0.language==preferences.language})
+    }
     func stop() {
         remoteTask?.cancel();remoteTask=nil;remotePlayback=false;playerRate=1
         meter?.invalidate();meter=nil;mouthLevel=0;speakingMessageID=nil;startedGeneration=nil
@@ -85,12 +151,22 @@ private final class SpeechEngineWorker:@unchecked Sendable {
         Task {
             await worker.unload()
             do {
-                let library=self.library
-                _ = try await Task.detached(priority:.userInitiated) {
+                let library=self.library,fastLibrary=self.fastLibrary
+                let importedFast:Bool = try await Task.detached(priority:.userInitiated) {
                     let access=url.startAccessingSecurityScopedResource();defer{if access{url.stopAccessingSecurityScopedResource()}}
-                    return try library.importPackage(url) {progress in Task{@MainActor in self.importProgress=progress}}
+                    let probe=try StoredVoiceArchive(url:url)
+                    let raw=try probe.read("manifest.json",limit:512*1024)
+                    let header=(try? JSONSerialization.jsonObject(with:raw)) as? [String:Any]
+                    let schema=header?["schema"] as? String ?? ""
+                    if schema == "qiban-fast-voice/1" {
+                        _ = try fastLibrary.importPackage(url) {progress in Task{@MainActor in self.importProgress=progress}}
+                        return true
+                    } else {
+                        _ = try library.importPackage(url) {progress in Task{@MainActor in self.importProgress=progress}}
+                        return false
+                    }
                 }.value
-                reload();status="中／日离线语音包已导入，请选择音色。"
+                reload();status=importedFast ? "极速轻量化语音包（方案B1）已导入，已保留原高保真语音包。" : "中／日高保真离线语音包已导入，请选择音色。"
             }catch {self.error=error.localizedDescription}
             importing=false
         }
@@ -152,9 +228,22 @@ private final class SpeechEngineWorker:@unchecked Sendable {
                 utterance.voice=AVSpeechSynthesisVoice(language:preferences.language=="ja" ? "ja-JP":"zh-CN");utterance.rate=0.48*preferences.speed;utterance.volume=preferences.volume
             if system==nil {system=AVSpeechSynthesizer();system?.delegate=self};systemUtterance=utterance;system?.speak(utterance);startMeter();return
             }
+            if let fastVoice=resolvedFastVoice(preferences:preferences,inCall:inCall) {
+                let token=SpeechCancellation(),ticket=generation,gate=SpeechBackpressure();self.gate=gate;cancellation=token;status="极速引擎正在合成 \(fastVoice.title)…"
+                worker.renderFast(root:fastLibrary.current,sharedResourcesRoot:library.current.appendingPathComponent("resources",isDirectory:true),voice:fastVoice,parts:SpeechPreferences.sentences(text),speed:preferences.speed,computeMode:preferences.acceleration,cancellation:token,gate:gate,chunk:{[weak self] data,metrics in
+                    DispatchQueue.main.async {guard let self=self,self.generation==ticket else{gate.release();return};self.diagnostics=metrics;self.queued.append(data);self.playNext()}
+                },finish:{[weak self] failure in
+                    DispatchQueue.main.async {
+                        guard let self=self,self.generation==ticket else{return}
+                        if let failure=failure {if !(failure is CancellationError){self.fail(failure)};return}
+                        self.generationFinished=true;if self.player==nil && self.queued.isEmpty {self.finish()}
+                    }
+                })
+                return
+            }
             guard let voice=voices.first(where:{$0.id==preferences.voiceID && $0.language==preferences.language}) else {throw CompanionError.message("所选训练音色尚未导入，请到设置 → 离线语音导入语音包。")}
             let token=SpeechCancellation(),ticket=generation,gate=SpeechBackpressure();self.gate=gate;cancellation=token;status="正在本机合成 \(voice.title)…"
-            worker.render(root:library.current,voice:voice,parts:SpeechPreferences.sentences(text),speed:preferences.speed,computeMode:preferences.acceleration,cancellation:token,gate:gate,chunk:{[weak self] data,metrics in
+            worker.render(root:library.current,voice:voice,parts:SpeechPreferences.sentences(text),speed:preferences.speed,computeMode:preferences.acceleration,residentCache:preferences.isResidentCacheEnabled,skipChineseBert:preferences.isSkipChineseBertEnabled,cancellation:token,gate:gate,chunk:{[weak self] data,metrics in
                 DispatchQueue.main.async {guard let self=self,self.generation==ticket else{gate.release();return};self.diagnostics=metrics;self.queued.append(data);self.playNext()}
             },finish:{[weak self] failure in
                 DispatchQueue.main.async {

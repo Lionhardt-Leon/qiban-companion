@@ -285,6 +285,7 @@ enum VoiceCallMediaStore {
         refreshAudioRoute()
 
         speech.stop()
+        speech.prewarm(preferences: store.archive.settings.speech ?? SpeechPreferences(), inCall: true)
         timer?.invalidate()
         timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
             Task { @MainActor [weak self] in

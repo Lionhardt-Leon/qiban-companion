@@ -72,18 +72,21 @@ final class OfflineVoiceEngine {
     static var frontendSafetyRevision:Int {Int(qiban_g2p_safety_revision())}
     let voice:VoiceManifest.Voice
     let computeMode:VoiceComputeMode
+    let residentCache:Bool
+    let skipChineseBert:Bool
     private(set) var diagnostics=""
     private let env:ORTEnv
     private let modelRoot:URL,cacheRoot:URL
+    private var cachedSessions:[String:AcceleratedVoiceSession]=[:]
     private var stageMetrics:[String]=[]
     private let tokenizer:VoiceWordPiece?
     private let condition:VoiceConditioning
     private let referenceBert:[Float]
     private let prompt:ORTValue,spectrogram:ORTValue
     private let vocabularySize=732
-    init(root:URL,voice:VoiceManifest.Voice,computeMode:VoiceComputeMode = .automatic) throws {
+    init(root:URL,voice:VoiceManifest.Voice,computeMode:VoiceComputeMode = .automatic,residentCache:Bool = true,skipChineseBert:Bool = false) throws {
         guard Self.frontendSafetyRevision >= 3 else {throw CompanionError.message("本机文字前端版本过旧，请更新 App。语音包可以保留。")}
-        self.voice=voice;self.computeMode=computeMode
+        self.voice=voice;self.computeMode=computeMode;self.residentCache=residentCache;self.skipChineseBert=skipChineseBert
         let path=root.appendingPathComponent(voice.directory);modelRoot=path
         guard (try path.appendingPathComponent("conditioning.json").resourceValues(forKeys:[.fileSizeKey]).fileSize ?? Int.max)<=128*1024 else{throw CompanionError.message("语音参考索引过大。")};let data=try Data(contentsOf:path.appendingPathComponent("conditioning.json"));guard data.count<=128*1024 else {throw CompanionError.message("语音参考索引过大。")}
         condition=try JSONDecoder().decode(VoiceConditioning.self,from:data);try condition.validate()
@@ -96,15 +99,41 @@ final class OfflineVoiceEngine {
         cacheRoot=try AcceleratedVoiceSession.cacheDirectory(root:root)
         if voice.language=="zh" {tokenizer=try VoiceWordPiece(url:root.appendingPathComponent("shared/tokenizer.json"))}else{tokenizer=nil}
     }
+    private func canCacheModule(_ module:String)->Bool {
+        guard residentCache else {return false}
+        let ram=ProcessInfo.processInfo.physicalMemory
+        if module == "bert" {return ram >= 5_500_000_000}
+        return ram >= 3_500_000_000
+    }
+    private func modelURL(for module:String)->URL {
+        module=="bert" ? modelRoot.deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("shared/bert.onnx")
+            : modelRoot.appendingPathComponent(module=="encoder" ? "gpt_encoder.onnx" : module=="step" ? "gpt_step.onnx" : "sovits.onnx")
+    }
+    func clearSessionCache() {cachedSessions.removeAll()}
+    func prewarm() {
+        guard residentCache else {return}
+        for module in ["encoder","step","sovits"] where canCacheModule(module) && cachedSessions[module] == nil {
+            if let s = try? AcceleratedVoiceSession(env:env,model:modelURL(for:module),module:module,mode:computeMode,cache:cacheRoot.appendingPathComponent(voice.language+"-"+module)) {
+                cachedSessions[module] = s
+            }
+        }
+    }
     private func stage<T>(_ module:String,cancellation:SpeechCancellation,_ operation:(AcceleratedVoiceSession)throws->T)throws->T {
         try autoreleasepool {
-            try cancellation.check();VoiceBreadcrumb.record(voice:voice.id,stage:module+"-load",state:"running")
-            let model=module=="bert" ? modelRoot.deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("shared/bert.onnx"):modelRoot.appendingPathComponent(module=="encoder" ? "gpt_encoder.onnx":module=="step" ? "gpt_step.onnx":"sovits.onnx")
-            let session=try AcceleratedVoiceSession(env:env,model:model,module:module,mode:computeMode,cache:cacheRoot.appendingPathComponent(voice.language+"-"+module))
-            defer{stageMetrics.append(module+"："+session.summary)}
+            try cancellation.check()
+            let session:AcceleratedVoiceSession
+            let reused:Bool
+            if canCacheModule(module), let existing = cachedSessions[module] {
+                existing.resetMetrics();session=existing;reused=true
+            } else {
+                VoiceBreadcrumb.record(voice:voice.id,stage:module+"-load",state:"running")
+                session=try AcceleratedVoiceSession(env:env,model:modelURL(for:module),module:module,mode:computeMode,cache:cacheRoot.appendingPathComponent(voice.language+"-"+module))
+                if canCacheModule(module) {cachedSessions[module]=session}
+                reused=false
+            }
+            defer{stageMetrics.append(module+"（"+(reused ? "常驻":"加载")+"）："+session.summary)}
             try cancellation.check();VoiceBreadcrumb.record(voice:voice.id,stage:module+"-run",state:"running");return try operation(session)
         }
-
     }
     private static func feature(_ url:URL,bytes:Int) throws -> Data {
         guard bytes>0,bytes<=16*1024*1024,(try url.resourceValues(forKeys:[.fileSizeKey]).fileSize)==bytes else {throw CompanionError.message("语音参考特征长度错误。")};return try Data(contentsOf:url)
@@ -137,7 +166,7 @@ final class OfflineVoiceEngine {
             throw CompanionError.message((detail[error] ?? "文字转音素失败。")+"请重试；若固定试听句也失败，请保留语音包并更新 App。")
         }
         guard let ids=parsed.ids,!ids.isEmpty,ids.count<=400,ids.allSatisfy({$0>=0 && $0<Int64(vocabularySize)}),let normalized=parsed.text else {throw CompanionError.message("本机音素结果为空或超出范围，请重试。")}
-        guard voice.language=="zh",let tokenizer=tokenizer else {return(ids,Array(repeating:0,count:1024*ids.count))}
+        guard voice.language=="zh",!skipChineseBert,let tokenizer=tokenizer else {return(ids,Array(repeating:0,count:1024*ids.count))}
         let encoded=tokenizer.encode(normalized),count=encoded.ids.count
         guard count<=512,let counts=parsed.word2ph,counts.count==encoded.characterTokens.count,counts.allSatisfy({(0...12).contains($0)}),counts.reduce(0,+)==ids.count else {throw CompanionError.message("文字与音素无法对齐，请换一种表述。")}
         return try stage("bert",cancellation:cancellation) {bert in
@@ -198,7 +227,8 @@ final class OfflineVoiceEngine {
             guard !audio.isEmpty,audio.count<=32000*20,audio.allSatisfy(\.isFinite),audio.contains(where:{abs($0)>0.0001}) else{throw CompanionError.message("生成的音频无效。")};return audio
         }
         try cancellation.check();let elapsed=ProcessInfo.processInfo.systemUptime-started,duration=Double(samples.count)/32000
-        diagnostics="分阶段合成 · 大模型不同时常驻\n本段合成 "+String(format:"%.2fs / 音频 %.2fs · RTF %.2f",elapsed,duration,elapsed/max(duration,0.001))+"\n"+stageMetrics.joined(separator:"\n")
+        let modeDesc=(residentCache ? "方案A 常驻多线程加速" : "分阶段省内存模式") + (voice.language=="zh" && skipChineseBert ? " · 已跳过BERT" : "")
+        diagnostics="\(modeDesc)\n本段合成 "+String(format:"%.2fs / 音频 %.2fs · RTF %.2f",elapsed,duration,elapsed/max(duration,0.001))+"\n"+stageMetrics.joined(separator:"\n")
         return samples
     }
     private func sample(_ output:[String:ORTValue],history:[Int64],allowEnd:Bool) throws -> Int64 {

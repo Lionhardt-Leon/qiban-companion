@@ -90,6 +90,28 @@ final class SpeechTests:XCTestCase {
         let callPrompt = try PersonaPrompt.compose(settings: callSettings, memories: "", actions: [], hasImage: false)
         XCTAssertTrue(callPrompt.contains("宫宵月"))
         XCTAssertTrue(callPrompt.contains("实时语音通话模式"))
+
+        let digest = SHA256.hash(data: Data()).map { String(format: "%02x", $0) }.joined()
+        let fastManifest = FastVoiceManifest(
+            schema: "qiban-fast-voice/1",
+            id: "fenny-fast-v1",
+            title: "芬妮极速语音",
+            voices: [.init(id: "fenny.fast.zh", title: "芬妮极速（中文）", language: "zh", directory: "voices/zh")],
+            files: [
+                "voices/zh/fast_config.json": .init(bytes: 64, sha256: digest),
+                "voices/zh/model.onnx": .init(bytes: 1024, sha256: digest)
+            ]
+        )
+        XCTAssertNoThrow(try fastManifest.validate())
+        var dualPrefs = SpeechPreferences()
+        dualPrefs.engineMode = VoiceEngineMode.autoCallFast.rawValue
+        dualPrefs.fastVoiceID = "fenny.fast.zh"
+        dualPrefs.residentCache = true
+        dualPrefs.skipChineseBert = false
+        XCTAssertNoThrow(try dualPrefs.validate())
+        XCTAssertEqual(dualPrefs.effectiveEngineMode, .autoCallFast)
+        let eagerParts = SpeechPreferences.sentences("欢迎回来指挥官，今天过得怎么样？我一直在这里等你。")
+        XCTAssertTrue((eagerParts.first?.count ?? 99) <= 18)
     }
 
     func testLegacyBilingualEnvelopeCanBeDisplayedAndReadWithoutEditingArchive() throws {

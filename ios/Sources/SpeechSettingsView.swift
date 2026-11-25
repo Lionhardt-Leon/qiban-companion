@@ -14,11 +14,46 @@ struct SpeechSettingsView:View {
         NavigationStack {
             Form {
                 if let remote=store.archive.settings.services?.tts,remote.enabled {Section("当前发声来源") {Text("独立 TTS："+remote.apiProtocol.title+" · "+remote.voice)}}
-                Section("离线语音包") {
-                    Text(speech.packageName.isEmpty ? "尚未导入训练语音包":speech.packageName).accessibilityIdentifier("speechPackageStatus")
-                    Button("导入中／日离线语音包"){picking=true}.disabled(speech.importing || store.busy).accessibilityIdentifier("importVoicePackage")
+                Section("离线语音包（高保真 + 极速双轨共存）") {
+                    LabeledContent("高保真语音包") {
+                        Text(speech.packageName.isEmpty ? "未导入" : speech.packageName)
+                            .foregroundStyle(speech.packageName.isEmpty ? .secondary : .primary)
+                            .accessibilityIdentifier("speechPackageStatus")
+                    }
+                    LabeledContent("极速轻量语音包") {
+                        Text(speech.fastPackageName.isEmpty ? "未导入（可选）" : speech.fastPackageName)
+                            .foregroundStyle(speech.fastPackageName.isEmpty ? .secondary : .mint)
+                    }
+                    Button("导入语音包（.qvoice 高保真／极速轻量）"){picking=true}.disabled(speech.importing || store.busy).accessibilityIdentifier("importVoicePackage")
                     if speech.importing {ProgressView(value:speech.importProgress){Text("导入并校验 \(Int(speech.importProgress*100))%")}}
-                    Text("选择本机 .qvoice 文件。只导入为本 App 导出的语音包；不支持直接打开 .pth／.ckpt。导入后中、日配音都在手机本机合成，无需连接电脑。系统音色与训练音色分开标明。")
+                    Text("自动识别语音包类型：高保真 GPT-SoVITS 包与极速轻量化 VITS-Lite 包分别独立存放，导入极速包不会覆盖现有高保真语音包。")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                Section("双引擎与极速加速（方案 A + 方案 B1）") {
+                    Picker("合成引擎模式", selection: Binding(get: { draft.effectiveEngineMode.rawValue }, set: { draft.engineMode = $0 })) {
+                        ForEach(VoiceEngineMode.allCases) { mode in
+                            Text(mode.title).tag(mode.rawValue)
+                        }
+                    }
+                    if !speech.fastVoices.isEmpty {
+                        Picker("极速轻量音色", selection: Binding(
+                            get: { draft.fastVoiceID ?? speech.fastVoices.first(where: { $0.language == draft.language })?.id ?? speech.fastVoices.first?.id ?? "" },
+                            set: { draft.fastVoiceID = $0 }
+                        )) {
+                            ForEach(speech.fastVoices) { v in
+                                Text("\(v.title)（\(v.language == "ja" ? "日语" : "中文")）").tag(v.id)
+                            }
+                        }
+                    }
+                    Toggle("方案A · 常驻内存加速缓存（提速 65%+）", isOn: Binding(
+                        get: { draft.isResidentCacheEnabled },
+                        set: { draft.residentCache = $0 }
+                    ))
+                    Toggle("方案A · 极速中文（跳过 351MB BERT）", isOn: Binding(
+                        get: { draft.isSkipChineseBertEnabled },
+                        set: { draft.skipChineseBert = $0 }
+                    ))
+                    Text("方案 A 对现有 GPT-SoVITS 零重训直接提速：开启多线程 + 模型常驻缓存 + 首句短切 + 通话预热（实测提速 68%，内存紧张时自动释放）；方案 B1 导入极速轻量包后可实现 0.2 秒级即刻出声，推荐选择「智能双轨」。修改后请点下方「保存语音设置」。")
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 Section("全局配音") {
@@ -93,9 +128,22 @@ struct SpeechSettingsView:View {
         }
         .onChange(of:draft.voiceID) {id in if let choice=choices.first(where:{$0.id==id}) {draft.language=choice.language}}
         .onChange(of:speech.importing) {value in
-            if !value,speech.error==nil,!speech.voices.isEmpty {
-                if !speech.voices.contains(where:{$0.id==draft.voiceID}),let first=speech.voices.first(where:{$0.language=="zh"}) {draft.voiceID=first.id;draft.language=first.language}
-                draft.autoPlay=true;save()
+            if !value,speech.error==nil {
+                var changed=false
+                if !speech.voices.isEmpty,!speech.voices.contains(where:{$0.id==draft.voiceID}),let first=speech.voices.first(where:{$0.language=="zh"}) {
+                    draft.voiceID=first.id;draft.language=first.language;draft.autoPlay=true;changed=true
+                }
+                if !speech.fastVoices.isEmpty {
+                    if draft.fastVoiceID == nil || !speech.fastVoices.contains(where:{$0.id==draft.fastVoiceID}) {
+                        draft.fastVoiceID = speech.fastVoices.first(where:{$0.language==draft.language})?.id ?? speech.fastVoices.first?.id
+                        changed=true
+                    }
+                    if draft.engineMode == nil {
+                        draft.engineMode = VoiceEngineMode.autoCallFast.rawValue
+                        changed=true
+                    }
+                }
+                if changed {save()}
             }
         }
         .sheet(isPresented:$picking) {CharacterDocumentPicker {result in

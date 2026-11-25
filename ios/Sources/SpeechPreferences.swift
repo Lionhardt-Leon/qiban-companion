@@ -15,12 +15,20 @@ struct SpeechPreferences:Codable,Equatable {
     var speed:Float = 1
     var volume:Float = 1
     var computeMode:String?
+    var engineMode:String? = nil
+    var fastVoiceID:String? = nil
+    var residentCache:Bool? = nil
+    var skipChineseBert:Bool? = nil
     var symbolFilter:SpeechSymbolFilter? = nil
     var effectiveFilter:SpeechSymbolFilter {symbolFilter ?? SpeechSymbolFilter()}
     var acceleration:VoiceComputeMode {VoiceComputeMode(rawValue:computeMode ?? "automatic") ?? .automatic}
+    var effectiveEngineMode:VoiceEngineMode {VoiceEngineMode(rawValue:engineMode ?? "highQuality") ?? .highQuality}
+    var isResidentCacheEnabled:Bool {residentCache ?? true}
+    var isSkipChineseBertEnabled:Bool {skipChineseBert ?? false}
     func validate() throws {
         guard computeMode == nil || VoiceComputeMode(rawValue:computeMode!) != nil else{throw CompanionError.message("语音加速设置无效。")}
-        guard ["zh","ja"].contains(language),!voiceID.isEmpty,voiceID.count <= 120,speed.isFinite,(0.7...1.3).contains(speed),volume.isFinite,(0...1).contains(volume) else {throw CompanionError.message("语音设置无效。")}
+        guard engineMode == nil || VoiceEngineMode(rawValue:engineMode!) != nil else{throw CompanionError.message("语音引擎模式无效。")}
+        guard ["zh","ja"].contains(language),!voiceID.isEmpty,voiceID.count <= 120,(fastVoiceID?.count ?? 0) <= 120,speed.isFinite,(0.7...1.3).contains(speed),volume.isFinite,(0...1).contains(volume) else {throw CompanionError.message("语音设置无效。")}
         try symbolFilter?.validate()
     }
     func text(for message:Message,inCall:Bool=false) throws -> String {
@@ -47,7 +55,10 @@ struct SpeechPreferences:Codable,Equatable {
         var result:[String]=[],part=""
         for c in input {
             part.append(c)
-            if "。！？!?\n".contains(c) || part.count>=32 || part.count>=18 && "，、,；;".contains(c) {
+            let isFirst=result.isEmpty
+            let clauseLimit=isFirst ? 8 : 18
+            let hardLimit=isFirst ? 18 : 32
+            if "。！？!?\n".contains(c) || part.count>=hardLimit || (part.count>=clauseLimit && "，、,；;".contains(c)) {
                 if hasSpeech(part) {result.append(part)};part=""
             }
         }
