@@ -14,9 +14,9 @@ final class CharacterStickerTests: XCTestCase {
             let status: Int32 = input.withUnsafeBytes { src in
                 out.withUnsafeMutableBytes { dst in
                     stream.next_in = UnsafeMutablePointer(mutating: src.bindMemory(to: Bytef.self).baseAddress!)
-                    stream.avail_in = uInt(input.count)
+                    stream.avail_in = uInt(src.count)
                     stream.next_out = dst.bindMemory(to: Bytef.self).baseAddress!
-                    stream.avail_out = uInt(out.count)
+                    stream.avail_out = uInt(dst.count)
                     return deflate(&stream, Z_FINISH)
                 }
             }
