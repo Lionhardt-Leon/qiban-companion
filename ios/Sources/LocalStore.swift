@@ -239,11 +239,20 @@ enum APIKeyStore {
     func activateCompanion(_ modelKey:String) {
         guard PersonaLibrary.validModelKey(modelKey) else {return}
         if context.modelKey != modelKey {cancel()}
-        if modelKey == "fenny",archive.settings.personas?.modelBindings["fenny"] == nil {
+        if ["fenny","augusta","qingxiao"].contains(modelKey),archive.settings.personas?.modelBindings[modelKey] == nil {
             var next=archive;var library=next.settings.personas ?? PersonaLibrary.migrating(next.settings.persona)
-            var card=PersonaCard();card.title="芬妮 · 婚皮";card.name="芬妮"
-            card.description="你通过屏幕上的芬妮婚皮模型陪伴用户。当前服饰、姿势和动作结果以应用每轮提供的身体状态为准；婚纱内衣版仍穿有内衣，不是裸体。不要把其他角色的身份、服饰或经历当作自己的。"
-            library.cards.append(card);library.modelBindings["fenny"]=card.id
+            var card=PersonaCard()
+            if modelKey == "fenny" {
+                card.title="芬妮 · 婚皮";card.name="芬妮"
+                card.description="你通过屏幕上的芬妮婚皮模型陪伴用户。当前服饰、姿势和动作结果以应用每轮提供的身体状态为准；婚纱内衣版仍穿有内衣，不是裸体。不要把其他角色的身份、服饰或经历当作自己的。"
+            } else if modelKey == "augusta" {
+                card.title="奥古斯塔";card.name="奥古斯塔"
+                card.description="你通过屏幕上的奥古斯塔 3D 模型陪伴用户。当前姿势和动作结果以应用每轮提供的身体状态为准。不要把其他角色的身份、服饰或经历当作自己的。"
+            } else {
+                card.title="清宵";card.name="清宵"
+                card.description="你通过屏幕上的清宵 3D 模型陪伴用户。当前姿势和动作结果以应用每轮提供的身体状态为准。不要把其他角色的身份、服饰或经历当作自己的。"
+            }
+            library.cards.append(card);library.modelBindings[modelKey]=card.id
             if next.personaSessionKey == nil {next.personaSessionKey=library.defaultCardID?.uuidString}
             next.schemaVersion=max(next.schemaVersion,2);next.settings.personas=library
             do {try commit(next)}catch{self.error=error.localizedDescription;return}

@@ -2,15 +2,54 @@ import SwiftUI
 import WebKit
 
 struct SnowbreakLibrary {
+    static let supportedCharacters = ["Enya","Fenny","Augusta","Qingxiao"]
     let directory: URL
     init(directory: URL? = nil) {
         self.directory = directory ?? FileManager.default.urls(for:.applicationSupportDirectory,in:.userDomainMask)[0]
             .appendingPathComponent(AppIdentity.storageNamespace+"/SnowbreakLibrary",isDirectory:true)
     }
     var current: URL { directory.appendingPathComponent("current.snowbreak") }
-    func savedFile(_ id:String)->URL {directory.appendingPathComponent(id == "Fenny" ? "Fenny.snowbreak":"Enya.snowbreak")}
-    var savedCharacters:[String] {["Enya","Fenny"].filter{FileManager.default.fileExists(atPath:savedFile($0).path)}}
+    var universalMotionsURL: URL { directory.appendingPathComponent("universal-motions.json") }
+    var hasUniversalMotions: Bool { FileManager.default.fileExists(atPath: universalMotionsURL.path) }
+    func savedFile(_ id:String)->URL {
+        let safe = Self.supportedCharacters.contains(id) ? id : "Enya"
+        return directory.appendingPathComponent("\(safe).snowbreak")
+    }
+    var savedCharacters:[String] {Self.supportedCharacters.filter{FileManager.default.fileExists(atPath:savedFile($0).path)}}
     var hasCurrent: Bool { FileManager.default.fileExists(atPath:current.path) }
+    func loadUniversalMotionsObject() -> [String:Any]? {
+        guard let data = try? Data(contentsOf: universalMotionsURL),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String:Any] else { return nil }
+        return obj
+    }
+    func saveUniversalMotions(_ data: Data) throws -> [String:Any] {
+        guard (16...16*1024*1024).contains(data.count),
+              let incoming = try? JSONSerialization.jsonObject(with: data) as? [String:Any],
+              let schema = incoming["schema"] as? String,
+              schema.hasPrefix("companion-upper-body-transfer/"),
+              let incomingClips = incoming["clips"] as? [[String:Any]], !incomingClips.isEmpty else {
+            throw CompanionError.message("请选择有效的通用动作包（.qmotion）。")
+        }
+        var merged = loadUniversalMotionsObject() ?? incoming
+        var existingClips = (merged["clips"] as? [[String:Any]]) ?? []
+        var byID: [String: [String:Any]] = [:]
+        var order: [String] = []
+        for clip in existingClips {
+            if let id = clip["id"] as? String { byID[id] = clip; if !order.contains(id) { order.append(id) } }
+        }
+        for clip in incomingClips {
+            if let id = clip["id"] as? String { byID[id] = clip; if !order.contains(id) { order.append(id) } }
+        }
+        merged["schema"] = incoming["schema"]
+        merged["sourceCharacter"] = incoming["sourceCharacter"] ?? "UniversalMMD"
+        merged["targetCharacter"] = "Universal"
+        merged["stance"] = incoming["stance"] ?? "standing"
+        merged["clips"] = order.compactMap { byID[$0] }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let encoded = try JSONSerialization.data(withJSONObject: merged)
+        try encoded.write(to: universalMotionsURL, options: [.atomic, .completeFileProtection])
+        return merged
+    }
     func stage(_ data: Data) throws -> URL {
         guard (22...128*1024*1024).contains(data.count), data.prefix(4) == Data([0x50,0x4b,3,4]) else {
             throw CompanionError.message("请选择完整的角色 .snowbreak 素材包（不超过128MB）。")
@@ -20,7 +59,7 @@ struct SnowbreakLibrary {
         try data.write(to:url,options:[.atomic,.completeFileProtection]); return url
     }
     func commit(_ staged: URL,characterID:String = "Enya") throws {
-        guard ["Enya","Fenny"].contains(characterID) else{throw CompanionError.message("不支持的角色标识。")}
+        guard Self.supportedCharacters.contains(characterID) else{throw CompanionError.message("不支持的角色标识。")}
         guard staged.deletingLastPathComponent().standardizedFileURL == directory.standardizedFileURL,
               staged.lastPathComponent.hasPrefix("staged-") else { throw CompanionError.message("角色暂存路径无效。") }
         let data = try Data(contentsOf:staged)
@@ -67,8 +106,16 @@ struct SnowbreakTouchEvent {
 }
 
 @MainActor final class SnowbreakStage: NSObject, ObservableObject, WKScriptMessageHandler, WKNavigationDelegate {
+    static func displayName(for id:String) -> String {
+        switch id {
+        case "Fenny": return "芬妮婚皮"
+        case "Augusta": return "奥古斯塔"
+        case "Qingxiao": return "清宵"
+        default: return "恩雅护士"
+        }
+    }
     @Published private(set) var characterID="Enya"
-    var characterName:String {characterID == "Fenny" ? "芬妮婚皮":"恩雅护士"}
+    var characterName:String {Self.displayName(for: characterID)}
     var modelKey:String {characterID.lowercased()}
     @Published private(set) var savedCharacters:[String]=[]
     @Published private(set) var ready = false
@@ -109,7 +156,7 @@ struct SnowbreakTouchEvent {
     }
     private func updateBody(_ value:[String:Any]) {
         if let available=value["available"] as? [String] {bodyActions=available.filter{BodyCommand(rawValue:$0) != nil || BodyGesture.ids.contains($0)}}
-        bodyState = BodyState(outfit:companionOutfit == "nude" ? "当前已加载果体版模型，没有穿衣":companionOutfit == "underwear" ? "当前加载芬妮婚纱内衣版，穿有胸衣、手套、袜饰，保留头纱与装饰，不是裸体":companionOutfit == "normal" ? "当前已加载"+(characterID == "Fenny" ? "芬妮原婚纱":"恩雅护士正常服饰")+"模型":"服饰未确认",
+        bodyState = BodyState(outfit:companionOutfit == "nude" ? "当前已加载果体版模型，没有穿衣":companionOutfit == "underwear" ? "当前加载芬妮婚纱内衣版，穿有胸衣、手套、袜饰，保留头纱与装饰，不是裸体":companionOutfit == "normal" ? "当前已加载\(characterName)正常服饰模型":"当前已加载\(characterName)模型",
             eyes:value["eyes"] as? String ?? "未确认",hands:value["hands"] as? String ?? "未确认",facing:value["facing"] as? String ?? "未确认",legs:value["legs"] as? String ?? "未确认",lastResult:(value["lastResult"] as? String ?? "无回执")+((value["legResult"] as? String).flatMap{$0.isEmpty ? nil:"；"+$0} ?? "")+((value["interactionScene"] as? String).map{"；保持互动场景："+$0} ?? ""))
     }
     func executeBody(_ command:BodyCommand,automatic:Bool = false) async -> Bool {
@@ -163,9 +210,35 @@ struct SnowbreakTouchEvent {
             return true
         } catch { self.error = error.localizedDescription;return false }
     }
+    @discardableResult func importUniversalMotion(_ url:URL) -> Bool {
+        do {
+            let access = url.startAccessingSecurityScopedResource();defer { if access { url.stopAccessingSecurityScopedResource() } }
+            var coordinationError:NSError?,readError:Error?,data:Data?
+            NSFileCoordinator().coordinate(readingItemAt:url,options:[],error:&coordinationError) { file in
+                do {
+                    let size = try file.resourceValues(forKeys:[.fileSizeKey]).fileSize ?? Int.max
+                    guard size <= 16*1024*1024 else { throw CompanionError.message("通用动作包超过16MB。") }
+                    data = try Data(contentsOf:file)
+                } catch { readError = error }
+            }
+            if let failure = coordinationError { throw failure }
+            if let failure = readError { throw failure }
+            guard let data = data else { throw CompanionError.message("没有读到通用动作包。") }
+            let catalog = try library.saveUniversalMotions(data)
+            error = nil; notice = "已导入通用动作包，所有 3D 角色均可使用。"
+            if pageReady { send(["type":"universalMotions","catalog":catalog]) }
+            return true
+        } catch { self.error = error.localizedDescription; return false }
+    }
+    private func pushUniversalMotions() {
+        if let catalog = library.loadUniversalMotionsObject() {
+            send(["type":"universalMotions","catalog":catalog])
+        }
+    }
     private func loadSelected() {
         let file = staged ?? (library.hasCurrent ? library.current : nil)
         guard let file = file else { error = "请在设置中导入本地角色 .snowbreak 包。";return }
+        pushUniversalMotions()
         send(["type":"load","url":"companion-snowbreak://local/package/"+file.lastPathComponent,"nonce":nonce])
     }
     private func send(_ value:[String:Any]) {
@@ -180,9 +253,16 @@ struct SnowbreakTouchEvent {
         guard body["nonce"] as? String == nonce else { return }
         switch type {
         case "editing": isEditing=body["active"] as? Bool == true
+        case "universalReady":
+            let learned = body["learned"] as? [String] ?? []
+            let existingSamples = Set(actions.filter { $0.hasPrefix("snowbreak_") }.map { String($0.dropFirst("snowbreak_".count)) })
+            actions.removeAll { $0.hasPrefix("universal_") }
+            for clip in learned where clip.hasPrefix("mmd_") && !existingSamples.contains(clip) {
+                actions.append("universal_" + clip)
+            }
         case "ready":
             applyHardwareBudget();isEditing=false
-            guard let identity=body["characterId"] as? String,["Enya","Fenny"].contains(identity) else {error="不支持的角色包。";return}
+            guard let identity=body["characterId"] as? String,SnowbreakLibrary.supportedCharacters.contains(identity) else {error="不支持的角色包。";return}
             do {
                 if staged == nil,library.hasCurrent,!library.savedCharacters.contains(identity){try Data(contentsOf:library.current).write(to:library.savedFile(identity),options:[.atomic,.completeFileProtection])}
                 if let staged = staged { try library.commit(staged,characterID:identity);self.staged = nil }
@@ -190,12 +270,15 @@ struct SnowbreakTouchEvent {
                 let variants = body["variants"] as? [[String:String]] ?? []
                 variantIDs = variants.compactMap { v in guard let id=v["id"],["standing_normal","standing_nude","standing_underwear","interaction_normal","interaction_nude","interaction_underwear"].contains(id) else { return nil };return id }
                 if let selected=body["selection"] as? [String:String] { companionMode=selected["mode"] ?? "standing";companionOutfit=selected["outfit"] ?? "unknown" }
-                else {companionMode = body["stance"] as? String == "standing" ? "standing":"interaction";companionOutfit = "unknown"}
+                else {companionMode = body["stance"] as? String == "standing" ? "standing":"interaction";companionOutfit = "normal"}
                 let samples = body["samples"] as? [String] ?? []
-                actions = ["head","left","right","home_login","home_invite","home_shy","home_check","home_kiss","home_jealous","home_marry","home_sigh","home_stage","home_stand","show_02","show_03","show_04","show_05","sequence","idle_01","idle_02"].filter { samples.contains($0) }.map { "snowbreak_"+$0 }
+                actions = ["head","left","right","home_login","home_invite","home_shy","home_check","home_kiss","home_jealous","home_marry","home_sigh","home_stage","home_stand","mmd_houru","show_02","show_03","show_04","show_05","sequence","idle_01","idle_02"].filter { samples.contains($0) }.map { "snowbreak_"+$0 }
                 if identity == "Fenny" {actions += DialogueMotion.fennyScenes.map(\.id).filter{samples.contains(String($0.dropFirst("snowbreak_".count)))}}
                 let learned = body["learned"] as? [String] ?? []
                 actions += ["yuki_hello","yuki_Yes","yuki_No","yuki_Peace_hand","yuki_dance_90bpm","yuki_dance_120bpm","yuki_f_vibe_dance_60_bpm_002"].filter { learned.contains($0) && (!$0.contains("dance") || body["stance"] as? String == "standing") }.map { "enya_"+$0 }
+                for clip in learned where clip.hasPrefix("mmd_") && !samples.contains(clip) {
+                    actions.append("universal_" + clip)
+                }
                 ready = true;error = nil;if notice?.hasPrefix("渲染已中断") == true {notice=nil}
                 bodyActions = (body["bodyActions"] as? [String] ?? []).filter{BodyCommand(rawValue:$0) != nil || BodyGesture.ids.contains($0)}
                 if paused { send(["type":"pause"]) }
@@ -204,7 +287,8 @@ struct SnowbreakTouchEvent {
             let active = body["active"] as? Bool == true
             // Playback events are not user edits and must not invalidate a pending AI turn.
             let status = body["status"] as? String ?? ""
-            activeAction = active ? (status.hasPrefix("learned:") ? "恩雅 · Yuki 学习动作" : String((body["label"] as? String ?? "恩雅互动").prefix(60))) : nil
+            let fallbackLabel = status.hasPrefix("learned:mmd_") ? "通用动作" : (status.hasPrefix("learned:") ? "学习动作" : "\(characterName)互动")
+            activeAction = active ? String((body["label"] as? String ?? fallbackLabel).prefix(60)) : nil
         case "selfState": if let value = body["state"] as? [String:Any] {updateBody(value)}
         case "touch":
             if !paused,body["completed"] as? Bool == true,let label = body["label"] as? String,label.count <= 30 {
@@ -237,6 +321,7 @@ struct SnowbreakTouchEvent {
         if !automatic { interactionRevision += 1 }
         notice = nil
         if id.hasPrefix("enya_yuki_") { send(["type":"learned","id":String(id.dropFirst("enya_".count)),"automatic":automatic]);return }
+        if id.hasPrefix("universal_") { send(["type":"learned","id":String(id.dropFirst("universal_".count)),"automatic":automatic]);return }
         send(["type":"sample","id":String(id.dropFirst("snowbreak_".count)),"withVoice":withVoice,"automatic":automatic])
     }
     func stop() { interactionRevision += 1;send(["type":"stop"]);activeAction = nil }
@@ -250,7 +335,7 @@ struct SnowbreakTouchEvent {
     func sceneVisible(_ value:Bool) { send(["type":"scene","visible":value]) }
     func gaze(x:CGFloat,y:CGFloat) { if ready { send(["type":"gaze","x":Double(x),"y":Double(y)]) } }
     func selectCharacter(_ identity:String){
-        guard ["Enya","Fenny"].contains(identity),identity != characterID else{return}
+        guard SnowbreakLibrary.supportedCharacters.contains(identity),identity != characterID else{return}
         do {let file=library.savedFile(identity);guard FileManager.default.fileExists(atPath:file.path) else{return};interactionRevision+=1;pause();paused=false;staged=try library.stage(Data(contentsOf:file));nonce=UUID().uuidString;ready=false;error=nil;loadSelected()}catch{self.error=error.localizedDescription}
     }
     func editLighting() { send(["type":"lightingEdit"]) }
@@ -307,28 +392,46 @@ struct SnowbreakImportView:View {
     @ObservedObject var stage:SnowbreakStage
     @Environment(\.dismiss) private var dismiss
     @State private var picking = false
+    @State private var pickingMotion = false
     @State private var local = false
     var body:some View {
         NavigationStack {
             Form {
-                Section("尘白角色 · 本地移植") {
-                    Text("导入本地恩雅／芬妮 .snowbreak 整合包。可用模式、动作、场景和原声由素材包决定。")
-                    Button("选择角色素材包") { picking = true }.accessibilityIdentifier("importSnowbreak")
+                Section("3D 角色皮肤 · 本地导入") {
+                    Text("支持导入恩雅、芬妮、奥古斯塔、清宵 .snowbreak 角色皮肤包。可用模式、动作、场景和原声由素材包决定。")
+                    Button("选择角色皮肤包 (.snowbreak)") { picking = true }.accessibilityIdentifier("importSnowbreak")
                     Button("App 文件夹") { local = true }
                     if stage.library.hasCurrent { Text("已保存角色素材，下次启动会从本机加载。") }
                     if let error = stage.error { Text(error).foregroundStyle(.red) }
+                }
+                Section("通用 3D 动作包") {
+                    Text("导入 .qmotion 通用动作包后，恩雅、芬妮、奥古斯塔、清宵等所有 3D 角色均可使用该动作。")
+                    Button("导入通用动作包 (.qmotion)") { pickingMotion = true }
+                    if stage.library.hasUniversalMotions { Text("已安装通用 3D 动作包。").foregroundStyle(.secondary) }
+                    if let notice = stage.notice, notice.contains("通用动作") { Text(notice).foregroundStyle(.secondary) }
                 }
                 Section("触碰") {
                     Text("导入后可在动作菜单切换已保存的角色、陪伴模式和服饰。显示原作触点可查看当前场景已有的触点；也可通过精细触碰表面标注补充身体分区。")
                     Text("原 App 内保存的标注不会跨 App 自动读取；模型和原始互动资源可以沿用。")
                 }
-            }.navigationTitle("导入尘白角色")
+            }.navigationTitle("导入 3D 角色与动作")
         }.sheet(isPresented:$picking) {
             CharacterDocumentPicker { result in
                 picking = false
                 if case .success(let url) = result,let url = url { choose(url) }
             }
+        }.sheet(isPresented:$pickingMotion) {
+            CharacterDocumentPicker { result in
+                pickingMotion = false
+                if case .success(let url) = result,let url = url { _ = stage.importUniversalMotion(url) }
+            }
         }.sheet(isPresented:$local) { LocalCharacterFileList(choose:choose) }
     }
-    private func choose(_ url:URL) { if stage.importFile(url) { dismiss() } }
+    private func choose(_ url:URL) {
+        if url.pathExtension.lowercased() == "qmotion" {
+            _ = stage.importUniversalMotion(url)
+        } else if stage.importFile(url) {
+            dismiss()
+        }
+    }
 }

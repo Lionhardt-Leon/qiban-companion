@@ -10,7 +10,7 @@ import {FULL_FRAME,createPresentationEditor} from './presentation-editor.js';
 
 let aiControlledTouch=true;
 const canvas=document.querySelector('#stage'), status=document.querySelector('#status'), editorHost=document.querySelector('#editor');
-let collection=null,pausedScene=null,loading=Promise.resolve(),hardwareBudget={},originalLanguage='Chinese';
+let collection=null,pausedScene=null,loading=Promise.resolve(),hardwareBudget={},originalLanguage='Chinese',universalMotions=null;
 let generation=0,nonce='',runtime,display,adapter,voices,editor,presentation,modelEditor,lighting,learned,last=0,paused=false,voiceEnabled=true;
 const danceControls=createDanceControls(value=>retimeDance(learned,value.tempo,performance.now()));
 const finishPaint=document.createElement('button');finishPaint.id='finishPaint';finishPaint.hidden=true;
@@ -36,8 +36,8 @@ async function performLoad(url,id,variant,ticket){
   let opened,nextDisplay,nextVoices;
   try{
     if(variant){if(!collection)throw new Error('请先导入角色整合包');opened=await collection.selectVariant(variant);}else{collection=null;const response=await fetch(url);if(!response.ok)throw new Error('本地角色包读取失败');opened=await openSkinArchive(new Uint8Array(await response.arrayBuffer()));}
-    if(!['Enya','Fenny'].includes(opened.manifest.characterId))throw new Error('不支持的本地角色包');
-    nextDisplay=await createSnowbreakRenderer(canvas,opened.runtime,{isCurrent:()=>ticket===generation});
+    if(!['Enya','Fenny','Augusta','Qingxiao'].includes(opened.manifest.characterId))throw new Error('不支持的本地角色包');
+    nextDisplay=await createSnowbreakRenderer(canvas,opened.runtime,{isCurrent:()=>ticket===generation,universalMotions});
     nextVoices=opened.runtime.getAsset('voiceCatalog')?await createOriginalVoiceCatalog(opened.runtime):{
       getAudio:()=>null,snapshot:()=>({available:[]}),dispose(){}
     };
@@ -70,7 +70,7 @@ async function performLoad(url,id,variant,ticket){
       }
       const state=adapter.snapshot(),playStatus=learned?'learned:'+learned.id:state.status;
       const playKey=playStatus+':'+(state.sceneId||'')+':'+display.sampleState().sampleId;
-      if(playKey!==previousStatus){previousStatus=playKey;emit({type:'selfState',state:inspect()});emit({type:'playback',active:!!learned||['playing','scene-preview','local-arm-preview'].includes(state.status),status:playStatus,label:display.sampleOptions().find(s=>s.id===display.sampleState().sampleId)?.label});}
+      if(playKey!==previousStatus){previousStatus=playKey;emit({type:'selfState',state:inspect()});emit({type:'playback',active:!!learned||['playing','scene-preview','local-arm-preview'].includes(state.status),status:playStatus,label:learned?display.learnedOptions().find(c=>c.id===learned.id)?.label:display.sampleOptions().find(s=>s.id===display.sampleState().sampleId)?.label});}
     });
     const geometry=opened.manifest.resources.filter(r=>r.kind==='geometry').map(r=>r.assetId).join('-');
     const labelKey='surface:'+opened.manifest.skinId+':'+geometry;
@@ -97,6 +97,14 @@ async function performLoad(url,id,variant,ticket){
 
 async function command(value){
   if(value.type==='hardwareBudget'){hardwareBudget={thermal:value.thermal,lowPower:value.lowPower};display?.setRenderBudget(hardwareBudget);return;}
+  if(value.type==='universalMotions'){
+    universalMotions=value.catalog||null;
+    if(display){
+      const updated=display.setUniversalMotions(universalMotions);
+      emit({type:'universalReady',learned:updated.map(x=>x.id)});
+    }
+    return;
+  }
   if(value.type==='dispose'){generation++;cleanup();return;}
   if(value.type==='load')return load(value.url,value.nonce);
   if(value.type==='variant'){if(!collection?.variants.some(v=>v.id===value.id))return;return load(null,nonce,value.id);}

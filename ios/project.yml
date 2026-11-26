@@ -30,8 +30,8 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: $(COMPAT_APP_BUNDLE)
-        MARKETING_VERSION: "0.36.1"
-        CURRENT_PROJECT_VERSION: "62"
+        MARKETING_VERSION: "0.37.0"
+        CURRENT_PROJECT_VERSION: "63"
         GENERATE_INFOPLIST_FILE: YES
     dependencies:
       - package: ONNXRuntime
@@ -89,6 +89,11 @@ targets:
             UTTypeConformsTo: [public.data, public.archive]
             UTTypeTagSpecification:
               public.filename-extension: [qvoice]
+          - UTTypeIdentifier: com.qiban.universalmotion
+            UTTypeDescription: 栖伴通用3D动作包
+            UTTypeConformsTo: [public.data, public.json]
+            UTTypeTagSpecification:
+              public.filename-extension: [qmotion]
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait, UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight]
   QibanCompanionTests:
     type: bundle.unit-test

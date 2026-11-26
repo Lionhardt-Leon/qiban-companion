@@ -1,11 +1,16 @@
 import * as THREE from 'three';
 
-export function createLearnedMotions(root,camera,config,stance){
- if(!config)return {available:()=>[],apply(){},snapshot:()=>({available:false})};
- if(!['companion-upper-body-transfer/1','companion-upper-body-transfer/2','companion-upper-body-transfer/3'].includes(config.schema)||config.sourceCharacter!=='Yuki'||config.targetCharacter!=='Enya'||!Array.isArray(config.clips)||config.clips.length>8)throw new Error('Invalid learned motion catalog');
- const standing=config.schema.endsWith('/3')&&config.stance==='standing';if(config.schema.endsWith('/3')&&(!standing||stance!=='standing'))throw new Error('Standing motion requires standing source');
+export function createLearnedMotions(root,camera,config,stance,extraConfig=null){
+ const catalogs=[config,extraConfig].filter(Boolean);
+ if(!catalogs.length)return {available:()=>[],apply(){},snapshot:()=>({available:false})};
+ const validCatalog=cat=>['companion-upper-body-transfer/1','companion-upper-body-transfer/2','companion-upper-body-transfer/3'].includes(cat.schema)&&['Yuki','UniversalMMD'].includes(cat.sourceCharacter)&&/^[A-Za-z0-9_-]{1,64}$/.test(cat.targetCharacter)&&Array.isArray(cat.clips)&&cat.clips.length<=24;
+ for(const cat of catalogs){
+  if(!validCatalog(cat))throw new Error('Invalid learned motion catalog');
+  if(cat.schema.endsWith('/3')&&cat.targetCharacter!=='Universal'&&(cat.stance!=='standing'||stance!=='standing'))throw new Error('Standing motion requires standing source');
+ }
+ const standing=stance==='standing';
  const get=name=>{const hits=[];root.traverse(b=>{if(b.isBone&&b.name===name)hits.push(b);});if(hits.length!==1)throw new Error('Learned motion bone missing/ambiguous: '+name);return hits[0];};
- const head=get('Bip001-Head'),chest=get('Bip001-Spine3'),chains={};
+ const head=get('Bip001-Head'),chest=root.getObjectByName('Bip001-Spine3')||root.getObjectByName('Bip001-Spine2')||get('Bip001-Spine'),chains={};
  for(const [key,side] of [['left','L'],['right','R']]){
   const upper=get(`Bip001-${side}-UpperArm`),lower=get(`Bip001-${side}-Forearm`),hand=get(`Bip001-${side}-Hand`);
   if(lower.parent!==upper||hand.parent!==lower)throw new Error('Learned arm binding mismatch');chains[key]={upper,lower,hand};
@@ -17,23 +22,30 @@ export function createLearnedMotions(root,camera,config,stance){
  const initialUp=pos(head).sub(pos(chest)).normalize();
  if(new THREE.Vector3().crossVectors(initialRight,initialUp).dot(camera.position.clone().sub(pos(chest)))<0)sign=-1;
  const clips=new Map();
- for(const c of config.clips){
-  if(!['yuki_hello','yuki_Yes','yuki_No','yuki_Peace_hand','yuki_dance_90bpm','yuki_dance_120bpm','yuki_f_vibe_dance_60_bpm_002'].includes(c.id)||clips.has(c.id)||!Number.isInteger(c.frames)||c.frames<2||c.frames>1800||!Number.isFinite(c.fps)||c.fps<=0||c.fps>60)throw new Error('Invalid learned clip');
-  const channels={};for(const [key,value] of Object.entries(c.channels||{})){
-   const width=/^(left|right)(Curl[0-4]_[0-2]|Spread[0-4])$/.test(key)?1:['headDelta','chestDelta',...(standing?['pelvisDelta','leftFootDelta','rightFootDelta']:[])].includes(key)?4:(['leftUpper','leftLower','rightUpper','rightLower','rightHandWidth','rightHandForward','leftHandWidth','leftHandForward',...(standing?['leftThigh','rightThigh','leftCalf','rightCalf']:[])].includes(key)||/^(left|right)Finger[0-4]_[0-2]$/.test(key))?3:0;
-   if(!width||typeof value!=='string')throw new Error('Invalid learned channel');
-   const data=Uint8Array.from(atob(value),ch=>ch.charCodeAt(0));if(data.byteLength!==c.frames*width*4)throw new Error('Learned channel truncated');
-   const values=new Float32Array(data.buffer);if(!values.every(Number.isFinite))throw new Error('Non-finite learned pose');
-   if(width===1&&values.some(v=>v<-.31||v>1.11))throw new Error('Invalid learned finger angle');
-   for(let i=0;width>1&&i<c.frames;i++){let length=0;for(let k=0;k<width;k++)length+=values[i*width+k]**2;if(Math.abs(length-1)>.01)throw new Error('Invalid learned direction/quaternion');}
-   channels[key]={values,width};
+ for(const cat of catalogs){
+  const catStanding=cat.schema.endsWith('/3')&&cat.stance==='standing';
+  const isUniversal=cat.targetCharacter==='Universal';
+  for(const c of cat.clips){
+   const allowedId=['yuki_hello','yuki_Yes','yuki_No','yuki_Peace_hand','yuki_dance_90bpm','yuki_dance_120bpm','yuki_f_vibe_dance_60_bpm_002'].includes(c.id)||/^mmd_[a-zA-Z0-9_-]{1,48}$/.test(c.id);
+   if(!allowedId||clips.has(c.id)||!Number.isInteger(c.frames)||c.frames<2||c.frames>1800||!Number.isFinite(c.fps)||c.fps<=0||c.fps>60)throw new Error('Invalid learned clip');
+   const channels={};for(const [key,value] of Object.entries(c.channels||{})){
+    const width=/^(left|right)(Curl[0-4]_[0-2]|Spread[0-4])$/.test(key)?1:['headDelta','chestDelta',...(catStanding?['pelvisDelta','leftFootDelta','rightFootDelta']:[])].includes(key)?4:(['leftUpper','leftLower','rightUpper','rightLower','rightHandWidth','rightHandForward','leftHandWidth','leftHandForward',...(catStanding?['leftThigh','rightThigh','leftCalf','rightCalf']:[])].includes(key)||/^(left|right)Finger[0-4]_[0-2]$/.test(key))?3:0;
+    if(!width||typeof value!=='string')throw new Error('Invalid learned channel');
+    const data=Uint8Array.from(atob(value),ch=>ch.charCodeAt(0));if(data.byteLength!==c.frames*width*4)throw new Error('Learned channel truncated');
+    const values=new Float32Array(data.buffer);if(!values.every(Number.isFinite))throw new Error('Non-finite learned pose');
+    if(width===1&&values.some(v=>v<-.31||v>1.11))throw new Error('Invalid learned finger angle');
+    for(let i=0;width>1&&i<c.frames;i++){let length=0;for(let k=0;k<width;k++)length+=values[i*width+k]**2;if(Math.abs(length-1)>.01)throw new Error('Invalid learned direction/quaternion');}
+    channels[key]={values,width};
+   }
+   if(!channels.headDelta)throw new Error('Missing learned head reference');
+   const isMmd=c.id.startsWith('mmd_'),dance=c.id.includes('dance')||isMmd;
+   const expectedKind=dance?(catStanding?'standing-dance':'seated-dance'):c.id==='yuki_Peace_hand'?'peace':c.id==='yuki_hello'?'greeting':'head',arms=dance?['left','right']:expectedKind==='head'?[]:['right'];
+   if(!cat.schema.endsWith('/1')&&(c.motionKind!==expectedKind||JSON.stringify(c.arms)!==JSON.stringify(arms)))throw new Error('Invalid learned action capability');
+   if(dance&&!standing&&!isUniversal)continue;
+   const kind=dance?(standing&&catStanding?'standing-dance':'seated-dance'):expectedKind;
+   if(kind==='standing-dance'&&['pelvisDelta','leftThigh','rightThigh','leftCalf','rightCalf','leftFootDelta','rightFootDelta'].some(k=>!channels[k]))throw new Error('Missing standing body channels');
+   clips.set(c.id,{...c,kind,arms,channels,duration:(c.frames-1)/c.fps});
   }
-  if(!channels.headDelta)throw new Error('Missing learned head reference');
-  const dance=c.id.includes('dance'),kind=dance?(standing?'standing-dance':'seated-dance'):c.id==='yuki_Peace_hand'?'peace':c.id==='yuki_hello'?'greeting':'head',arms=dance?['left','right']:kind==='head'?[]:['right'];
-  if(!config.schema.endsWith('/1')&&(c.motionKind!==kind||JSON.stringify(c.arms)!==JSON.stringify(arms)))throw new Error('Invalid learned action capability');
-  if(dance&&!standing)continue;
-  if(dance&&['pelvisDelta','leftThigh','rightThigh','leftCalf','rightCalf','leftFootDelta','rightFootDelta'].some(k=>!channels[k]))throw new Error('Missing standing body channels');
-  clips.set(c.id,{...c,kind,arms,channels,duration:(c.frames-1)/c.fps});
  }
  const digitsBySide=Object.fromEntries([['left','L'],['right','R']].map(([side,letter])=>[side,Array.from({length:5},(_,i)=>[get(`Bip001-${letter}-Finger${i}`),get(`Bip001-${letter}-Finger${i}1`),get(`Bip001-${letter}-Finger${i}2`)])]));
  const pelvis=standing?get('Bip001-Pelvis'):null,legs=standing?Object.fromEntries([['left','L'],['right','R']].map(([side,l])=>[side,{thigh:get(`Bip001-${l}-Thigh`),calf:get(`Bip001-${l}-Calf`),foot:get(`Bip001-${l}-Foot`),toe:get(`Bip001-${l}-Toe0`)}])):{};
