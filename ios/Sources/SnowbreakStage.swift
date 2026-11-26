@@ -2,7 +2,7 @@ import SwiftUI
 import WebKit
 
 struct SnowbreakLibrary {
-    static let supportedCharacters = ["Enya","Fenny","Augusta","Qingxiao"]
+    static let supportedCharacters = ["Enya","Fenny","Katya","Cherno","Longyan","Nerida","Mia","Clarina","Augusta","Qingxiao"]
     let directory: URL
     init(directory: URL? = nil) {
         self.directory = directory ?? FileManager.default.urls(for:.applicationSupportDirectory,in:.userDomainMask)[0]
@@ -109,6 +109,12 @@ struct SnowbreakTouchEvent {
     static func displayName(for id:String) -> String {
         switch id {
         case "Fenny": return "芬妮婚皮"
+        case "Katya": return "凯茜娅 · 婚约"
+        case "Cherno": return "琴诺 · 见习侍奉"
+        case "Longyan": return "胧嫣 · 珠光曳影"
+        case "Nerida": return "奈莉德 · 热沙激浪"
+        case "Mia": return "米娅 · 星空魅影"
+        case "Clarina": return "克罗瑞娜 · 绯月"
         case "Augusta": return "奥古斯塔"
         case "Qingxiao": return "清宵"
         default: return "恩雅护士"
@@ -118,6 +124,7 @@ struct SnowbreakTouchEvent {
     var characterName:String {Self.displayName(for: characterID)}
     var modelKey:String {characterID.lowercased()}
     @Published private(set) var savedCharacters:[String]=[]
+    @Published private(set) var sampleLabels:[String:String]=[:]
     @Published private(set) var ready = false
     @Published private(set) var isEditing=false
     @Published private(set) var error: String?
@@ -139,14 +146,25 @@ struct SnowbreakTouchEvent {
     @Published private(set) var variantIDs:[String] = []
     @Published private(set) var bodyActions:[String] = []
     @Published private(set) var bodyState = BodyState()
-    var outfitLabel:String {companionOutfit == "underwear" ? "婚纱内衣版":companionOutfit == "nude" ? "果体版":characterID == "Fenny" ? "原婚纱":"正常服饰"}
+    var outfitLabel:String {companionOutfit == "underwear" ? "婚纱内衣版":companionOutfit == "nude" ? "果体版":companionOutfit == "lv2" ? "Lv2 形态":characterID == "Fenny" ? "原婚纱":"正常服饰"}
+    var availableModes:[String] { ["standing","interaction"].filter { m in variantIDs.contains { $0.hasPrefix(m+"_") } } }
+    var availableOutfits:[String] { ["normal","nude","underwear","lv2"].filter { o in variantIDs.contains(companionMode+"_"+o) } }
     var dialogueActions:[String] {
         guard ready else{return []}
         var result=actions+bodyActions
         if characterID == "Fenny" {
             for outfit in ["normal","underwear"] where variantIDs.contains(companionMode+"_"+outfit){result.append("fenny_outfit_"+outfit)}
             if ["standing","interaction"].allSatisfy({variantIDs.contains($0+"_"+companionOutfit)}){result += ["fenny_mode_standing","fenny_mode_interaction"]}
-        }else if variantIDs.count == 4 {result += ["enya_outfit_normal","enya_outfit_nude","enya_mode_standing","enya_mode_interaction"]}
+        } else if characterID == "Enya" && variantIDs.count == 4 {
+            result += ["enya_outfit_normal","enya_outfit_nude","enya_mode_standing","enya_mode_interaction"]
+        } else {
+            if availableOutfits.count > 1 {
+                for outfit in availableOutfits { result.append("snowbreak_outfit_"+outfit) }
+            }
+            if availableModes.count > 1 {
+                for mode in availableModes { result.append("snowbreak_mode_"+mode) }
+            }
+        }
         return result
     }
     func refreshBodyState() async {
@@ -156,7 +174,7 @@ struct SnowbreakTouchEvent {
     }
     private func updateBody(_ value:[String:Any]) {
         if let available=value["available"] as? [String] {bodyActions=available.filter{BodyCommand(rawValue:$0) != nil || BodyGesture.ids.contains($0)}}
-        bodyState = BodyState(outfit:companionOutfit == "nude" ? "当前已加载果体版模型，没有穿衣":companionOutfit == "underwear" ? "当前加载芬妮婚纱内衣版，穿有胸衣、手套、袜饰，保留头纱与装饰，不是裸体":companionOutfit == "normal" ? "当前已加载\(characterName)正常服饰模型":"当前已加载\(characterName)模型",
+        bodyState = BodyState(outfit:companionOutfit == "nude" ? "当前已加载\(characterName)果体版模型，没有穿衣":companionOutfit == "underwear" ? "当前加载芬妮婚纱内衣版，穿有胸衣、手套、袜饰，保留头纱与装饰，不是裸体":companionOutfit == "lv2" ? "当前已加载\(characterName) Lv2 形态模型":companionOutfit == "normal" ? "当前已加载\(characterName)正常服饰模型":"当前已加载\(characterName)模型",
             eyes:value["eyes"] as? String ?? "未确认",hands:value["hands"] as? String ?? "未确认",facing:value["facing"] as? String ?? "未确认",legs:value["legs"] as? String ?? "未确认",lastResult:(value["lastResult"] as? String ?? "无回执")+((value["legResult"] as? String).flatMap{$0.isEmpty ? nil:"；"+$0} ?? "")+((value["interactionScene"] as? String).map{"；保持互动场景："+$0} ?? ""))
     }
     func executeBody(_ command:BodyCommand,automatic:Bool = false) async -> Bool {
@@ -268,12 +286,21 @@ struct SnowbreakTouchEvent {
                 if let staged = staged { try library.commit(staged,characterID:identity);self.staged = nil }
                 characterID=identity;savedCharacters=library.savedCharacters
                 let variants = body["variants"] as? [[String:String]] ?? []
-                variantIDs = variants.compactMap { v in guard let id=v["id"],["standing_normal","standing_nude","standing_underwear","interaction_normal","interaction_nude","interaction_underwear"].contains(id) else { return nil };return id }
-                if let selected=body["selection"] as? [String:String] { companionMode=selected["mode"] ?? "standing";companionOutfit=selected["outfit"] ?? "unknown" }
+                let allowedVariants: Set<String> = ["standing_normal","standing_nude","standing_underwear","standing_lv2","interaction_normal","interaction_nude","interaction_underwear","interaction_lv2"]
+                variantIDs = variants.compactMap { v in guard let id=v["id"],allowedVariants.contains(id) else { return nil };return id }
+                if let selected=body["selection"] as? [String:String] { companionMode=selected["mode"] ?? "standing";companionOutfit=selected["outfit"] ?? "normal" }
                 else {companionMode = body["stance"] as? String == "standing" ? "standing":"interaction";companionOutfit = "normal"}
                 let samples = body["samples"] as? [String] ?? []
-                actions = ["head","left","right","home_login","home_invite","home_shy","home_check","home_kiss","home_jealous","home_marry","home_sigh","home_stage","home_stand","mmd_houru","show_02","show_03","show_04","show_05","sequence","idle_01","idle_02"].filter { samples.contains($0) }.map { "snowbreak_"+$0 }
-                if identity == "Fenny" {actions += DialogueMotion.fennyScenes.map(\.id).filter{samples.contains(String($0.dropFirst("snowbreak_".count)))}}
+                let rawLabels = body["sampleLabels"] as? [String:String] ?? [:]
+                var labelMap: [String:String] = [:]
+                for (k,v) in rawLabels { labelMap["snowbreak_" + k] = v }
+                sampleLabels = labelMap
+                if identity == "Enya" || identity == "Fenny" {
+                    actions = ["head","left","right","home_login","home_invite","home_shy","home_check","home_kiss","home_jealous","home_marry","home_sigh","home_stage","home_stand","mmd_houru","show_02","show_03","show_04","show_05","sequence","idle_01","idle_02"].filter { samples.contains($0) }.map { "snowbreak_"+$0 }
+                    if identity == "Fenny" {actions += DialogueMotion.fennyScenes.map(\.id).filter{samples.contains(String($0.dropFirst("snowbreak_".count)))}}
+                } else {
+                    actions = samples.filter { !$0.contains("_reaction_") && $0.range(of:"^[a-zA-Z0-9_-]{1,64}$",options:.regularExpression) != nil }.map { "snowbreak_" + $0 }
+                }
                 let learned = body["learned"] as? [String] ?? []
                 actions += ["yuki_hello","yuki_Yes","yuki_No","yuki_Peace_hand","yuki_dance_90bpm","yuki_dance_120bpm","yuki_f_vibe_dance_60_bpm_002"].filter { learned.contains($0) && (!$0.contains("dance") || body["stance"] as? String == "standing") }.map { "enya_"+$0 }
                 for clip in learned where clip.hasPrefix("mmd_") && !samples.contains(clip) {
@@ -316,6 +343,8 @@ struct SnowbreakTouchEvent {
             if id.hasPrefix("fenny_mode_"){selectVariant(mode:String(id.dropFirst("fenny_mode_".count)));return}
             if id.hasPrefix("enya_outfit_") { selectVariant(outfit:String(id.dropFirst("enya_outfit_".count)));return }
             if id.hasPrefix("enya_mode_") { selectVariant(mode:String(id.dropFirst("enya_mode_".count)));return }
+            if id.hasPrefix("snowbreak_outfit_") { selectVariant(outfit:String(id.dropFirst("snowbreak_outfit_".count)));return }
+            if id.hasPrefix("snowbreak_mode_") { selectVariant(mode:String(id.dropFirst("snowbreak_mode_".count)));return }
         }
         guard ready,actions.contains(id) else { return }
         if !automatic { interactionRevision += 1 }
@@ -398,7 +427,7 @@ struct SnowbreakImportView:View {
         NavigationStack {
             Form {
                 Section("3D 角色皮肤 · 本地导入") {
-                    Text("支持导入恩雅、芬妮、奥古斯塔、清宵 .snowbreak 角色皮肤包。可用模式、动作、场景和原声由素材包决定。")
+                    Text("支持导入恩雅、芬妮、凯茜娅、琴诺、胧嫣、奈莉德、米娅、克罗瑞娜、奥古斯塔、清宵等 .snowbreak 角色皮肤包。可用模式、动作、场景和原声由素材包决定。")
                     Button("选择角色皮肤包 (.snowbreak)") { picking = true }.accessibilityIdentifier("importSnowbreak")
                     Button("App 文件夹") { local = true }
                     if stage.library.hasCurrent { Text("已保存角色素材，下次启动会从本机加载。") }

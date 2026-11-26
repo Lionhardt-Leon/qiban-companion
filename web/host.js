@@ -36,7 +36,7 @@ async function performLoad(url,id,variant,ticket){
   let opened,nextDisplay,nextVoices;
   try{
     if(variant){if(!collection)throw new Error('请先导入角色整合包');opened=await collection.selectVariant(variant);}else{collection=null;const response=await fetch(url);if(!response.ok)throw new Error('本地角色包读取失败');opened=await openSkinArchive(new Uint8Array(await response.arrayBuffer()));}
-    if(!['Enya','Fenny','Augusta','Qingxiao'].includes(opened.manifest.characterId))throw new Error('不支持的本地角色包');
+    if(!/^[A-Za-z0-9_-]{1,64}$/.test(opened.manifest.characterId))throw new Error('不支持的本地角色包');
     nextDisplay=await createSnowbreakRenderer(canvas,opened.runtime,{isCurrent:()=>ticket===generation,universalMotions});
     nextVoices=opened.runtime.getAsset('voiceCatalog')?await createOriginalVoiceCatalog(opened.runtime):{
       getAudio:()=>null,snapshot:()=>({available:[]}),dispose(){}
@@ -86,7 +86,7 @@ async function performLoad(url,id,variant,ticket){
     const select=editorHost.querySelector('#snowSurfaceRegion'),edit=editorHost.querySelector('#snowSurfaceEdit');
     edit.addEventListener('change',()=>{if(edit.checked){editorHost.classList.remove('open');finishPaint.textContent='完成'+select.selectedOptions[0].textContent+'标注';finishPaint.hidden=false;}});
     text('');emit({type:'ready',bodyActions:[...display.embodiment.snapshot().available,...display.sceneInteractions.available()],selection:opened.selection,variants:opened.variants,characterId:opened.manifest.characterId,skinId:opened.manifest.skinId,
-      stance:opened.runtime.getAsset('stateTransition')?.data.stance||'seated',samples:display.sampleOptions().map(x=>x.id),voices:voices.snapshot().available,learned:display.learnedOptions().map(x=>x.id)});
+      stance:opened.runtime.getAsset('stateTransition')?.data.stance||'seated',samples:display.sampleOptions().map(x=>x.id),sampleLabels:Object.fromEntries(display.sampleOptions().map(x=>[x.id,x.label])),voices:voices.snapshot().available,learned:display.learnedOptions().map(x=>x.id)});
     window.__snowbreakMigration={display,adapter,voices,editor,presentation,manifest:opened.manifest};
   }catch(error){
     if(ticket!==generation){nextDisplay?.dispose();nextVoices?.dispose();void opened?.runtime.dispose();return;}

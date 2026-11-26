@@ -47,10 +47,10 @@ struct CompanionHome: View {
     @State private var touchTicket=UUID()
     @AppStorage("snowbreakVoice") private var snowbreakVoice = true
     private static let sourceActionLabels:[String:String] = ["snowbreak_home_jealous":"芬妮 · 吃醋","snowbreak_home_marry":"芬妮 · 婚礼互动","snowbreak_home_sigh":"芬妮 · 叹气","snowbreak_home_stage":"芬妮 · 主页展示","snowbreak_home_stand":"站立待机","snowbreak_home_login":"看板娘 · 登录招呼","snowbreak_home_invite":"看板娘 · 邀请","snowbreak_home_shy":"看板娘 · 害羞","snowbreak_home_check":"看板娘 · 检查","snowbreak_home_kiss":"看板娘 · 亲吻","snowbreak_show_02":"互动展示 02","snowbreak_show_03":"互动展示 03","snowbreak_show_04":"互动展示 04","snowbreak_show_05":"互动展示 05","snowbreak_sequence":"完整展示片段","snowbreak_idle_01":"互动待机变化 01","snowbreak_idle_02":"互动待机变化 02","snowbreak_head":"头部原作反应","snowbreak_left":"左手原作反应","snowbreak_right":"右手原作反应","snowbreak_mmd_houru":"通用动作 · 厚乳","universal_mmd_houru":"通用动作 · 厚乳","enya_yuki_hello":"学习 Yuki · 挥手","enya_yuki_Yes":"学习 Yuki · 点头","enya_yuki_No":"学习 Yuki · 摇头","enya_yuki_Peace_hand":"学习 Yuki · 比 V","enya_yuki_dance_90bpm":"站立舞蹈 · 90 BPM","enya_yuki_dance_120bpm":"站立舞蹈 · 120 BPM","enya_yuki_f_vibe_dance_60_bpm_002":"站立舞蹈 · 60 BPM"]
-    private func sourceActionLabel(_ id:String)->String {DialogueMotion.fennyScenes.first{$0.id == id}?.label ?? Self.sourceActionLabels[id] ?? id}
+    private func sourceActionLabel(_ id:String)->String {DialogueMotion.fennyScenes.first{$0.id == id}?.label ?? snowbreak.sampleLabels[id] ?? Self.sourceActionLabels[id] ?? id}
     private var isSnowbreak:Bool { engine == "snowbreak" }
     private var isPortrait:Bool {engine == "portrait"}
-    private var interactionModeLabel:String {snowbreak.characterID == "Fenny" ? "皮肤互动":"皮肤互动（坐姿）"}
+    private var interactionModeLabel:String {["Fenny","Katya"].contains(snowbreak.characterID) ? "皮肤互动":"皮肤互动（坐姿）"}
     private var availableActions:[String] { isPortrait ? portrait.actions : isSnowbreak ? snowbreak.dialogueActions : stage.dialogueActions }
     private var modelEditing:Bool {isSnowbreak ? snowbreak.isEditing:nativeEditing}
     private var currentRevision:Int { isPortrait ? portrait.interactionRevision : isSnowbreak ? snowbreak.interactionRevision : stage.interactionRevision }
@@ -137,19 +137,19 @@ struct CompanionHome: View {
                             if isPortrait {ForEach(portrait.actions,id:\.self){id in Button(DialogueMotion.portraitActionLabel(id)){portrait.play(id)}}}
                             else if isSnowbreak {
                                 ForEach(snowbreak.savedCharacters,id:\.self){id in Button("切换到\(SnowbreakStage.displayName(for: id))"){snowbreak.selectCharacter(id)}}
-                                if snowbreak.characterID == "Fenny" {
-                                    Button(snowbreak.companionOutfit == "normal" ? "✓ 原婚纱":"原婚纱"){snowbreak.selectVariant(outfit:"normal")}
-                                    Button(snowbreak.companionOutfit == "underwear" ? "✓ 婚纱内衣版":"婚纱内衣版"){snowbreak.selectVariant(outfit:"underwear")}
-                                }
-                                if snowbreak.variantIDs.count == 4 {
+                                if snowbreak.availableModes.count > 1 {
                                     Section("陪伴模式") {
                                         Button(snowbreak.companionMode == "standing" ? "✓ 看板娘（站立）" : "看板娘（站立）") { snowbreak.selectVariant(mode:"standing") }
                                         Button(snowbreak.companionMode == "interaction" ? "✓ "+interactionModeLabel : interactionModeLabel) { snowbreak.selectVariant(mode:"interaction") }
                                     }
-                                    if snowbreak.characterID != "Fenny" {Section("服饰") {
-                                        Button(snowbreak.companionOutfit == "normal" ? "✓ 正常服饰" : "正常服饰") { snowbreak.selectVariant(outfit:"normal") }
-                                        Button(snowbreak.companionOutfit == "nude" ? "✓ 果体版" : "果体版") { snowbreak.selectVariant(outfit:"nude") }
-                                    }}
+                                }
+                                if snowbreak.availableOutfits.count > 1 {
+                                    Section("服饰／形态") {
+                                        ForEach(snowbreak.availableOutfits, id:\.self) { outfit in
+                                            let title = outfit == "underwear" ? "婚纱内衣版" : outfit == "nude" ? "果体版" : outfit == "lv2" ? "Lv2 形态" : (snowbreak.characterID == "Fenny" ? "原婚纱" : "正常服饰")
+                                            Button(snowbreak.companionOutfit == outfit ? "✓ \(title)" : title) { snowbreak.selectVariant(outfit:outfit) }
+                                        }
+                                    }
                                 }
                                 ForEach(snowbreak.actions,id:\.self) { id in
                                     Button(sourceActionLabel(id)) { snowbreak.play(id,withVoice:snowbreakVoice) }

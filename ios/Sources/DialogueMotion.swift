@@ -44,6 +44,11 @@ enum DialogueMotion {
         ("enya_outfit_nude", "切换恩雅已有的果体版模型，保留当前陪伴模式"),
         ("enya_mode_standing", "切到看板娘站立模式，保留当前服饰"),
         ("enya_mode_interaction", "切到皮肤互动坐姿模式，保留当前服饰"),
+        ("snowbreak_outfit_normal", "恢复当前角色正常服饰"),
+        ("snowbreak_outfit_nude", "切换当前角色已有的果体版模型"),
+        ("snowbreak_outfit_lv2", "切换当前角色官方 Lv2 形态"),
+        ("snowbreak_mode_standing", "切到当前角色看板娘站立模式"),
+        ("snowbreak_mode_interaction", "切到当前角色官方互动情景模式"),
         ("snowbreak_head", "恩雅护士已有的头部互动反应片段"),
         ("snowbreak_left", "恩雅护士已有的左手互动反应片段"),
         ("snowbreak_right", "恩雅护士已有的右手互动反应片段"),
@@ -78,8 +83,10 @@ enum DialogueMotion {
     static func allowed(_ ids: [String]) -> [String] {
         var result = catalog.map(\.id).filter { ids.contains($0) }
         var seen = Set(result)
-        for id in ids where !seen.contains(id) && portraitActionInfo(id) != nil {
-            seen.insert(id); result.append(id)
+        for id in ids where !seen.contains(id) {
+            if portraitActionInfo(id) != nil || (id.hasPrefix("snowbreak_") && id.count <= 80 && id.range(of:"^snowbreak_[a-zA-Z0-9_-]{1,64}$",options:.regularExpression) != nil) {
+                seen.insert(id); result.append(id)
+            }
         }
         return result
     }
@@ -89,6 +96,9 @@ enum DialogueMotion {
         for id in actions where !seen.contains(id) {
             if let info = portraitActionInfo(id) {
                 seen.insert(id); result.append((label: info.meaning, id: id))
+            } else if id.hasPrefix("snowbreak_") && id.count <= 80 {
+                let raw = String(id.dropFirst("snowbreak_".count))
+                seen.insert(id); result.append((label: "当前角色官方动作：\(raw)", id: id))
             }
         }
         return result
