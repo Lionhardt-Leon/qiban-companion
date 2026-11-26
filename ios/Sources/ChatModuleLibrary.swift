@@ -4,7 +4,7 @@ import CryptoKit
 enum ChatModuleInfo {
     static let source = "https://github.com/QingchenWait/Fritia_Online_CHAT"
     static let revision = "7dfa8044dfef79c6c2876f69607c079218e723fb"
-    static let packageSHA256 = "b0597bd51ebb89fe40381ba61a7025a6900ae6e46524bac4de8ed79808591d4d"
+    static let packageSHA256 = "4414bfa7f6437ea628635c13a1c4ea19514eb09a48894981de050097192bcb1c"
 }
 
 struct ChatModuleManifest:Decodable {

@@ -29,20 +29,20 @@ const MEM_CAT_IDS = new Set(MEM_CATEGORIES.map(c => c.id));
 
 const CAT_SYNONYMS = {
   kb: [
-    ['body', /身体|外貌|外形|长相|身材|发型|发色|瞳色|服饰|穿搭|服装|体态|胸|腰|腿|脸|皮肤|声音|体型|穿着|appearance|body|outfit/i],
-    ['personality', /性格|脾气|习惯|口癖|说话|语气|喜好|讨厌|爱好|心理|personality|habit|trait/i],
-    ['world', /世界|背景|组织|阵营|基地|地点|历史|科技|魔法|设定集|lore|world|setting/i],
-    ['relation', /关系|称呼|亲友|羁绊|家人|搭档|同伴|对手|relation|bond/i],
+    ['body', /身体|外貌|外形|长相|身材|发型|发色|瞳色|服饰|穿搭|服装|体态|胸|乳|腰|臀|腿|脸|皮肤|声音|体型|穿着|私处|阴|敏感|appearance|body|outfit/i],
+    ['personality', /性格|脾气|习惯|口癖|说话|语气|对话风格|常用|喜好|讨厌|爱好|心理|羞耻|溺爱|矜持|personality|habit|trait/i],
+    ['world', /世界|背景|组织|阵营|基地|地点|历史|科技|魔法|设定集|修为|女帝|lore|world|setting/i],
+    ['relation', /关系|称呼|亲友|羁绊|家人|搭档|同伴|对手|母子|夫妻|恋人|定位|relation|bond/i],
     ['story', /经历|故事|剧情|事件|过去|任务|回忆|story|history|event/i],
-    ['custom', /规则|禁忌|提示词|模板|要求|约束|玩法|偏好|rule|prompt/i]
+    ['custom', /规则|禁忌|提示词|模板|要求|约束|玩法|偏好|性癖|肉欲|模式|前戏|高潮|事后|专属|rule|prompt/i]
   ],
   memory: [
-    ['core', /核心|身份|基本|名字|称呼|定位|core|identity/i],
-    ['preference', /偏好|喜欢|讨厌|习惯|雷区|爱好|口味|preference|like|dislike/i],
+    ['intimate', /亲密|身体|摸头|拥抱|牵手|吻|贴贴|撒娇|肉欲|性癖|前戏|高潮|事后|私处|敏感|乳房|奶|小穴|内射|调情|intimate|touch/i],
+    ['core', /核心|身份|基本|名字|称呼|定位|关系|女帝|专属|core|identity/i],
+    ['preference', /偏好|喜欢|讨厌|习惯|雷区|爱好|口味|迷恋|享受|preference|like|dislike/i],
     ['experience', /经历|一起|去过|做过|聊过|回忆|experience|together/i],
-    ['promise', /约定|承诺|计划|纪念日|下次|打算|promise|plan/i],
-    ['emotion', /情感|感情|心情|心动|态度|关系进展|默契|emotion|feeling/i],
-    ['intimate', /亲密|身体|摸头|拥抱|牵手|吻|贴贴|撒娇|intimate|touch/i],
+    ['promise', /约定|承诺|计划|纪念日|下次|打算|离不开|侍候|promise|plan/i],
+    ['emotion', /情感|感情|心情|心动|态度|关系进展|默契|深情|溺爱|温柔|emotion|feeling/i],
     ['daily', /日常|今天|昨天|工作|学习|睡眠|生活|daily/i]
   ]
 };
@@ -287,7 +287,10 @@ export function buildAiExtractMemoryPrompt({ characterName = '角色', userName 
 }
 
 export function parseAiOrganizedItems(rawText, { kind = 'kb', scope = 'global', source = 'ai-import' } = {}) {
-  const text = String(rawText || '').trim();
+  const text = String(rawText || '')
+    .replace(/<think>[\s\S]*?<\/think>/gi, '')
+    .replace(/<reasoning>[\s\S]*?<\/reasoning>/gi, '')
+    .trim();
   if (!text) return [];
   const unfenced = text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
   const candidates = [unfenced];
@@ -305,7 +308,186 @@ export function parseAiOrganizedItems(rawText, { kind = 'kb', scope = 'global', 
       if (Array.isArray(list)) return [];
     } catch {}
   }
-  return [];
+  // Recover completed JSON objects even if the model response was truncated mid-stream
+  const recovered = [];
+  const itemRe = /\{[^{}]*"(?:title|content|text)"[^{}]*\}/g;
+  for (const m of unfenced.matchAll(itemRe)) {
+    try {
+      const obj = JSON.parse(m[0]);
+      const norm = normalizeItem({ ...obj, scope, source }, kind);
+      if (norm) recovered.push(norm);
+    } catch {}
+  }
+  return recovered;
+}
+
+const LOCAL_BOILERPLATE_RE = /^(?:以下是(?:根据|整理|关于|为您|为你)|以上内容全部来自|如需我再按|需要我再按|这段纯文本可以直接导入)/;
+const LOCAL_STOP_WORDS = new Set(['我们','你们','他们','她们','自己','以及','或者','但是','如果','因为','所以','时候','非常','完全','可以','没有','这个','那个','一些','一个','一种','总是','经常','就会','已经','然后','而且','平时','对方','这样','那样','一切','所有','全部','内容','细节','偏好','风格','其他','重要']);
+
+function extractLocalKeywords(title, content, characterName = '') {
+  const kws = [];
+  const push = w => {
+    const clean = String(w || '').replace(/[《》【】「」“”"'\s:：,，。！？!?()（）\-—*#]/g, '').trim();
+    if (clean.length >= 2 && clean.length <= 14 && !LOCAL_STOP_WORDS.has(clean) && !kws.includes(clean)) {
+      kws.push(clean);
+    }
+  };
+  if (characterName) push(characterName);
+  // 1. Heading segments & bold labels
+  for (const seg of String(title || '').split(/[、，,\/／\s·｜|()（）]+/)) push(seg);
+  for (const m of String(content || '').matchAll(/\*\*([^*\n]{2,14})\*\*/g)) push(m[1]);
+  // 2. Quoted phrases / nicknames
+  for (const m of String(content || '').matchAll(/[“「]([^”」\n]{2,10})[”」]/g)) push(m[1]);
+  // 3. High-signal domain keywords present in text
+  const domainSeeds = [
+    '外貌','身体','胸部','腰肢','臀部','私处','肌肤','服饰','身材','性格','称呼','母亲','女帝',
+    '溺爱','羞耻','高潮','前戏','事后','温存','内射','对话','语气','性癖','偏好','关系','依赖',
+    '亲密','拥抱','摸头','牵手','约定','习惯','情绪','反应','占有欲'
+  ];
+  const full = `${title} ${content}`;
+  for (const seed of domainSeeds) {
+    if (full.includes(seed)) push(seed);
+  }
+  // 4. Fallback frequent CJK bigrams/trigrams if still few
+  if (kws.length < 4) {
+    const freq = new Map();
+    for (const seg of (content.match(/[\u4e00-\u9fff]{2,4}/g) || [])) {
+      if (LOCAL_STOP_WORDS.has(seg)) continue;
+      freq.set(seg, (freq.get(seg) || 0) + 1);
+    }
+    const top = [...freq.entries()].sort((a, b) => b[1] - a[1]).slice(0, 8).map(e => e[0]);
+    for (const w of top) push(w);
+  }
+  return kws.slice(0, 10);
+}
+
+function cleanHeadingTitle(raw) {
+  return String(raw || '')
+    .replace(/^#{1,6}\s*/, '')
+    .replace(/^[一二三四五六七八九十\d]+[、.．]\s*/, '')
+    .replace(/\*\*/g, '')
+    .replace(/[:：]\s*$/, '')
+    .trim();
+}
+
+export function organizeTextLocally(rawText, { kind = 'kb', fileName = '', characterName = '', scope = 'global', source = 'local-import' } = {}) {
+  const normalized = String(rawText || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n').trim();
+  if (!normalized) return [];
+
+  // Try structured JSON array/object import directly if user imported a JSON knowledge/memory file
+  if (normalized.startsWith('{') || normalized.startsWith('[')) {
+    const direct = parseAiOrganizedItems(normalized, { kind, scope, source });
+    if (direct.length) return direct;
+  }
+
+  const lines = normalized.split('\n');
+  const sections = [];
+  let curTitle = '';
+  let curLines = [];
+
+  const flush = () => {
+    const body = curLines.join('\n').replace(/\n{3,}/g, '\n\n').trim();
+    if (body && body.length >= 12 && !LOCAL_BOILERPLATE_RE.test(body)) {
+      sections.push({ title: curTitle, body });
+    }
+    curLines = [];
+  };
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed) {
+      if (curLines.length && curLines[curLines.length - 1] !== '') curLines.push('');
+      continue;
+    }
+    if (/^[-_*=]{3,}$/.test(trimmed)) {
+      flush();
+      curTitle = '';
+      continue;
+    }
+    if (LOCAL_BOILERPLATE_RE.test(trimmed)) continue;
+
+    // Detect Markdown heading (# .. ######) or numbered Chinese heading (一、xxx / 【xxx】)
+    const isHeading = /^#{1,6}\s+\S/.test(trimmed)
+      || /^[一二三四五六七八九十]{1,3}[、.．]\s*\S{2,30}$/.test(trimmed)
+      || /^【[^】]{2,26}】$/.test(trimmed);
+    if (isHeading) {
+      flush();
+      curTitle = cleanHeadingTitle(trimmed);
+      continue;
+    }
+    // Detect standalone bold subheading like "**宫宵月的性癖**："
+    const boldSub = trimmed.match(/^\*\*([^*\n]{2,24})\*\*\s*[:：]?$/);
+    if (boldSub && curLines.join('\n').trim().length >= 80) {
+      flush();
+      curTitle = boldSub[1].trim();
+      continue;
+    }
+    curLines.push(trimmed);
+  }
+  flush();
+
+  // If no headings existed (pure prose file like File 2), split cleanly by blank-line paragraphs
+  let finalBlocks = [];
+  if (sections.length <= 1 && (sections[0]?.body.length || 0) > 260) {
+    const paras = (sections[0]?.body || normalized)
+      .split(/\n{2,}/)
+      .map(p => p.trim())
+      .filter(p => p.length >= 16 && !LOCAL_BOILERPLATE_RE.test(p));
+    let buf = '';
+    for (const p of paras) {
+      if (buf && buf.length + p.length > 420) {
+        finalBlocks.push({ title: '', body: buf });
+        buf = p;
+      } else {
+        buf = buf ? `${buf}\n${p}` : p;
+      }
+    }
+    if (buf) finalBlocks.push({ title: '', body: buf });
+  } else {
+    for (const sec of sections) {
+      if (sec.body.length <= 950) {
+        finalBlocks.push(sec);
+      } else {
+        // Split very long section into balanced sub-cards preserving heading context
+        const parts = splitTextChunks(sec.body, 700);
+        parts.forEach((part, idx) => {
+          finalBlocks.push({
+            title: sec.title ? `${sec.title} (${idx + 1}/${parts.length})` : '',
+            body: part
+          });
+        });
+      }
+    }
+  }
+
+  const baseName = String(fileName || '').replace(/\.[^.]+$/, '').slice(0, 16);
+  const items = [];
+  for (let i = 0; i < finalBlocks.length; i++) {
+    const blk = finalBlocks[i];
+    const category = normalizeCategory(blk.title, kind, `${blk.title} ${blk.body.slice(0, 260)}`);
+    const meta = categoryMeta(category, kind);
+    const derivedTitle = blk.title
+      || blk.body.split(/[。！？!?\n]/)[0].replace(/\{\{user\}\}/gi, '用户').trim().slice(0, 22)
+      || `${baseName || meta.label} #${i + 1}`;
+    const isCoreCat = ['body', 'relation', 'core', 'personality'].includes(category);
+    const weight = isCoreCat ? (i === 0 ? 92 : 84) : (category === 'intimate' || category === 'custom' ? 82 : 70);
+    const activation = weight >= 85 ? 'always' : 'keyword';
+    const keywords = extractLocalKeywords(derivedTitle, blk.body, characterName);
+    const norm = normalizeItem({
+      title: derivedTitle,
+      category,
+      content: blk.body,
+      keywords,
+      weight,
+      activation,
+      scope,
+      promptMapping: meta.defaultMapping,
+      enabled: true,
+      source
+    }, kind);
+    if (norm) items.push(norm);
+  }
+  return items;
 }
 
 export function mergeOrganizedItems(existing, incoming, kind = 'kb') {

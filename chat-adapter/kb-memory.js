@@ -10,6 +10,7 @@ import {
   buildAiOrganizePrompt,
   buildAiExtractMemoryPrompt,
   parseAiOrganizedItems,
+  organizeTextLocally,
   mergeOrganizedItems,
   extractTextsFromZipBuffer
 } from './qiban_kb_memory_core.js';
@@ -45,19 +46,24 @@ async function callAiOrganize(messages) {
     body: JSON.stringify({
       model: 'qiban-managed',
       messages,
-      temperature: 0.25,
-      max_tokens: 4096,
+      temperature: 0.2,
+      max_tokens: 2400,
       stream: false
     })
   });
   if (!resp.ok) {
     const errText = await resp.text().catch(() => '');
-    throw new Error(`AI 分析接口返回 HTTP ${resp.status}${errText ? '：' + errText.slice(0, 120) : ''}`);
+    throw new Error(`HTTP ${resp.status}${errText ? '：' + errText.slice(0, 100) : ''}`);
   }
   const data = await resp.json();
-  const content = data?.choices?.[0]?.message?.content || '';
-  if (!content.trim()) throw new Error('AI 未返回有效整理结果。');
-  return content;
+  const choice = data?.choices?.[0];
+  const msg = choice?.message || {};
+  const content = String(msg.content || '').trim();
+  const reasoning = String(msg.reasoning_content || '').trim();
+  if (content) return content;
+  if (reasoning) return reasoning;
+  const reason = choice?.finish_reason ? `（finish_reason=${choice.finish_reason}）` : '';
+  throw new Error('模型返回内容为空' + reason);
 }
 
 function readFileTexts(files) {
@@ -71,39 +77,97 @@ function readFileTexts(files) {
   })).then(groups => groups.flat());
 }
 
-async function runAiFileImport(files, kind, scope) {
+async function runFileImport(files, kind, scope, useAi = false) {
   if (!files?.length || busyText) return;
   const ch = activeCharacter();
   const charName = scope === 'global' ? '' : (ch?.name || '');
   try {
-    busyText = '正在读取并解压导入文件…';
+    busyText = useAi ? '正在读取文件并准备 AI 分析…' : '正在极速本地解析并智能分类…';
     statusNote = '';
     renderModal();
     const docs = await readFileTexts(files);
     if (!docs.length) throw new Error('所选文件中没有可解析的文本（支持 .txt / .md / .json / .zip）。');
 
+    if (!useAi) {
+      let collected = [];
+      for (const doc of docs) {
+        collected.push(...organizeTextLocally(doc.text, {
+          kind,
+          fileName: doc.name,
+          characterName: charName,
+          scope,
+          source: 'local-import'
+        }));
+      }
+      const existing = loadStructuredItems(kind);
+      const merged = mergeOrganizedItems(existing, collected, kind);
+      saveStructuredItems(merged.items, kind);
+      statusNote = `⚡ 极速智能导入完成：解析 ${docs.length} 个文件，新增 ${merged.added} 条、更新 ${merged.updated} 条（已自动分类、提炼关键词、设置权重与提示词映射）。`;
+      return;
+    }
+
     const tasks = [];
     for (const doc of docs) {
-      for (const chunk of splitTextChunks(doc.text, 4000)) {
+      for (const chunk of splitTextChunks(doc.text, 6000)) {
         tasks.push({ name: doc.name, text: chunk });
       }
     }
     const maxBatches = Math.min(tasks.length, 24);
     let collected = [];
-    for (let i = 0; i < maxBatches; i++) {
-      busyText = `AI 正在分析归纳「${tasks[i].name}」（${i + 1}/${maxBatches}）…`;
-      renderModal();
-      const prompt = buildAiOrganizePrompt({ kind, fileName: tasks[i].name, characterName: charName, chunkText: tasks[i].text });
-      const raw = await callAiOrganize(prompt);
-      const parsed = parseAiOrganizedItems(raw, { kind, scope, source: 'ai-import' });
-      collected.push(...parsed);
-    }
+    let aiSucceeded = 0;
+    let fallbackCount = 0;
+    let lastAiErr = '';
+
+    // Run up to 2 chunks concurrently for faster multi-file AI analysis
+    const concurrency = 2;
+    let done = 0;
+    let cursor = 0;
+    const worker = async () => {
+      while (cursor < maxBatches) {
+        const idx = cursor++;
+        const task = tasks[idx];
+        busyText = `✨ AI 正在分析归纳「${task.name}」（已完成 ${done}/${maxBatches}）…`;
+        renderModal();
+        let parsed = [];
+        try {
+          const prompt = buildAiOrganizePrompt({ kind, fileName: task.name, characterName: charName, chunkText: task.text });
+          const raw = await callAiOrganize(prompt);
+          parsed = parseAiOrganizedItems(raw, { kind, scope, source: 'ai-import' });
+          if (parsed.length) aiSucceeded++;
+          else lastAiErr = '模型未返回标准 JSON 条目';
+        } catch (err) {
+          lastAiErr = err?.message || String(err);
+        }
+        if (!parsed.length) {
+          parsed = organizeTextLocally(task.text, {
+            kind,
+            fileName: task.name,
+            characterName: charName,
+            scope,
+            source: 'local-fallback'
+          });
+          fallbackCount++;
+        }
+        collected.push(...parsed);
+        done++;
+        busyText = `✨ AI 正在分析归纳（已完成 ${done}/${maxBatches}）…`;
+        renderModal();
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(concurrency, maxBatches) }, worker));
+
     const existing = loadStructuredItems(kind);
     const merged = mergeOrganizedItems(existing, collected, kind);
     saveStructuredItems(merged.items, kind);
-    statusNote = `AI 整理完成：共解析 ${docs.length} 个文件，新增 ${merged.added} 条、更新 ${merged.updated} 条（已自动分类、设权重与提示词映射）。`;
+    if (fallbackCount > 0 && aiSucceeded === 0) {
+      statusNote = `已自动兜底入库：远端模型未返回有效条目（${lastAiErr || '可能触发接口审核或输出为空'}），已自动切换本机智能引擎完成整理，新增 ${merged.added} 条、更新 ${merged.updated} 条！`;
+    } else if (fallbackCount > 0) {
+      statusNote = `导入完成：共解析 ${docs.length} 个文件，新增 ${merged.added} 条、更新 ${merged.updated} 条（其中 ${fallbackCount} 段自动使用本机引擎兜底）。`;
+    } else {
+      statusNote = `✨ AI 深度整理完成：共解析 ${docs.length} 个文件，新增 ${merged.added} 条、更新 ${merged.updated} 条。`;
+    }
   } catch (err) {
-    statusNote = 'AI 自动导入失败：' + (err?.message || String(err));
+    statusNote = '导入失败：' + (err?.message || String(err));
   } finally {
     busyText = '';
     renderModal();
@@ -244,8 +308,12 @@ function renderModal() {
 
       <div class="qkb-actions">
         <label class="qkb-btn qkb-btn-primary ${busyText ? 'is-disabled' : ''}">
-          ✨ AI 自动导入整理 (.txt / .md / .zip)
-          <input type="file" class="qkb-file-input" multiple accept=".txt,.md,.markdown,.json,.zip,text/plain,application/zip" ${busyText ? 'disabled' : ''}>
+          ⚡ 极速智能导入 (.txt/.md/.zip 秒入库)
+          <input type="file" class="qkb-file-input qkb-file-fast" multiple accept=".txt,.md,.markdown,.json,.zip,text/plain,application/zip" ${busyText ? 'disabled' : ''}>
+        </label>
+        <label class="qkb-btn qkb-btn-ai ${busyText ? 'is-disabled' : ''}">
+          ✨ AI 深度整理 (自动兜底)
+          <input type="file" class="qkb-file-input qkb-file-ai" multiple accept=".txt,.md,.markdown,.json,.zip,text/plain,application/zip" ${busyText ? 'disabled' : ''}>
         </label>
         ${kind === 'memory' ? `
           <button type="button" class="qkb-btn qkb-btn-accent" data-ai-extract ${busyText ? 'disabled' : ''}>🧠 从当前对话提炼</button>
@@ -313,9 +381,13 @@ function renderModal() {
       renderModal();
     });
   });
-  overlay.querySelector('.qkb-file-input')?.addEventListener('change', e => {
+  overlay.querySelector('.qkb-file-fast')?.addEventListener('change', e => {
     const files = e.target.files;
-    if (files?.length) runAiFileImport(files, kind, filterScope === 'current' && ch ? charScope : 'global');
+    if (files?.length) runFileImport(files, kind, filterScope === 'current' && ch ? charScope : 'global', false);
+  });
+  overlay.querySelector('.qkb-file-ai')?.addEventListener('change', e => {
+    const files = e.target.files;
+    if (files?.length) runFileImport(files, kind, filterScope === 'current' && ch ? charScope : 'global', true);
   });
   overlay.querySelector('[data-ai-extract]')?.addEventListener('click', runAiExtractChatMemory);
   overlay.querySelector('[data-migrate]')?.addEventListener('click', migrateLegacyMemories);

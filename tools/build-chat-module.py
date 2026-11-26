@@ -194,7 +194,7 @@ for path in (ROOT/'chat-adapter').glob('*'):
     if path.is_file():site['source/adapters/'+path.name]=path.read_bytes()
 site['source/README.txt']=notice.encode('utf-8')
 manifest={'schema':'qiban-chat-module/1','revision':REVISION,'upstream':UPSTREAM,'license':'GPL-3.0','files':{name:hashlib.sha256(data).hexdigest() for name,data in site.items()}}
-out=ROOT/'dist/Fritia-Chat-Mobile-v13.qchat'
+out=ROOT/'dist/Fritia-Chat-Mobile-v14.qchat'
 out.parent.mkdir(parents=True,exist_ok=True)
 with zipfile.ZipFile(out,'w',compression=zipfile.ZIP_STORED) as z:
     def write(name,data):
@@ -206,5 +206,5 @@ digest=hashlib.sha256(out.read_bytes()).hexdigest()
 native=ROOT/'ios/Sources/ChatModuleLibrary.swift'
 native.write_text(re.sub(r'static let packageSHA256 = "[^"]+"','static let packageSHA256 = "'+digest+'"',native.read_text(encoding='utf-8')),encoding='utf-8')
 report={'file':str(out),'bytes':out.stat().st_size,'sha256':digest,'files':len(site)+1,'upstreamRevision':REVISION,'upstreamZipSHA256':hashlib.sha256(archive.read_bytes()).hexdigest(),'originalAssetsPubliclyUploaded':False,'licenseAndSourceIncluded':True}
-(ROOT/'dist/Chat-Module-v13-manifest.json').write_text(json.dumps(report,ensure_ascii=False,indent=2),encoding='utf-8')
+(ROOT/'dist/Chat-Module-v14-manifest.json').write_text(json.dumps(report,ensure_ascii=False,indent=2),encoding='utf-8')
 print(json.dumps(report,ensure_ascii=True))
