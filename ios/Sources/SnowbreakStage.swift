@@ -1,7 +1,10 @@
 import SwiftUI
 import WebKit
+import Compression
 
 struct SnowbreakLibrary {
+    static let maxPackageBytes = 1024 * 1024 * 1024 // 1 GB compressed (ready for interactive rooms)
+    static let maxDecodedBytes = 1536 * 1024 * 1024 // 1.5 GB decoded
     static let supportedCharacters = ["Enya","Fenny","Katya","Cherno","Longyan","Nerida","Mia","Clarina"]
     let directory: URL
     init(directory: URL? = nil) {
@@ -54,39 +57,213 @@ struct SnowbreakLibrary {
         return merged
     }
     func stage(_ data: Data) throws -> URL {
-        guard (22...256*1024*1024).contains(data.count), data.prefix(4) == Data([0x50,0x4b,3,4]) else {
-            throw CompanionError.message("请选择完整的角色 .snowbreak 素材包（不超过256MB）。")
+        guard (22...Self.maxPackageBytes).contains(data.count), data.prefix(4) == Data([0x50,0x4b,3,4]) else {
+            throw CompanionError.message("请选择完整的角色 .snowbreak 素材包（不超过 1 GB）。")
         }
         try FileManager.default.createDirectory(at:directory,withIntermediateDirectories:true)
         let url = directory.appendingPathComponent("staged-\(UUID().uuidString).snowbreak")
         try data.write(to:url,options:[.atomic,.completeFileProtection]); return url
     }
+    /// Zero-copy file staging for large packages (up to 1 GB): verifies magic header without loading file into RAM.
+    func stageFile(_ sourceURL: URL) throws -> URL {
+        let size = try sourceURL.resourceValues(forKeys:[.fileSizeKey]).fileSize ?? Int.max
+        guard (22...Self.maxPackageBytes).contains(size) else {
+            throw CompanionError.message("请选择完整的角色 .snowbreak 素材包（不超过 1 GB）。")
+        }
+        let handle = try FileHandle(forReadingFrom: sourceURL)
+        defer { try? handle.close() }
+        let header = handle.readData(ofLength: 4)
+        guard header == Data([0x50,0x4b,3,4]) else {
+            throw CompanionError.message("文件不是有效的 .snowbreak ZIP 资源包。")
+        }
+        try FileManager.default.createDirectory(at:directory,withIntermediateDirectories:true)
+        let dst = directory.appendingPathComponent("staged-\(UUID().uuidString).snowbreak")
+        if FileManager.default.fileExists(atPath: dst.path) { try? FileManager.default.removeItem(at: dst) }
+        try FileManager.default.copyItem(at: sourceURL, to: dst)
+        try? FileManager.default.setAttributes([.protectionKey: FileProtectionType.complete], ofItemAtPath: dst.path)
+        return dst
+    }
+    private func copyReplacing(from src: URL, to dst: URL) throws {
+        let tmp = dst.deletingLastPathComponent().appendingPathComponent(".tmp-\(UUID().uuidString)-\(dst.lastPathComponent)")
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        try FileManager.default.copyItem(at: src, to: tmp)
+        try? FileManager.default.setAttributes([.protectionKey: FileProtectionType.complete], ofItemAtPath: tmp.path)
+        if FileManager.default.fileExists(atPath: dst.path) {
+            _ = try FileManager.default.replaceItemAt(dst, withItemAt: tmp)
+        } else {
+            try FileManager.default.moveItem(at: tmp, to: dst)
+        }
+    }
     func commit(_ staged: URL,characterID:String = "Enya") throws {
         guard Self.supportedCharacters.contains(characterID) else{throw CompanionError.message("不支持的角色标识。")}
         guard staged.deletingLastPathComponent().standardizedFileURL == directory.standardizedFileURL,
               staged.lastPathComponent.hasPrefix("staged-") else { throw CompanionError.message("角色暂存路径无效。") }
-        let data = try Data(contentsOf:staged)
-        try data.write(to:savedFile(characterID),options:[.atomic,.completeFileProtection])
-        try data.write(to:current,options:[.atomic,.completeFileProtection])
+        try copyReplacing(from: staged, to: savedFile(characterID))
+        try copyReplacing(from: staged, to: current)
         try? FileManager.default.removeItem(at:staged)
+    }
+    func ensureSavedCopy(for characterID: String) throws {
+        guard hasCurrent, !savedCharacters.contains(characterID) else { return }
+        try copyReplacing(from: current, to: savedFile(characterID))
     }
 }
 
 final class SnowbreakScheme: NSObject, WKURLSchemeHandler {
+    struct ZipEntry {
+        let offset: Int
+        let compressed: Int
+        let original: Int
+        let method: UInt16
+    }
+    struct MappedArchive {
+        let path: String
+        let modTime: TimeInterval
+        let size: Int
+        let data: Data
+        let total: Int
+        let entries: [String: ZipEntry]
+    }
     let library: SnowbreakLibrary
+    private let lock = NSLock()
+    private var cached: MappedArchive?
     init(library:SnowbreakLibrary) { self.library = library }
+    func clearCache() { lock.lock(); cached = nil; lock.unlock() }
+
+    private func validPackageName(_ name: String) -> Bool {
+        name == "current.snowbreak" || name.range(of:"^staged-[A-Fa-f0-9-]{36}\\.snowbreak$",options:.regularExpression) != nil
+    }
+    private func resolvePackageFile(_ name: String) throws -> URL {
+        guard validPackageName(name) else { throw URLError(.badURL) }
+        let direct = library.directory.appendingPathComponent(name)
+        if FileManager.default.fileExists(atPath: direct.path) { return direct }
+        if name.hasPrefix("staged-"), library.hasCurrent { return library.current }
+        throw URLError(.fileDoesNotExist)
+    }
+    private static func readU16(_ bytes: UnsafeRawBufferPointer, _ offset: Int) -> UInt16 {
+        UInt16(bytes[offset]) | (UInt16(bytes[offset + 1]) << 8)
+    }
+    private static func readU32(_ bytes: UnsafeRawBufferPointer, _ offset: Int) -> UInt32 {
+        UInt32(bytes[offset]) | (UInt32(bytes[offset + 1]) << 8) | (UInt32(bytes[offset + 2]) << 16) | (UInt32(bytes[offset + 3]) << 24)
+    }
+    private func openMapped(_ name: String) throws -> MappedArchive {
+        let file = try resolvePackageFile(name)
+        let values = try file.resourceValues(forKeys:[.fileSizeKey, .contentModificationDateKey])
+        let size = values.fileSize ?? 0
+        guard size >= 22, size <= SnowbreakLibrary.maxPackageBytes else { throw URLError(.dataLengthExceedsMaximum) }
+        let mtime = values.contentModificationDate?.timeIntervalSince1970 ?? 0
+
+        lock.lock()
+        if let hit = cached, hit.path == file.path, hit.size == size, hit.modTime == mtime {
+            lock.unlock()
+            return hit
+        }
+        lock.unlock()
+
+        let data = try Data(contentsOf: file, options: .mappedIfSafe)
+        var entries: [String: ZipEntry] = [:]
+        var totalDecoded = 0
+
+        try data.withUnsafeBytes { raw in
+            let len = raw.count
+            var eocd = -1
+            let minPos = max(0, len - 65557)
+            var i = len - 22
+            while i >= minPos {
+                if Self.readU32(raw, i) == 0x06054b50 && i + 22 + Int(Self.readU16(raw, i + 20)) == len {
+                    eocd = i; break
+                }
+                i -= 1
+            }
+            guard eocd >= 0, Self.readU16(raw, eocd + 4) == 0, Self.readU16(raw, eocd + 6) == 0 else {
+                throw URLError(.cannotDecodeContentData)
+            }
+            let count = Int(Self.readU16(raw, eocd + 10))
+            let start = Int(Self.readU32(raw, eocd + 16))
+            let cdSize = Int(Self.readU32(raw, eocd + 12))
+            guard count > 0, count <= 1024, start + cdSize == eocd, Int(Self.readU16(raw, eocd + 8)) == count else {
+                throw URLError(.cannotDecodeContentData)
+            }
+            var pos = start
+            for _ in 0..<count {
+                guard pos + 46 <= eocd, Self.readU32(raw, pos) == 0x02014b50 else { throw URLError(.cannotDecodeContentData) }
+                let flags = Self.readU16(raw, pos + 8)
+                let method = Self.readU16(raw, pos + 10)
+                let compSize = Int(Self.readU32(raw, pos + 20))
+                let origSize = Int(Self.readU32(raw, pos + 24))
+                let nLen = Int(Self.readU16(raw, pos + 28))
+                let extraLen = Int(Self.readU16(raw, pos + 30))
+                let commentLen = Int(Self.readU16(raw, pos + 32))
+                let localOff = Int(Self.readU32(raw, pos + 42))
+                guard pos + 46 + nLen + extraLen + commentLen <= eocd else { throw URLError(.cannotDecodeContentData) }
+                let nameData = Data(bytesNoCopy: UnsafeMutableRawPointer(mutating: raw.baseAddress!.advanced(by: pos + 46)), count: nLen, deallocator: .none)
+                guard let entryName = String(data: nameData, encoding: .utf8),
+                      entryName == "manifest.json" || entryName.range(of:"^assets/[a-f0-9]{64}$",options:.regularExpression) != nil,
+                      entries[entryName] == nil else { throw URLError(.cannotDecodeContentData) }
+                guard (flags & 1) == 0, (method == 0 || method == 8), origSize <= 128*1024*1024 else { throw URLError(.cannotDecodeContentData) }
+                totalDecoded += origSize
+                guard totalDecoded <= SnowbreakLibrary.maxDecodedBytes else { throw URLError(.dataLengthExceedsMaximum) }
+                guard localOff + 30 <= start, Self.readU32(raw, localOff) == 0x04034b50 else { throw URLError(.cannotDecodeContentData) }
+                let ln = Int(Self.readU16(raw, localOff + 26))
+                let le = Int(Self.readU16(raw, localOff + 28))
+                let dataOff = localOff + 30 + ln + le
+                guard dataOff + compSize <= start else { throw URLError(.cannotDecodeContentData) }
+                entries[entryName] = ZipEntry(offset: dataOff, compressed: compSize, original: origSize, method: method)
+                pos += 46 + nLen + extraLen + commentLen
+            }
+            guard pos == eocd, entries["manifest.json"] != nil else { throw URLError(.cannotDecodeContentData) }
+        }
+
+        let mapped = MappedArchive(path: file.path, modTime: mtime, size: size, data: data, total: totalDecoded, entries: entries)
+        lock.lock(); cached = mapped; lock.unlock()
+        return mapped
+    }
+    private func extractEntry(_ archive: MappedArchive, name: String) throws -> Data {
+        guard let entry = archive.entries[name] else { throw URLError(.fileDoesNotExist) }
+        if entry.original == 0 { return Data() }
+        if entry.method == 0 {
+            return archive.data.subdata(in: entry.offset..<(entry.offset + entry.compressed))
+        }
+        var out = Data(count: entry.original + 64)
+        let decodedCount: Int = out.withUnsafeMutableBytes { dstBuf in
+            archive.data.withUnsafeBytes { srcBuf in
+                guard let dstPtr = dstBuf.bindMemory(to: UInt8.self).baseAddress,
+                      let srcBase = srcBuf.bindMemory(to: UInt8.self).baseAddress else { return 0 }
+                return compression_decode_buffer(dstPtr, entry.original + 64, srcBase.advanced(by: entry.offset), entry.compressed, nil, COMPRESSION_ZLIB)
+            }
+        }
+        guard decodedCount == entry.original else { throw URLError(.cannotDecodeContentData) }
+        out.count = decodedCount
+        return out
+    }
     func resource(_ url:URL) throws -> (Data,String) {
         guard url.scheme == "companion-snowbreak",url.host == "local",url.query == nil else { throw URLError(.badURL) }
         if ["/index.html","/host.js"].contains(url.path) {
             guard let root = Bundle.main.resourceURL?.appendingPathComponent("WebAssets") else { throw URLError(.fileDoesNotExist) }
             return (try Data(contentsOf:root.appendingPathComponent(url.lastPathComponent)),url.path.hasSuffix(".js") ? "application/javascript" : "text/html")
         }
+        let comps = url.pathComponents
+        // Streaming index: /pkg-index/<packageName>
+        if comps.count == 3, comps[1] == "pkg-index" {
+            let archive = try openMapped(comps[2])
+            let manifestData = try extractEntry(archive, name: "manifest.json")
+            let manifestObj = try JSONSerialization.jsonObject(with: manifestData)
+            let payload: [String: Any] = ["names": Array(archive.entries.keys), "total": archive.total, "manifest": manifestObj]
+            return (try JSONSerialization.data(withJSONObject: payload), "application/json")
+        }
+        // Streaming single asset: /pkg-entry/<packageName>/<sha256>
+        if comps.count == 4, comps[1] == "pkg-entry" {
+            let assetId = comps[3]
+            guard assetId.range(of:"^[a-f0-9]{64}$",options:.regularExpression) != nil else { throw URLError(.badURL) }
+            let archive = try openMapped(comps[2])
+            let assetData = try extractEntry(archive, name: "assets/" + assetId)
+            return (assetData, "application/octet-stream")
+        }
+        // Legacy full package route (memory-mapped, up to 1 GB)
         let name = url.lastPathComponent
-        guard url.path == "/package/"+name,
-              name == "current.snowbreak" || name.range(of:"^staged-[A-Fa-f0-9-]{36}\\.snowbreak$",options:.regularExpression) != nil else { throw URLError(.badURL) }
-        let file = library.directory.appendingPathComponent(name)
-        guard let size = try file.resourceValues(forKeys:[.fileSizeKey]).fileSize,size <= 256*1024*1024 else { throw URLError(.dataLengthExceedsMaximum) }
-        return (try Data(contentsOf:file),"application/octet-stream")
+        guard url.path == "/package/"+name else { throw URLError(.badURL) }
+        let file = try resolvePackageFile(name)
+        guard let size = try file.resourceValues(forKeys:[.fileSizeKey]).fileSize, size <= SnowbreakLibrary.maxPackageBytes else { throw URLError(.dataLengthExceedsMaximum) }
+        return (try Data(contentsOf:file, options:.mappedIfSafe),"application/octet-stream")
     }
     func webView(_ webView:WKWebView,start urlSchemeTask:WKURLSchemeTask) {
         do {
@@ -198,10 +375,36 @@ struct SnowbreakTouchEvent {
         interactionRevision += 1;activeAction = nil;ready = false;send(["type":"variant","id":id])
     }
 
-    init(library:SnowbreakLibrary = SnowbreakLibrary()) { self.library = library;self.savedCharacters=library.savedCharacters }
+    private var schemeHandler: SnowbreakScheme?
+    private var budgetObservers: [NSObjectProtocol] = []
+
+    init(library:SnowbreakLibrary = SnowbreakLibrary()) {
+        self.library = library
+        self.savedCharacters = library.savedCharacters
+        super.init()
+        let o1 = NotificationCenter.default.addObserver(forName: AppleHardwareBudget.modeChangedNotification, object: nil, queue: .main) { [weak self] note in
+            let reload = (note.userInfo?["reloadOnTierChange"] as? Bool) ?? false
+            Task { @MainActor in self?.applyHardwareBudget(reloadOnTierChange: reload) }
+        }
+        let o2 = NotificationCenter.default.addObserver(forName: AppleHardwareBudget.releaseMemoryNotification, object: nil, queue: .main) { [weak self] note in
+            let reload = (note.userInfo?["reload"] as? Bool) ?? false
+            Task { @MainActor in self?.releaseMemory(reload: reload) }
+        }
+        budgetObservers = [o1, o2]
+    }
+    deinit {
+        for o in budgetObservers { NotificationCenter.default.removeObserver(o) }
+    }
+    func releaseMemory(reload: Bool = false) {
+        schemeHandler?.clearCache()
+        URLCache.shared.removeAllCachedResponses()
+        send(["type":"releaseMemory","reload":reload])
+    }
     func makeView() -> WKWebView {
         let configuration = WKWebViewConfiguration()
-        configuration.setURLSchemeHandler(SnowbreakScheme(library:library),forURLScheme:"companion-snowbreak")
+        let handler = SnowbreakScheme(library:library)
+        schemeHandler = handler
+        configuration.setURLSchemeHandler(handler,forURLScheme:"companion-snowbreak")
         configuration.userContentController.add(self,name:"snowbreak")
         configuration.allowsInlineMediaPlayback = true
         // User-initiated native menu actions should be able to play local original WAVs.
@@ -215,18 +418,17 @@ struct SnowbreakTouchEvent {
     @discardableResult func importFile(_ url:URL) -> Bool {
         do {
             let access = url.startAccessingSecurityScopedResource();defer { if access { url.stopAccessingSecurityScopedResource() } }
-            var coordinationError:NSError?,readError:Error?,data:Data?
+            var coordinationError:NSError?,readError:Error?,stagedURL:URL?
             NSFileCoordinator().coordinate(readingItemAt:url,options:[],error:&coordinationError) { file in
                 do {
-                    let size = try file.resourceValues(forKeys:[.fileSizeKey]).fileSize ?? Int.max
-                    guard size <= 256*1024*1024 else { throw CompanionError.message("角色包超过256MB。") }
-                    data = try Data(contentsOf:file)
+                    stagedURL = try library.stageFile(file)
                 } catch { readError = error }
             }
             if let failure = coordinationError { throw failure }
             if let failure = readError { throw failure }
-            guard let data = data else { throw CompanionError.message("没有读到角色包。") }
-            staged = try library.stage(data);nonce = UUID().uuidString;ready = false;error = nil
+            guard let stagedURL = stagedURL else { throw CompanionError.message("没有读到角色包。") }
+            schemeHandler?.clearCache()
+            staged = stagedURL;nonce = UUID().uuidString;ready = false;error = nil
             UserDefaults.standard.set("snowbreak",forKey:"characterEngine")
             if pageReady { loadSelected() }
             return true
@@ -260,6 +462,7 @@ struct SnowbreakTouchEvent {
     private func loadSelected() {
         let file = staged ?? (library.hasCurrent ? library.current : nil)
         guard let file = file else { error = "请在设置中导入本地角色 .snowbreak 包。";return }
+        applyHardwareBudget()
         pushUniversalMotions()
         send(["type":"load","url":"companion-snowbreak://local/package/"+file.lastPathComponent,"nonce":nonce])
     }
@@ -286,8 +489,8 @@ struct SnowbreakTouchEvent {
             applyHardwareBudget();isEditing=false
             guard let identity=body["characterId"] as? String,SnowbreakLibrary.supportedCharacters.contains(identity) else {error="不支持的角色包。";return}
             do {
-                if staged == nil,library.hasCurrent,!library.savedCharacters.contains(identity){try Data(contentsOf:library.current).write(to:library.savedFile(identity),options:[.atomic,.completeFileProtection])}
-                if let staged = staged { try library.commit(staged,characterID:identity);self.staged = nil }
+                if staged == nil { try library.ensureSavedCopy(for: identity) }
+                if let staged = staged { try library.commit(staged,characterID:identity);self.staged = nil;schemeHandler?.clearCache() }
                 characterID=identity;savedCharacters=library.savedCharacters
                 let variants = body["variants"] as? [[String:String]] ?? []
                 let allowedVariants: Set<String> = ["standing_normal","standing_nude","standing_underwear","standing_lv2","interaction_normal","interaction_nude","interaction_underwear","interaction_lv2"]
@@ -360,7 +563,7 @@ struct SnowbreakTouchEvent {
     func stop() { interactionRevision += 1;send(["type":"stop"]);activeAction = nil }
     func pause() { paused = true;isEditing=false;interactionRevision += 1;send(["type":"pause"]);activeAction = nil }
     func resume() { paused = false;if needsRenderRecovery {recoverRenderProcess();return};applyHardwareBudget();send(["type":"resume"]) }
-    func applyHardwareBudget(){send(["type":"hardwareBudget","thermal":AppleHardwareBudget.thermal,"lowPower":ProcessInfo.processInfo.isLowPowerModeEnabled])}
+    func applyHardwareBudget(reloadOnTierChange: Bool = false){send(["type":"hardwareBudget","mode":AppleHardwareBudget.currentMode.webMode,"thermal":AppleHardwareBudget.thermal,"lowPower":ProcessInfo.processInfo.isLowPowerModeEnabled,"reloadOnTierChange":reloadOnTierChange])}
     func editTouch() { interactionRevision += 1;send(["type":"edit"]) }
     func editModel(){interactionRevision += 1;isEditing=true;send(["type":"modelEdit"])}
     func editDance(){send(["type":"danceEdit"])}
@@ -369,7 +572,7 @@ struct SnowbreakTouchEvent {
     func gaze(x:CGFloat,y:CGFloat) { if ready { send(["type":"gaze","x":Double(x),"y":Double(y)]) } }
     func selectCharacter(_ identity:String){
         guard SnowbreakLibrary.supportedCharacters.contains(identity),identity != characterID else{return}
-        do {let file=library.savedFile(identity);guard FileManager.default.fileExists(atPath:file.path) else{return};interactionRevision+=1;pause();paused=false;staged=try library.stage(Data(contentsOf:file));nonce=UUID().uuidString;ready=false;error=nil;loadSelected()}catch{self.error=error.localizedDescription}
+        do {let file=library.savedFile(identity);guard FileManager.default.fileExists(atPath:file.path) else{return};interactionRevision+=1;pause();paused=false;schemeHandler?.clearCache();staged=try library.stageFile(file);nonce=UUID().uuidString;ready=false;error=nil;loadSelected()}catch{self.error=error.localizedDescription}
     }
     func editLighting() { send(["type":"lightingEdit"]) }
     func editFrame() { interactionRevision += 1;isEditing=true;send(["type":"frameEdit"]) }

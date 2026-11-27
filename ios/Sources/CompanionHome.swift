@@ -312,6 +312,7 @@ struct CompanionHome: View {
         .onChange(of:stage.name){_ in greetIfReady()}
         .onReceive(NotificationCenter.default.publisher(for:ProcessInfo.thermalStateDidChangeNotification)){_ in snowbreak.applyHardwareBudget();stage.applyHardwareBudget()}
         .onReceive(NotificationCenter.default.publisher(for:Notification.Name.NSProcessInfoPowerStateDidChange)){_ in snowbreak.applyHardwareBudget();stage.applyHardwareBudget()}
+        .onReceive(NotificationCenter.default.publisher(for:AppleHardwareBudget.modeChangedNotification)){_ in stage.applyHardwareBudget()}
         .task {
             resumeStage()
             DailyInteractionTracker.shared.autoGenerateIfDue(store: store)

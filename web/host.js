@@ -1,6 +1,6 @@
 import {motionTime,retimeDance,createDanceControls} from './dance-controls.js';
 import {createLightingEditor} from './lighting-editor.js';
-import {openSkinArchive} from './source/snowbreak/archive.js';
+import {openSkinArchive,openStreamingSkinArchive} from './source/snowbreak/archive.js';
 import {createSnowbreakRenderer} from './source/snowbreak/renderer.js';
 import {createSnowbreakSampleAdapter} from './source/snowbreak/action-adapter.js';
 import {createOriginalVoiceCatalog} from './source/snowbreak/voice.js';
@@ -10,7 +10,7 @@ import {FULL_FRAME,createPresentationEditor} from './presentation-editor.js';
 
 let aiControlledTouch=true;
 const canvas=document.querySelector('#stage'), status=document.querySelector('#status'), editorHost=document.querySelector('#editor');
-let collection=null,pausedScene=null,loading=Promise.resolve(),hardwareBudget={},originalLanguage='Chinese',universalMotions=null;
+let collection=null,lastPackageUrl=null,pausedScene=null,loading=Promise.resolve(),hardwareBudget={},originalLanguage='Chinese',universalMotions=null;
 let generation=0,nonce='',runtime,display,adapter,voices,editor,presentation,modelEditor,lighting,learned,last=0,paused=false,voiceEnabled=true;
 const danceControls=createDanceControls(value=>retimeDance(learned,value.tempo,performance.now()));
 const finishPaint=document.createElement('button');finishPaint.id='finishPaint';finishPaint.hidden=true;
@@ -39,9 +39,14 @@ async function performLoad(url,id,variant,ticket){
   if(ticket!==generation)return;
   let opened,nextDisplay,nextVoices;
   try{
-    if(variant){if(!collection)throw new Error('请先导入角色整合包');opened=await collection.selectVariant(variant);}else{collection=null;const response=await fetch(url);if(!response.ok)throw new Error('本地角色包读取失败');opened=await openSkinArchive(new Uint8Array(await response.arrayBuffer()));}
+    if(variant){if(!collection)throw new Error('请先导入角色整合包');opened=await collection.selectVariant(variant);}else{
+      collection=null;lastPackageUrl=url;
+      const streamMatch=typeof url==='string'?url.match(/^companion-snowbreak:\/\/local\/package\/([A-Za-z0-9._-]+)$/):null;
+      if(streamMatch){opened=await openStreamingSkinArchive(streamMatch[1]);}
+      else{const response=await fetch(url);if(!response.ok)throw new Error('本地角色包读取失败');opened=await openSkinArchive(new Uint8Array(await response.arrayBuffer()));}
+    }
     if(!/^[A-Za-z0-9_-]{1,64}$/.test(opened.manifest.characterId))throw new Error('不支持的本地角色包');
-    nextDisplay=await createSnowbreakRenderer(canvas,opened.runtime,{isCurrent:()=>ticket===generation,universalMotions});
+    nextDisplay=await createSnowbreakRenderer(canvas,opened.runtime,{isCurrent:()=>ticket===generation,universalMotions,performanceMode:hardwareBudget.mode||null});
     nextVoices=opened.runtime.getAsset('voiceCatalog')?await createOriginalVoiceCatalog(opened.runtime):{
       getAudio:()=>null,snapshot:()=>({available:[]}),dispose(){}
     };
@@ -100,7 +105,27 @@ async function performLoad(url,id,variant,ticket){
 }
 
 async function command(value){
-  if(value.type==='hardwareBudget'){hardwareBudget={thermal:value.thermal,lowPower:value.lowPower};display?.setRenderBudget(hardwareBudget);return;}
+  if(value.type==='hardwareBudget'){
+    const prevMode=hardwareBudget.mode;
+    hardwareBudget={thermal:value.thermal,lowPower:value.lowPower,...(value.mode?{mode:value.mode}:{})};
+    if(value.mode){try{localStorage.setItem('snowRenderMode',value.mode);}catch{}}
+    display?.setRenderBudget(hardwareBudget);
+    // If texture tier changed between powersave and 4K mode while loaded, reload cleanly so new texture budget takes effect.
+    if(display&&value.reloadOnTierChange&&prevMode&&value.mode&&prevMode!==value.mode){
+      if(collection?.selection?.id)return load(null,nonce,collection.selection.id);
+      if(lastPackageUrl)return load(lastPackageUrl,nonce);
+    }
+    return;
+  }
+  if(value.type==='releaseMemory'){
+    voices?.stop?.();
+    display?.releaseCache?.();
+    if(value.reload){
+      if(collection?.selection?.id)return load(null,nonce,collection.selection.id);
+      if(lastPackageUrl)return load(lastPackageUrl,nonce);
+    }
+    return;
+  }
   if(value.type==='universalMotions'){
     universalMotions=value.catalog||null;
     if(display){

@@ -1,10 +1,10 @@
 import { safeArchivePath, validatePuppetAsset, normalizeAsset } from './schema.js';
 import { sha256Hex } from './sha256.js';
-const LIMIT = { entries: 256, file: 32*1024*1024, total: 128*1024*1024, archive: 64*1024*1024, pixels: 64000000 };
+const LIMIT = { entries: 1024, file: 128*1024*1024, total: 128*1024*1024, archive: 64*1024*1024, pixels: 64000000 };
 const decoder = new TextDecoder('utf-8', { fatal:true });
 export function inspectArchive(bytes, allowedPath = /^(manifest\.json|LICENSE\.txt|layers\/[a-z0-9_.-]+\.png)$/i,archiveLimit=LIMIT.archive,decodedLimit=LIMIT.total) {
-  if(![LIMIT.total,192*1024*1024,384*1024*1024].includes(decodedLimit))throw new Error('资源包解压上限非法');
-  if (![LIMIT.archive,128*1024*1024,256*1024*1024].includes(archiveLimit)||!(bytes instanceof Uint8Array) || bytes.length < 22 || bytes.length > archiveLimit) throw new Error('资源包大小非法');
+  if(![LIMIT.total,192*1024*1024,384*1024*1024,1536*1024*1024].includes(decodedLimit))throw new Error('资源包解压上限非法');
+  if (![LIMIT.archive,128*1024*1024,256*1024*1024,1024*1024*1024].includes(archiveLimit)||!(bytes instanceof Uint8Array) || bytes.length < 22 || bytes.length > archiveLimit) throw new Error('资源包大小非法');
   const d = new DataView(bytes.buffer,bytes.byteOffset,bytes.byteLength);
   let eocd=-1;
   for(let i=bytes.length-22;i>=Math.max(0,bytes.length-65557);i--) if(d.getUint32(i,true)===0x06054b50 && i+22+d.getUint16(i+20,true)===bytes.length){eocd=i;break;}

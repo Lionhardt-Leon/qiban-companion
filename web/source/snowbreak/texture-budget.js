@@ -1,13 +1,19 @@
 // Estimate RGBA8 plus the mip chain before decoding. Keep source files intact.
-export function planTextureBudget(config,runtime,requested=4096){
- const limit=requested===2048?2048:4096,budgetBytes=(runtime.current.characterId==='Fenny'?256:320)*(limit===2048?.5:1)*1024**2,entries=new Map();
+export function planTextureBudget(config,runtime,requested=4096,profile=null){
+ const isPerf=profile==='quality'||profile==='performance';
+ const isBattery=profile==='battery'||profile==='powersave';
+ const limit=isBattery?2048:(requested===2048?2048:4096);
+ const baseMiB=isPerf?1024:isBattery?192:(profile==='adaptive'||profile==='balanced')?512:(runtime.current.characterId==='Fenny'?256:320);
+ const budgetBytes=baseMiB*(limit===2048&&!isBattery?.5:1)*1024**2,entries=new Map();
+ const normalCap=isPerf?2048:isBattery?512:1024;
+ const propCap=isPerf?2048:isBattery?512:1024;
  for(const m of config?.materials||[]){
   if(m.renderState?.opacity===0)continue;
   for(const [field,normal] of [['diffuseAssetId',false],['normalAssetId',true]]){
    const id=m[field];if(!id)continue;const key=(normal?'normal:':'')+id,info=runtime.getAsset('texture_'+id)?.data;
    if(!info||![info.width,info.height].every(n=>Number.isInteger(n)&&n>0&&n<=4096))throw new Error('Missing texture dimensions');
-   const prop=/^(ma_|house_)/i.test(m.name),priority=normal?10:prop?5:/head|face|eye/i.test(m.name)?1000:/body00/i.test(m.name)?500:/body01/i.test(m.name)?400:/hair/i.test(m.name)?120:60;
-   const cap=Math.min(limit,normal||prop?1024:4096),existing=entries.get(key);
+   const prop=/^(ma_|house_)/i.test(m.name),priority=normal?10:prop?(isPerf?150:5):/head|face|eye/i.test(m.name)?1000:/body00/i.test(m.name)?500:/body01/i.test(m.name)?400:/hair/i.test(m.name)?120:60;
+   const cap=Math.min(limit,normal?normalCap:prop?propCap:4096),existing=entries.get(key);
    if(existing){existing.priority=Math.max(existing.priority,priority);existing.cap=Math.max(existing.cap,cap);continue;}
    entries.set(key,{key,id,normal,width:info.width,height:info.height,cap,priority});
   }

@@ -316,10 +316,63 @@ struct SettingsView: View {
     @State private var presetName = ""
     @State private var selectedPresetID: UUID? = nil
     @State private var presetNotice = ""
+    @AppStorage(AppleHardwareBudget.modeDefaultsKey) private var performanceModeRaw = PerformanceMode.balanced.rawValue
+    @State private var memoryFootprintMB = AppleHardwareBudget.memoryFootprintMB
+    @State private var memoryReleaseNotice = ""
+
+    private var selectedPerformanceMode: PerformanceMode {
+        PerformanceMode(rawValue: performanceModeRaw) ?? .balanced
+    }
 
     var body: some View {
         NavigationStack {
             Form {
+                Section("性能与内存调度") {
+                    Picker("运行模式", selection: $performanceModeRaw) {
+                        ForEach(PerformanceMode.allCases) { mode in
+                            Text(mode.shortTitle).tag(mode.rawValue)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .onChange(of: performanceModeRaw) { next in
+                        let mode = PerformanceMode(rawValue: next) ?? .balanced
+                        NotificationCenter.default.post(name: AppleHardwareBudget.modeChangedNotification, object: nil, userInfo: ["mode": mode.rawValue, "reloadOnTierChange": true])
+                        memoryFootprintMB = AppleHardwareBudget.memoryFootprintMB
+                        memoryReleaseNotice = "已切换至「\(mode.title)」，帧率与显存预算已即时生效。"
+                    }
+                    Text(selectedPerformanceMode.summary)
+                        .font(.caption).foregroundStyle(.secondary)
+                    HStack {
+                        Text("主进程内存：\(String(format: "%.1f", memoryFootprintMB)) MB")
+                        Spacer()
+                        Text("热状态：\(AppleHardwareBudget.thermalLabel)")
+                    }
+                    .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                    Text("单角色/互动场景包上限已提升至 1 GB（采用原生内存映射流式按需解压，加载大场景不占满 JS 堆内存）。")
+                        .font(.caption2).foregroundStyle(.secondary)
+                    HStack(spacing: 12) {
+                        Button("释放缓存") {
+                            URLCache.shared.removeAllCachedResponses()
+                            NotificationCenter.default.post(name: AppleHardwareBudget.releaseMemoryNotification, object: nil, userInfo: ["reload": false])
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+                                memoryFootprintMB = AppleHardwareBudget.memoryFootprintMB
+                                memoryReleaseNotice = "已清理网络、贴图索引与渲染临时缓存。"
+                            }
+                        }
+                        Spacer()
+                        Button("重建渲染释放显存") {
+                            URLCache.shared.removeAllCachedResponses()
+                            NotificationCenter.default.post(name: AppleHardwareBudget.releaseMemoryNotification, object: nil, userInfo: ["reload": true])
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                                memoryFootprintMB = AppleHardwareBudget.memoryFootprintMB
+                                memoryReleaseNotice = "已重建 3D 渲染管线并释放历史显存占用。"
+                            }
+                        }
+                    }
+                    if !memoryReleaseNotice.isEmpty {
+                        Text(memoryReleaseNotice).font(.caption).foregroundStyle(Color.mint)
+                    }
+                }
                 Section {
                     NavigationLink { ServiceSettingsView() } label: {
                         Label("独立功能接口", systemImage: "network")
@@ -353,6 +406,7 @@ struct SettingsView: View {
             .onAppear {
                 settings = store.archive.settings
                 presets = APIPresetStore.load()
+                memoryFootprintMB = AppleHardwareBudget.memoryFootprintMB
                 if let match = presets.first(where: { $0.endpoint == settings.endpoint && $0.model == settings.model }) {
                     selectedPresetID = match.id
                     presetName = match.name

@@ -1,7 +1,7 @@
 import {sha256Hex} from '../puppet2d/sha256.js';
 import {inspectTexture} from '../../texture-format.js';
 import {decodeAnimation} from './animation-codec.js';
-const LIMITS={geometry:20,animation:32,texture:16,audio:8,config:2};
+const LIMITS={geometry:64,animation:64,texture:32,audio:16,config:8};
 // readAsset resolves an opaque local ID; manifests never choose a URL or path.
 export function createVerifiedAssetAdapter(readAsset){
   if(typeof readAsset!=='function')throw new Error('Local asset reader required');

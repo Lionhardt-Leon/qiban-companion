@@ -59,5 +59,11 @@ export function installCharacterLights(scene,renderer){
   key.color.set(0xe9f1ff).lerp(new THREE.Color(0xffe4c7),state.warmth);scene.environmentIntensity=state.reflection;return {...state};
  }
  function frame(box){const center=box.getCenter(new THREE.Vector3()),radius=Math.max(1.5,box.getSize(new THREE.Vector3()).length()*.7);key.target.position.copy(center);key.position.copy(center).add(new THREE.Vector3(-2,4,5).normalize().multiplyScalar(radius*3));Object.assign(key.shadow.camera,{left:-radius,right:radius,top:radius,bottom:-radius,near:.1,far:radius*6});key.shadow.camera.updateProjectionMatrix();key.target.updateMatrixWorld();}
- return {set,frame,setBudget(value){shadowCap=value.thermal==='critical'?512:value.thermal==='serious'||value.lowPower?1024:2048;resizeShadow(Math.min(state.shadowSize,shadowCap));},snapshot:()=>({...state,environment:true,shadowMapSize:key.shadow.mapSize.x}),dispose(){scene.environment=null;environment.dispose();key.shadow.dispose();key.target.removeFromParent();for(const light of [hemi,key,fill,rim])light.removeFromParent();}};
+ return {set,frame,setBudget(value){
+  const isPerf=value.mode==='quality'||value.mode==='performance';
+  const isBattery=value.mode==='battery'||value.mode==='powersave';
+  shadowCap=isPerf?(value.thermal==='critical'?1024:2048):isBattery?512:(value.thermal==='critical'?512:value.thermal==='serious'||value.lowPower?1024:2048);
+  const desired=isPerf?2048:isBattery?512:state.shadowSize;
+  resizeShadow(Math.min(desired,shadowCap));
+ },snapshot:()=>({...state,environment:true,shadowMapSize:key.shadow.mapSize.x}),dispose(){scene.environment=null;environment.dispose();key.shadow.dispose();key.target.removeFromParent();for(const light of [hemi,key,fill,rim])light.removeFromParent();}};
 }
