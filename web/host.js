@@ -201,7 +201,16 @@ async function command(value){
   if(value.type==='speechLevel'){display.embodiment.setSpeechLevel(value.value);return;}
   if(value.type==='gaze'){display.setGaze(value.x,value.y);return;}
   if(value.type==='pause'){if(paused)return;voices?.stop?.();modelEditor?.close();danceControls.close();const suspended=adapter.snapshot();pausedScene=suspended.sceneId?{id:suspended.sceneId,time:suspended.sceneTime}:null;display.sceneInteractions.suspend();display.embodiment.reset();display.resetSenses();learned=null;paused=true;lighting?.close();presentation?.close();canvas.dataset.snowbreakPaused='true';adapter.stop('background');closeEditor();return;}
-  if(value.type==='resume'){if(!paused)return;paused=false;canvas.dataset.snowbreakPaused='false';last=performance.now();if(pausedScene){adapter.enterScene(pausedScene.id,pausedScene.time);pausedScene=null;}else adapter.enterStandby();return;}
+  if(value.type==='resume'){
+    const wasPaused=paused;
+    paused=false;canvas.dataset.snowbreakPaused='false';last=performance.now();
+    display?.kickLoop?.();
+    if(wasPaused||adapter.snapshot().status==='stopped'){
+      if(pausedScene){adapter.enterScene(pausedScene.id,pausedScene.time);pausedScene=null;}
+      else adapter.enterStandby();
+    }
+    return;
+  }
   if(value.type==='stop'){display.embodiment.reset();if(learned){learned.stop=performance.now();return;}adapter.stop();adapter.enterStandby();return;}
   if(value.type==='officialTouchPoints'){const count=display.sceneInteractions.togglePoints();if(!count)emit({type:'notice',message:'当前包／场景没有已移植的原作触点；互动4、5需使用新版互动包。'});return;}
   if(value.type==='edit'){learned=null;presentation.close();if(editorHost.classList.contains('open')||!finishPaint.hidden)closeEditor();else editorHost.classList.add('open');return;}

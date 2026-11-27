@@ -10,10 +10,14 @@ export function createLearnedMotions(root,camera,config,stance,extraConfig=null)
  }
  const standing=stance==='standing';
  const get=name=>{const hits=[];root.traverse(b=>{if(b.isBone&&b.name===name)hits.push(b);});if(hits.length!==1)throw new Error('Learned motion bone missing/ambiguous: '+name);return hits[0];};
- const head=get('Bip001-Head'),chest=root.getObjectByName('Bip001-Spine3')||root.getObjectByName('Bip001-Spine2')||get('Bip001-Spine'),chains={};
+ const opt=name=>{const hits=[];root.traverse(b=>{if(b.isBone&&b.name===name)hits.push(b);});return hits.length===1?hits[0]:null;};
+ const head=opt('Bip001-Head')||opt('Bone_head');if(!head)return {available:()=>[],apply(){},snapshot:()=>({available:false})};
+ const chest=opt('Bip001-Spine3')||opt('Bip001-Spine2')||opt('Bip001-Spine');if(!chest)return {available:()=>[],apply(){},snapshot:()=>({available:false})};
+ const chains={};
  for(const [key,side] of [['left','L'],['right','R']]){
-  const upper=get(`Bip001-${side}-UpperArm`),lower=get(`Bip001-${side}-Forearm`),hand=get(`Bip001-${side}-Hand`);
-  if(lower.parent!==upper||hand.parent!==lower)throw new Error('Learned arm binding mismatch');chains[key]={upper,lower,hand};
+  const upper=opt(`Bip001-${side}-UpperArm`),lower=opt(`Bip001-${side}-Forearm`),hand=opt(`Bip001-${side}-Hand`);
+  if(!upper||!lower||!hand||lower.parent!==upper||hand.parent!==lower)return {available:()=>[],apply(){},snapshot:()=>({available:false})};
+  chains[key]={upper,lower,hand};
  }
  const pos=b=>b.getWorldPosition(new THREE.Vector3());
  root.updateWorldMatrix(true,true);
@@ -47,8 +51,10 @@ export function createLearnedMotions(root,camera,config,stance,extraConfig=null)
    clips.set(c.id,{...c,kind,arms,channels,duration:(c.frames-1)/c.fps});
   }
  }
- const digitsBySide=Object.fromEntries([['left','L'],['right','R']].map(([side,letter])=>[side,Array.from({length:5},(_,i)=>[get(`Bip001-${letter}-Finger${i}`),get(`Bip001-${letter}-Finger${i}1`),get(`Bip001-${letter}-Finger${i}2`)])]));
- const pelvis=standing?get('Bip001-Pelvis'):null,legs=standing?Object.fromEntries([['left','L'],['right','R']].map(([side,l])=>[side,{thigh:get(`Bip001-${l}-Thigh`),calf:get(`Bip001-${l}-Calf`),foot:get(`Bip001-${l}-Foot`),toe:get(`Bip001-${l}-Toe0`)}])):{};
+ const digitsBySide=Object.fromEntries([['left','L'],['right','R']].map(([side,letter])=>[side,Array.from({length:5},(_,i)=>[opt(`Bip001-${letter}-Finger${i}`),opt(`Bip001-${letter}-Finger${i}1`),opt(`Bip001-${letter}-Finger${i}2`)])]));
+ const pelvis=standing?opt('Bip001-Pelvis'):null;
+ const legs=standing?Object.fromEntries([['left','L'],['right','R']].map(([side,l])=>[side,{thigh:opt(`Bip001-${l}-Thigh`),calf:opt(`Bip001-${l}-Calf`),foot:opt(`Bip001-${l}-Foot`),toe:opt(`Bip001-${l}-Toe0`)}])):{};
+ const hasFullLegs=!!pelvis&&Object.values(legs).every(l=>l.thigh&&l.calf&&l.foot&&l.calf.parent===l.thigh&&l.foot.parent===l.calf);
  let diagnostics={available:true,mappedArmBones:4,mappedHeadBones:1,limited:0,legWrites:0,fingerWrites:0};
  function basis(){
   const right=pos(chains.right.upper).sub(pos(chains.left.upper)).normalize(),up=pos(head).sub(pos(chest));up.addScaledVector(right,-up.dot(right)).normalize();
@@ -57,7 +63,7 @@ export function createLearnedMotions(root,camera,config,stance,extraConfig=null)
  }
  const solved=new Map();let lastClip=null,lastTime=-1;
  function apply(id,time,weight,options={}){
-  const clip=clips.get(id);if(!clip||weight<=0)return;const fullBody=clip.kind==='standing-dance',amplitude=fullBody&&Number.isFinite(options.amplitude)?THREE.MathUtils.clamp(options.amplitude,.5,1.2):1;diagnostics.fingerWrites=0;diagnostics.armWrites=0;diagnostics.chestWrites=0;diagnostics.workspaceAdjusted=0;
+  const clip=clips.get(id);if(!clip||weight<=0)return;const fullBody=clip.kind==='standing-dance'&&hasFullLegs,amplitude=fullBody&&Number.isFinite(options.amplitude)?THREE.MathUtils.clamp(options.amplitude,.5,1.2):1;diagnostics.fingerWrites=0;diagnostics.armWrites=0;diagnostics.chestWrites=0;diagnostics.workspaceAdjusted=0;
   if(id!==lastClip||time<=lastTime||time-lastTime>.2)solved.clear();lastClip=id;lastTime=time;
   root.updateWorldMatrix(true,true);let body=basis();const f=THREE.MathUtils.clamp(time*clip.fps,0,clip.frames-1),lo=Math.floor(f),hi=Math.min(lo+1,clip.frames-1),t=f-lo;
   function channel(key){const c=clip.channels[key];if(!c)return null;
@@ -121,19 +127,21 @@ export function createLearnedMotions(root,camera,config,stance,extraConfig=null)
    const directions=clip.kind==='seated-dance'?seatedDirections(chain,upper,lower,side):{upper:body.vector(upper),lower:body.vector(lower)};
    aim(chain.upper,chain.lower,directions.upper,120,armWeight);aim(chain.lower,chain.hand,directions.lower,170,armWeight);diagnostics.armWrites+=2;
    const widthChannel=channel(side+'HandWidth'),forwardChannel=channel(side+'HandForward');
+   const hasHandDigits=digits[1]?.[0]&&digits[2]?.[0]&&digits[4]?.[0];
    function handFrame(){const width=pos(digits[1][0]).sub(pos(digits[4][0])).normalize(),forward=pos(digits[2][0]).sub(pos(chain.hand));forward.addScaledVector(width,-forward.dot(width)).normalize();return new THREE.Matrix4().makeBasis(width,forward,new THREE.Vector3().crossVectors(width,forward).normalize());}
-   if(!widthChannel||!forwardChannel)continue;
+   if(!widthChannel||!forwardChannel||!hasHandDigits)continue;
    root.updateWorldMatrix(true,true);const width=body.vector(widthChannel).normalize(),forward=body.vector(forwardChannel);forward.addScaledVector(width,-forward.dot(width)).normalize();
    const desiredFrame=new THREE.Matrix4().makeBasis(width,forward,new THREE.Vector3().crossVectors(width,forward).normalize()),worldDelta=desiredFrame.multiply(handFrame().invert()),hand=chain.hand;
    const parent=new THREE.Matrix4().extractRotation(hand.parent.matrixWorld),localDelta=parent.clone().invert().multiply(worldDelta).multiply(parent),reference=hand.quaternion.clone(),desired=new THREE.Quaternion().setFromRotationMatrix(localDelta).multiply(reference).normalize();
    bounded(hand,reference,desired,clip.kind==='greeting'?110:clip.kind==='seated-dance'?75:110,armWeight*(clip.kind==='seated-dance'?.7:1));hand.updateWorldMatrix(false,true);
    for(let digit=0;digit<5;digit++)for(let segment=0;segment<3;segment++){
+    const bone=digits[digit]?.[segment];if(!bone)continue;
     const value=channel(`${side}Finger${digit}_${segment}`);if(!value)continue;
     const direction=new THREE.Vector3(...value).normalize(),previous=segment?new THREE.Vector3(...channel(`${side}Finger${digit}_${segment-1}`)).normalize():new THREE.Vector3(0,1,0);
     let curl=THREE.MathUtils.clamp(Math.atan2(-direction.z,Math.max(.1,direction.y))-Math.atan2(-previous.z,Math.max(.1,previous.y)),-.15,digit===0?.45:1.1),spread=segment===0&&digit!==0?THREE.MathUtils.clamp(Math.atan2(direction.x,direction.y),-.3,.3):0;
     const exportedCurl=channel(`${side}Curl${digit}_${segment}`),exportedSpread=channel(`${side}Spread${digit}`);if(exportedCurl)curl=exportedCurl[0];if(segment===0&&digit!==0&&exportedSpread)spread=exportedSpread[0];
     if(clip.kind==='peace'){curl=digit===1||digit===2?.02:digit===0?.4:.95;if(segment===0)spread=digit===1?.14:digit===2?-.08:0;}
-    const sign=side==='left'?-1:1,bone=digits[digit][segment],base=bone.quaternion.clone(),bind=new THREE.Quaternion().fromArray(bone.userData.bindLocalQuaternion||base.toArray());
+    const sign=side==='left'?-1:1,base=bone.quaternion.clone(),bind=new THREE.Quaternion().fromArray(bone.userData.bindLocalQuaternion||base.toArray());
     const target=bind.multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0,0,1),spread*sign)).multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0,1,0),curl*sign));bone.quaternion.copy(base).slerp(target,weight).normalize();diagnostics.fingerWrites++;
    }
   }

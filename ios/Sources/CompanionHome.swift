@@ -403,16 +403,46 @@ struct CompanionHome: View {
             DailyInteractionTracker.shared.autoGenerateIfDue(store: store)
         }
         .onDisappear { localVisionTicket=UUID();localVisionBusy=false;waitingBodyAction=nil;clearTouches();camera.stop();ar.stop();senses.suspend();speech.stop();stage.stop();snowbreak.pause();portrait.pause() }
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
+            guard sheet == nil else { return }
+            resumeStage()
+            if isSnowbreak {
+                Task { @MainActor in
+                    try? await Task.sleep(nanoseconds: 180_000_000)
+                    guard sheet == nil, scenePhase == .active else { return }
+                    snowbreak.ensureRunning()
+                }
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.willEnterForegroundNotification)) { _ in
+            guard sheet == nil else { return }
+            resumeStage()
+        }
         .onChange(of: scenePhase) { phase in
             callManager.handleScenePhase(phase)
-            if phase == .active, sheet == nil {
-                resumeStage()
-                DailyInteractionTracker.shared.autoGenerateIfDue(store: store)
-            }
-            else {
+            switch phase {
+            case .active:
+                if sheet == nil {
+                    resumeStage()
+                    if isSnowbreak {
+                        Task { @MainActor in
+                            try? await Task.sleep(nanoseconds: 180_000_000)
+                            guard sheet == nil, scenePhase == .active else { return }
+                            snowbreak.ensureRunning()
+                        }
+                    }
+                    DailyInteractionTracker.shared.autoGenerateIfDue(store: store)
+                }
+            case .inactive:
+                // Pulling down Notification Center / Control Center triggers .inactive while app stays visible;
+                // do NOT pause the 3D WebGL renderer so dismissing the shade never freezes the character!
+                clearTouches()
+            case .background:
                 clearTouches();camera.stop();ar.pauseSession();senses.suspend()
                 if !(callManager.active && callManager.mode == .fullPhone) { speech.stop() }
                 stage.stop();snowbreak.pause();portrait.pause()
+            @unknown default:
+                break
             }
         }
         .overlay { if sheet == nil { VoiceCallOverlay() } }

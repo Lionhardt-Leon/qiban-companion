@@ -603,8 +603,9 @@ struct SnowbreakTouchEvent {
         send(["type":"sample","id":String(id.dropFirst("snowbreak_".count)),"withVoice":withVoice,"automatic":automatic])
     }
     func stop() { interactionRevision += 1;send(["type":"stop"]);activeAction = nil }
-    func pause() { paused = true;isEditing=false;interactionRevision += 1;send(["type":"pause"]);activeAction = nil }
+    func pause() { paused = true;isEditing=false;isInteracting=false;interactionRevision += 1;send(["type":"pause"]);activeAction = nil }
     func resume() { paused = false;if needsRenderRecovery {recoverRenderProcess();return};applyHardwareBudget();send(["type":"resume"]) }
+    func ensureRunning() { guard !paused, pageReady else { return }; if needsRenderRecovery { recoverRenderProcess(); return }; send(["type":"resume"]) }
     func applyHardwareBudget(reloadOnTierChange: Bool = false){send(["type":"hardwareBudget","mode":AppleHardwareBudget.currentMode.webMode,"thermal":AppleHardwareBudget.thermal,"lowPower":ProcessInfo.processInfo.isLowPowerModeEnabled,"reloadOnTierChange":reloadOnTierChange])}
     func editTouch() { interactionRevision += 1;send(["type":"edit"]) }
     func editModel(){interactionRevision += 1;isEditing=true;send(["type":"modelEdit"])}

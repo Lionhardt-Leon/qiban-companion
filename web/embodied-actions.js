@@ -5,7 +5,7 @@ export function createEmbodiedActions(root,setYaw,frameYaw=()=>0){
   const upper=root.getObjectByName(`Bip001-${l}-UpperArm`),lower=root.getObjectByName(`Bip001-${l}-Forearm`),hand=root.getObjectByName(`Bip001-${l}-Hand`);
   if(upper?.isBone&&lower?.parent===upper&&hand?.parent===lower)chains[side]={upper,lower,hand};
  }
- const head=root.getObjectByName('Bip001-Head'),eyes=[],skeletons=new Set();root.traverse(m=>{if(m.isSkinnedMesh)skeletons.add(m.skeleton);});
+ const head=root.getObjectByName('Bip001-Head')||root.getObjectByName('Bone_head'),eyes=[],skeletons=new Set();root.traverse(m=>{if(m.isSkinnedMesh)skeletons.add(m.skeleton);});
  root.traverse(m=>{if(m.isMesh&&m.morphTargetInfluences){
   const d=m.morphTargetDictionary||{};
   const lIdx=d.L_Eye_close??d.L_eye_close??d.eyecloseL??d.L_Eye_close_Spcl_Ty_neg_1;
