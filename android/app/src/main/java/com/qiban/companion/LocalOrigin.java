@@ -31,7 +31,7 @@ final class LocalOrigin {
         return PackLibrary.SUPPORTED_CHARACTERS.contains(base) || base.matches("staged-[a-f0-9-]+");
     }
 
-    private ZipFile openArchive(String name) throws IOException {
+    private ZipFile openArchive(String name) throws Exception {
         if (!validSnowbreakName(name)) throw new IOException("模型路径无效");
         File file = FilesSupport.child(packs.models, name);
         if (!file.isFile()) throw new FileNotFoundException(name);
