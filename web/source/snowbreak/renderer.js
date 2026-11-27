@@ -35,8 +35,18 @@ export async function createSnowbreakRenderer(canvas,runtime,{isCurrent=()=>true
   let textureBudget=null;let senses,sceneInteractions;let root,faceRoot,localScene,surfaceOverlay,framingBounds=null,sceneEnvelope=null,framingEvidence=null,activeFramingHash=null,disposed=false,onFrame=null,sampleTime=0;const bindings=[],geometries=new Set(),materials=new Set(),textures=new Set(),maps=new Map(),normalMaps=new Map(),ormMaps=new Map(),extraMaps=new Map(),states=new Map();
   const bodyBoneSet=new Set(),framingByClip=new Map();const rootLock=runtime.getAsset('rootMotionPolicy')?.data;
   let lastSkeletonUpdates=0,surfaceSequence=0,resizeCount=0,fitCount=0;let viewport=null,cachedBounds=null;
+  let arActive=false,arRoomHidden=true,arSavedRoom=null,arSavedScene=null,arSavedLighting=null,arSmoothExp=1.06,arSmoothWarmth=0.5,arBaseOffsetY=0;
+  let proportionMode='normal',chibiBlend=0,chibiTarget=0,chibiSaved=[];
+  const shadowCatcherGeo=new THREE.PlaneGeometry(8,8);shadowCatcherGeo.rotateX(-Math.PI/2);
+  const shadowCatcherMat=new THREE.ShadowMaterial({opacity:0.34,depthWrite:false});
+  const shadowCatcher=new THREE.Mesh(shadowCatcherGeo,shadowCatcherMat);shadowCatcher.receiveShadow=true;shadowCatcher.visible=false;shadowCatcher.renderOrder=-1;
+  group.add(shadowCatcher);geometries.add(shadowCatcherGeo);materials.add(shadowCatcherMat);
   let frame={scale:1,x:0,y:0,yaw:0,pitch:0,roll:0,stretchX:1,stretchY:1},autoYaw=0,bodyYaw=0,facingReference=null;
-  function orient(){group.rotation.set(THREE.MathUtils.degToRad(frame.pitch),baseYaw+autoYaw+THREE.MathUtils.degToRad(frame.yaw),THREE.MathUtils.degToRad(frame.roll));characterGroup.rotation.set(THREE.MathUtils.degToRad(modelFrame.pitch),THREE.MathUtils.degToRad(modelFrame.yaw+bodyYaw),THREE.MathUtils.degToRad(modelFrame.roll));group.updateMatrixWorld(true);}
+  function orient(){
+    if(arActive){group.rotation.set(0,baseYaw+autoYaw,0);characterGroup.rotation.set(0,THREE.MathUtils.degToRad(bodyYaw),0);}
+    else{group.rotation.set(THREE.MathUtils.degToRad(frame.pitch),baseYaw+autoYaw+THREE.MathUtils.degToRad(frame.yaw),THREE.MathUtils.degToRad(frame.roll));characterGroup.rotation.set(THREE.MathUtils.degToRad(modelFrame.pitch),THREE.MathUtils.degToRad(modelFrame.yaw+bodyYaw),THREE.MathUtils.degToRad(modelFrame.roll));}
+    group.updateMatrixWorld(true);
+  }
   let modelFrame={scale:1,x:0,y:0,depth:0,yaw:0,pitch:0,roll:0,stretchX:1,stretchY:1};
   function setModelFrame(value){
     const next={...modelFrame,...value};if(Object.values(next).some(v=>!Number.isFinite(v)))throw new Error('Invalid character placement');
@@ -72,11 +82,13 @@ export async function createSnowbreakRenderer(canvas,runtime,{isCurrent=()=>true
   function bindClip(part,clip,target=bindings,upperOnly=false){if(!clip)return;const tracks=new Map(clip.tracks.map(t=>[t.bone,t]));if(tracks.size!==clip.tracks.length)throw new Error('Duplicate animation bones');part.traverse(b=>{if(!b.isBone||(part===root&&!bodyBoneSet.has(b))||(upperOnly&&!/^Bip001-(Spine[0-9]*|Neck|Head|[LR]-(Clavicle|UpperArm|Forearm|Hand|Finger[0-9]*))$/.test(b.name)))return;const track=tracks.get(b.name);if(upperOnly&&!track)return;if(!track||track.keys.length!==clip.frames||track.keys.some(k=>k.length!==10||!k.every(Number.isFinite)||Math.abs(k.slice(3,7).reduce((s,v)=>s+v*v,0)-1)>.05))throw new Error('Invalid bone animation');target.push({bone:b,track,clip});});}
   function dispose(){if(disposed)return;disposed=true;removeEventListener('resize',fit);renderer.setAnimationLoop(null);surfaceOverlay?.dispose();senses?.dispose();sceneInteractions?.dispose();postFx.dispose();lighting.dispose();for(const x of geometries)x.dispose();for(const x of materials)x.dispose();for(const x of textures){x.dispose();const image=x.image;if(image?.close)image.close();else if(image?.tagName==='CANVAS'){image.width=image.height=0;}else if(image?.tagName==='IMG')image.src='';x.image=null;}maps.clear();normalMaps.clear();ormMaps.clear();extraMaps.clear();states.clear();textures.clear();materials.clear();geometries.clear();bindings.length=0;root?.removeFromParent();localScene?.root?.removeFromParent();renderer.renderLists?.dispose?.();renderer.dispose();}
   function fit(){if(disposed||!root)return;fitCount++;const w=canvas.clientWidth||innerWidth,h=canvas.clientHeight||innerHeight,ratio=budget.ratio(w,h,devicePixelRatio||1);
-    if(!viewport||viewport.w!==w||viewport.h!==h||viewport.ratio!==ratio){renderer.setPixelRatio(ratio);renderer.setSize(w,h,false);viewport={w,h,ratio};resizeCount++;}camera.aspect=w/h;
+    if(!viewport||viewport.w!==w||viewport.h!==h||viewport.ratio!==ratio){renderer.setPixelRatio(ratio);renderer.setSize(w,h,false);viewport={w,h,ratio};resizeCount++;}
     group.updateMatrixWorld(true);
     if(!framingBounds&&!cachedBounds){root.traverse(m=>{if(m.isSkinnedMesh){m.skeleton.update();m.computeBoundingBox();}});cachedBounds=new THREE.Box3().setFromObject(root).applyMatrix4(group.matrixWorld.clone().invert());}
     const box=(sceneEnvelope||framingBounds||cachedBounds).clone().applyMatrix4(group.matrixWorld),size=box.getSize(new THREE.Vector3()),c=box.getCenter(new THREE.Vector3());
     lighting.frame(box);
+    if(arActive)return;
+    camera.aspect=w/h;
     const t=Math.tan(THREE.MathUtils.degToRad(16));let distance=Math.max(size.y/(2*t),size.x/(2*t*camera.aspect))*1.25+size.z;
     if(framingBounds){distance=0;for(const x of [box.min.x,box.max.x])for(const y of [box.min.y,box.max.y])for(const z of [box.min.z,box.max.z])distance=Math.max(distance,z-c.z+Math.max(Math.abs(x-c.x)/(t*camera.aspect),Math.abs(y-c.y)/t)*1.12);}
     const editableScene=runtime.getAsset('localScene')?.data.schema==='snowbreak-local-scene/2';
@@ -193,7 +205,121 @@ export async function createSnowbreakRenderer(canvas,runtime,{isCurrent=()=>true
     if(facingBone){const q=facingBone.getWorldQuaternion(new THREE.Quaternion());const axis=[new THREE.Vector3(1,0,0),new THREE.Vector3(0,1,0),new THREE.Vector3(0,0,1)].sort((a,b)=>{const av=a.clone().applyQuaternion(q),bv=b.clone().applyQuaternion(q);return Math.hypot(bv.x,bv.z)-Math.hypot(av.x,av.z);})[0];const v=axis.clone().applyQuaternion(q);facingReference={bone:facingBone,axis,heading:Math.atan2(v.x,v.z)};}
     surfaceOverlay=createSurfaceOverlay(root,scene,camera);
     const embodiment=createEmbodiedActions(root,yaw=>{bodyYaw=yaw;orient();},()=>frame.yaw+modelFrame.yaw);
-    const pickSurface=createSurfacePicker(root,camera,canvas,localScene.root);sceneInteractions=createSceneInteractions(root,camera,canvas,pickSurface,runtime.getAsset('sceneInteractions')?.data,localScene.contactSurface,runtime.current.characterId);senses=createSenses(root,camera,canvas);fit();await renderer.compileAsync(scene,camera);checkCurrent();addEventListener('resize',fit);renderer.setAnimationLoop(()=>{if(canvas.dataset.snowbreakPaused==='true'||document.hidden){budget.resetClock();return;}if(!budget.begin())return;const ratio=budget.ratio(canvas.clientWidth||innerWidth,canvas.clientHeight||innerHeight,devicePixelRatio||1);if(Math.abs(ratio-budgetRatio)>.02){budgetRatio=ratio;fit();}embodiment.restore();sceneInteractions.restore();senses.restore();onFrame?.();embodiment.tick();sceneInteractions.tick();senses.tick();surfaceOverlay.update();postFx.render(scene,camera);});
+    const pickSurface=createSurfacePicker(root,camera,canvas,localScene.root);sceneInteractions=createSceneInteractions(root,camera,canvas,pickSurface,runtime.getAsset('sceneInteractions')?.data,localScene.contactSurface,runtime.current.characterId);senses=createSenses(root,camera,canvas);
+    const chibiBoneSpecs=[
+      ['Bip001-Pelvis',0.66],
+      ['Bip001-L-Thigh',0.80],['Bip001-R-Thigh',0.80],
+      ['Bip001-L-Foot',1.24],['Bip001-R-Foot',1.24],
+      ['Bip001-L-UpperArm',0.84],['Bip001-R-UpperArm',0.84],
+      ['Bip001-L-Hand',1.22],['Bip001-R-Hand',1.22],
+      ['Bip001-Neck',0.86],
+      ['Bip001-Head',2.22]
+    ].map(([name,factor])=>({bone:root.getObjectByName(name),factor})).filter(x=>x.bone);
+    const chibiFootL=root.getObjectByName('Bip001-L-Foot'),chibiFootR=root.getObjectByName('Bip001-R-Foot');
+    const chibiRootSavedPos=new THREE.Vector3();let chibiRootApplied=false,chibiLastNow=performance.now();
+    function restoreChibi(){
+      for(const s of chibiSaved)s.bone.scale.copy(s.base);
+      chibiSaved=[];
+      if(chibiRootApplied){root.position.copy(chibiRootSavedPos);chibiRootApplied=false;}
+    }
+    function applyChibi(){
+      const now=performance.now(),dt=Math.min(0.25,Math.max(0.001,(now-chibiLastNow)/1000));chibiLastNow=now;
+      chibiBlend+=(chibiTarget-chibiBlend)*(1-Math.exp(-dt*10));
+      if(Math.abs(chibiBlend-chibiTarget)<0.002)chibiBlend=chibiTarget;
+      if(chibiBlend<=0.001||!chibiBoneSpecs.length)return;
+      const w=chibiBlend*chibiBlend*(3-2*chibiBlend);
+      group.updateMatrixWorld(true);
+      const beforeFootY=(chibiFootL&&chibiFootR)?Math.min(chibiFootL.getWorldPosition(new THREE.Vector3()).y,chibiFootR.getWorldPosition(new THREE.Vector3()).y):null;
+      chibiRootSavedPos.copy(root.position);chibiRootApplied=true;
+      for(const {bone,factor} of chibiBoneSpecs){
+        const base=bone.scale.clone();
+        chibiSaved.push({bone,base});
+        bone.scale.multiplyScalar(THREE.MathUtils.lerp(1,factor,w));
+      }
+      group.updateMatrixWorld(true);
+      if(beforeFootY!==null){
+        const afterFootY=Math.min(chibiFootL.getWorldPosition(new THREE.Vector3()).y,chibiFootR.getWorldPosition(new THREE.Vector3()).y);
+        const drop=beforeFootY-afterFootY;
+        // Keep feet planted cleanly on the ground in AR & standing modes, while staying centered in normal view.
+        root.position.y+=drop*(arActive?1.0:0.88);
+      }
+      group.updateMatrixWorld(true);
+      const skelSeen=new Set();
+      root.traverse(m=>{if(m.isSkinnedMesh&&!skelSeen.has(m.skeleton)){m.skeleton.update();skelSeen.add(m.skeleton);}});
+    }
+    function setProportionMode(mode){
+      proportionMode=mode==='chibi'?'chibi':'normal';
+      chibiTarget=proportionMode==='chibi'?1:0;
+      return {mode:proportionMode,blend:chibiBlend};
+    }
+    function computeArGroundOffset(){
+      restoreChibi();
+      group.updateMatrixWorld(true);
+      const box=new THREE.Box3();
+      root.traverse(m=>{if(m.isSkinnedMesh){m.skeleton.update();m.computeBoundingBox();if(m.boundingBox)box.union(m.boundingBox.clone().applyMatrix4(m.matrixWorld));}});
+      const localMin=box.isEmpty()?0:box.min.y;
+      return Number.isFinite(localMin)?-localMin:0;
+    }
+    function setARMode(enabled,{hideRoom=true}={}){
+      const next=!!enabled;
+      if(next===arActive){
+        if(next&&hideRoom!==arRoomHidden){arRoomHidden=!!hideRoom;if(localScene?.snapshot?.().available){localScene.setVisible(!arRoomHidden);localScene.setRoomVisible(!arRoomHidden);}}
+        return arState();
+      }
+      arActive=next;
+      if(arActive){
+        arRoomHidden=!!hideRoom;
+        const sc=localScene?.snapshot?.();
+        if(sc?.available){arSavedScene=sc.visible;arSavedRoom=sc.roomVisible;if(arRoomHidden){localScene.setVisible(false);localScene.setRoomVisible(false);}}
+        arSavedLighting=lighting.snapshot();
+        arSmoothExp=arSavedLighting.exposure;arSmoothWarmth=arSavedLighting.warmth;
+        camera.matrixAutoUpdate=false;
+        camera.clearViewOffset?.();
+        camera.zoom=1;
+        arBaseOffsetY=computeArGroundOffset();
+        characterGroup.position.set(0,arBaseOffsetY,0);
+        characterGroup.scale.setScalar(1);
+        shadowCatcher.position.set(0,0,0);
+        shadowCatcher.visible=true;
+        orient();
+        const arBox=new THREE.Box3(new THREE.Vector3(-0.9,0,-0.9),new THREE.Vector3(0.9,1.8,0.9));
+        lighting.frame(arBox);
+      }else{
+        camera.matrixAutoUpdate=true;
+        shadowCatcher.visible=false;
+        if(arSavedScene!==null){localScene?.setVisible?.(arSavedScene);arSavedScene=null;}
+        if(arSavedRoom!==null){localScene?.setRoomVisible?.(arSavedRoom);arSavedRoom=null;}
+        if(arSavedLighting){try{lighting.set({exposure:arSavedLighting.exposure,warmth:arSavedLighting.warmth});}catch{}arSavedLighting=null;}
+        setModelFrame(modelFrame);
+        orient();
+        fit();
+      }
+      return arState();
+    }
+    function setARFrame(proj16,mv16,exposure,warmth){
+      if(!arActive||disposed)return;
+      if(Array.isArray(proj16)&&proj16.length===16){
+        camera.projectionMatrix.fromArray(proj16);
+        camera.projectionMatrixInverse.copy(camera.projectionMatrix).invert();
+      }
+      if(Array.isArray(mv16)&&mv16.length===16){
+        camera.matrixWorldInverse.fromArray(mv16);
+        camera.matrixWorld.copy(camera.matrixWorldInverse).invert();
+        camera.matrixWorld.decompose(camera.position,camera.quaternion,camera.scale);
+      }
+      if(Number.isFinite(exposure)&&Number.isFinite(warmth)){
+        const targetExp=THREE.MathUtils.clamp(exposure,0.78,1.32);
+        const targetWarmth=THREE.MathUtils.clamp(warmth,0.12,0.88);
+        arSmoothExp+=(targetExp-arSmoothExp)*0.12;
+        arSmoothWarmth+=(targetWarmth-arSmoothWarmth)*0.12;
+        const cur=lighting.snapshot();
+        if(Math.abs(cur.exposure-arSmoothExp)>0.006||Math.abs(cur.warmth-arSmoothWarmth)>0.008){
+          try{lighting.set({exposure:arSmoothExp,warmth:arSmoothWarmth});}catch{}
+        }
+      }
+    }
+    const arState=()=>({active:arActive,roomHidden:arRoomHidden,shadowCatcher:shadowCatcher.visible,groundOffsetY:arBaseOffsetY,proportionMode,chibiBlend});
+    fit();await renderer.compileAsync(scene,camera);checkCurrent();addEventListener('resize',fit);renderer.setAnimationLoop(()=>{if(canvas.dataset.snowbreakPaused==='true'||document.hidden){budget.resetClock();return;}if(!budget.begin())return;const ratio=budget.ratio(canvas.clientWidth||innerWidth,canvas.clientHeight||innerHeight,devicePixelRatio||1);if(Math.abs(ratio-budgetRatio)>.02){budgetRatio=ratio;fit();}restoreChibi();embodiment.restore();sceneInteractions.restore();senses.restore();onFrame?.();embodiment.tick();sceneInteractions.tick();senses.tick();applyChibi();surfaceOverlay.update();postFx.render(scene,camera);});
     const materialState=()=>{const result=[];root.traverse(m=>{if(m.isMesh)result.push({name:m.userData.snowbreakMaterialName,textured:!!m.userData.previewMap,normalMapped:!!m.material.normalMap,diffuseSize:m.material.map?[m.material.map.image.width,m.material.map.image.height]:null,normalSize:m.material.normalMap?[m.material.normalMap.image.width,m.material.normalMap.image.height]:null,anisotropy:m.material.map?.anisotropy||0,profile:m.material.userData.profile,alphaTest:m.material.alphaTest});});return result;};
     const setTexturePreview=enabled=>root.traverse(m=>{if(m.isMesh){m.material.map=enabled?m.userData.previewMap:null;m.material.color.set(m.material.map?0xffffff:0xcac7c3);m.material.needsUpdate=true;}});
     const faceCandidateState=()=>({available:!!faceRoot,visible:!!faceRoot?.visible,originalAssemblyVerified:false});
@@ -203,6 +329,6 @@ export async function createSnowbreakRenderer(canvas,runtime,{isCurrent=()=>true
     let learned=createLearnedMotions(root,camera,runtime.getAsset('learnedMotions')?.data,transition?.stance,universalMotions);
     function setUniversalMotions(extra){learned=createLearnedMotions(root,camera,runtime.getAsset('learnedMotions')?.data,transition?.stance,extra);return learned.available();}
     function attachmentState(){const out=[];root.updateWorldMatrix(true,true);root.traverse(node=>{if(!node.userData.sourceAttachment)return;node.traverse(mesh=>{if(!mesh.isSkinnedMesh)return;mesh.skeleton.update();const sum=new THREE.Vector3(),n=mesh.geometry.attributes.position.count;for(let i=0;i<n;i++)sum.add(mesh.getVertexPosition(i,new THREE.Vector3()).applyMatrix4(mesh.matrixWorld));out.push({kind:node.userData.sourceAttachment,vertices:n,center:sum.divideScalar(n).toArray(),sharedBones:mesh.skeleton.bones.every(b=>root.getObjectByName(b.name)===b)});});});return out;}
-    return {textureBudgetState:()=>textureBudget?.snapshot(),attachmentState,performanceState,setRenderBudget,releaseCache,setUniversalMotions,projectedBone:name=>{const p=root.getObjectByName(name)?.getWorldPosition(new THREE.Vector3()).project(camera),r=canvas.getBoundingClientRect();return p?[r.left+(p.x+1)*r.width/2,r.top+(1-p.y)*r.height/2]:null;},modelDragScale:()=>{const distance=Math.max(.05,root.getObjectByName('Bip001-Pelvis').getWorldPosition(new THREE.Vector3()).sub(camera.position).dot(camera.getWorldDirection(new THREE.Vector3()))),height=2*distance*Math.tan(THREE.MathUtils.degToRad(camera.fov/2))/camera.zoom;return {x:height*camera.aspect/frame.stretchX,y:height/frame.stretchY};},furnitureContacts:names=>Object.fromEntries(names.map(n=>{const bone=root.getObjectByName(n);return [n,bone?localScene.contactSurface?.(bone.getWorldPosition(new THREE.Vector3())):null]})),setModelFrame,modelFrameState:()=>({...modelFrame}),placementState:()=>({model:characterGroup.matrixWorld.toArray(),room:localScene.root?.matrixWorld.toArray(),camera:camera.matrixWorld.toArray()}),embodiment,sceneInteractions,sensesState:senses.snapshot,setGaze:senses.gaze,senseTouch:senses.touch,resetSenses:senses.reset,postureState:()=>Object.fromEntries(['Bip001-Pelvis','Bip001-Head','Bip001-L-Thigh','Bip001-L-Calf','Bip001-L-Foot','Bip001-R-Thigh','Bip001-R-Calf','Bip001-R-Foot'].map(n=>[n,root.getObjectByName(n)?.getWorldPosition(new THREE.Vector3()).toArray()])),presentationDefault:runtime.getAsset('presentationDefault')?.data,lightingState:lighting.snapshot,setLighting:lighting.set,boneWorldPoints:names=>Object.fromEntries(names.slice(0,32).map(name=>[name,root.getObjectByName(name)?.getWorldPosition(new THREE.Vector3()).toArray()])),bonePoseState:()=>{const out=[];root.traverse(b=>{if(b.isBone)out.push({name:b.name,position:b.position.toArray(),quaternion:b.quaternion.toArray(),scale:b.scale.toArray()});});return out;},cameraState:()=>({position:camera.position.toArray(),projection:camera.projectionMatrix.toArray()}),learnedOptions:()=>learned.available(),applyLearnedMotion:(...args)=>learned.apply(...args),learnedDiagnostics:()=>learned.snapshot(),presentationDiagnostics:()=>({resizeCount,fitCount}),touchBindings:()=>touchBindings.map(b=>({...b,gestures:[...b.gestures]})),setRoomVisible:localScene.setRoomVisible,setSceneCutaway:localScene.setCutaway,sceneState:localScene.snapshot,setSceneVisible:localScene.setVisible,morphState:morphCurves.snapshot,framingEnvelopeState:()=>({precomputed:!!framingBounds,evaluatedFrames:framingEvidence?.evaluatedFrames||0,perClip:framingByClip.size,activeSource:activeFramingHash}),resourceState:()=>({sourceTextures:textures.size,drawCalls:renderer.info.render.calls,triangles:renderer.info.render.triangles,geometries:renderer.info.memory.geometries,textures:renderer.info.memory.textures}),setSurfaceLabels:surfaceOverlay.set,surfaceOverlayState:surfaceOverlay.snapshot,armPreview,leftArmPreview,dispose,pickSurface,drawSnapshot,faceViewer,setFrame,frameState:()=>({...frame}),displayOnly:true,originalShaderVerified:false,originalInteractionVerified:false,materialState,setTexturePreview,faceCandidateState,showFaceCandidate,selectSample,sampleOptions:()=>[...samples].map(([id,s])=>({id,label:s.label,duration:s.duration,sourceShowElementId:s.sourceShowElementId,persistentState:s.persistentState,endPolicy:s.endPolicy,afterScene:s.afterScene})),get duration(){return selectedDuration},seek,standbyDuration,standbyLabel,startAsStandby,seekStandby:s=>{if(sceneEnvelope){sceneEnvelope=null;fit();}const sourceYaw=localScene.setAnchor?.(catalog?.defaultId);if(sourceYaw!==null&&sourceYaw!==undefined){baseYaw=-Math.PI/2+THREE.MathUtils.degToRad(sourceYaw);autoYaw=0;orient();}if(standbyDuration>0)seek(s%standbyDuration,standbyBindings,standbyDuration);},setFrameHandler:fn=>onFrame=fn,sampleState:()=>({lastSkeletonUpdates,sampleId:selectedId,time:sampleTime,poseMode,standbyDuration,nativeInitializationVerified:false,viewYaw:group.rotation.y,autoYaw,bodyBones:bindings.filter(x=>x.clip===clip).length,faceBones:bindings.filter(x=>x.clip!==clip).length,hand:root.getObjectByName('Bip001-R-Hand')?.getWorldPosition(new THREE.Vector3()).toArray()})};
+    return {setARMode,setARFrame,arState,setProportionMode,proportionState:()=>({mode:proportionMode,blend:chibiBlend}),textureBudgetState:()=>textureBudget?.snapshot(),attachmentState,performanceState,setRenderBudget,releaseCache,setUniversalMotions,projectedBone:name=>{const p=root.getObjectByName(name)?.getWorldPosition(new THREE.Vector3()).project(camera),r=canvas.getBoundingClientRect();return p?[r.left+(p.x+1)*r.width/2,r.top+(1-p.y)*r.height/2]:null;},modelDragScale:()=>{const distance=Math.max(.05,root.getObjectByName('Bip001-Pelvis').getWorldPosition(new THREE.Vector3()).sub(camera.position).dot(camera.getWorldDirection(new THREE.Vector3()))),height=2*distance*Math.tan(THREE.MathUtils.degToRad(camera.fov/2))/camera.zoom;return {x:height*camera.aspect/frame.stretchX,y:height/frame.stretchY};},furnitureContacts:names=>Object.fromEntries(names.map(n=>{const bone=root.getObjectByName(n);return [n,bone?localScene.contactSurface?.(bone.getWorldPosition(new THREE.Vector3())):null]})),setModelFrame,modelFrameState:()=>({...modelFrame}),placementState:()=>({model:characterGroup.matrixWorld.toArray(),room:localScene.root?.matrixWorld.toArray(),camera:camera.matrixWorld.toArray()}),embodiment,sceneInteractions,sensesState:senses.snapshot,setGaze:senses.gaze,senseTouch:senses.touch,resetSenses:senses.reset,postureState:()=>Object.fromEntries(['Bip001-Pelvis','Bip001-Head','Bip001-L-Thigh','Bip001-L-Calf','Bip001-L-Foot','Bip001-R-Thigh','Bip001-R-Calf','Bip001-R-Foot'].map(n=>[n,root.getObjectByName(n)?.getWorldPosition(new THREE.Vector3()).toArray()])),presentationDefault:runtime.getAsset('presentationDefault')?.data,lightingState:lighting.snapshot,setLighting:lighting.set,boneWorldPoints:names=>Object.fromEntries(names.slice(0,32).map(name=>[name,root.getObjectByName(name)?.getWorldPosition(new THREE.Vector3()).toArray()])),bonePoseState:()=>{const out=[];root.traverse(b=>{if(b.isBone)out.push({name:b.name,position:b.position.toArray(),quaternion:b.quaternion.toArray(),scale:b.scale.toArray()});});return out;},cameraState:()=>({position:camera.position.toArray(),projection:camera.projectionMatrix.toArray()}),learnedOptions:()=>learned.available(),applyLearnedMotion:(...args)=>learned.apply(...args),learnedDiagnostics:()=>learned.snapshot(),presentationDiagnostics:()=>({resizeCount,fitCount}),touchBindings:()=>touchBindings.map(b=>({...b,gestures:[...b.gestures]})),setRoomVisible:localScene.setRoomVisible,setSceneCutaway:localScene.setCutaway,sceneState:localScene.snapshot,setSceneVisible:localScene.setVisible,morphState:morphCurves.snapshot,framingEnvelopeState:()=>({precomputed:!!framingBounds,evaluatedFrames:framingEvidence?.evaluatedFrames||0,perClip:framingByClip.size,activeSource:activeFramingHash}),resourceState:()=>({sourceTextures:textures.size,drawCalls:renderer.info.render.calls,triangles:renderer.info.render.triangles,geometries:renderer.info.memory.geometries,textures:renderer.info.memory.textures}),setSurfaceLabels:surfaceOverlay.set,surfaceOverlayState:surfaceOverlay.snapshot,armPreview,leftArmPreview,dispose,pickSurface,drawSnapshot,faceViewer,setFrame,frameState:()=>({...frame}),displayOnly:true,originalShaderVerified:false,originalInteractionVerified:false,materialState,setTexturePreview,faceCandidateState,showFaceCandidate,selectSample,sampleOptions:()=>[...samples].map(([id,s])=>({id,label:s.label,duration:s.duration,sourceShowElementId:s.sourceShowElementId,persistentState:s.persistentState,endPolicy:s.endPolicy,afterScene:s.afterScene})),get duration(){return selectedDuration},seek,standbyDuration,standbyLabel,startAsStandby,seekStandby:s=>{if(sceneEnvelope){sceneEnvelope=null;fit();}const sourceYaw=localScene.setAnchor?.(catalog?.defaultId);if(sourceYaw!==null&&sourceYaw!==undefined){baseYaw=-Math.PI/2+THREE.MathUtils.degToRad(sourceYaw);autoYaw=0;orient();}if(standbyDuration>0)seek(s%standbyDuration,standbyBindings,standbyDuration);},setFrameHandler:fn=>onFrame=fn,sampleState:()=>({lastSkeletonUpdates,sampleId:selectedId,time:sampleTime,poseMode,standbyDuration,nativeInitializationVerified:false,viewYaw:group.rotation.y,autoYaw,bodyBones:bindings.filter(x=>x.clip===clip).length,faceBones:bindings.filter(x=>x.clip!==clip).length,hand:root.getObjectByName('Bip001-R-Hand')?.getWorldPosition(new THREE.Vector3()).toArray()})};
   }catch(e){dispose();throw e;}
 }

@@ -16,6 +16,17 @@ struct CompanionHome: View {
     @StateObject private var portrait = PortraitStage()
     @StateObject private var senses = CompanionSenses()
     @StateObject private var camera = RearCamera()
+    @StateObject private var ar = SnowbreakARController()
+    @AppStorage("appOrientationMode") private var orientationModeRaw = AppOrientationMode.auto.rawValue
+    @AppStorage("deskPetKeepAwake") private var deskPetKeepAwake = false
+    @AppStorage("proportionMode") private var proportionMode = "normal"
+    @AppStorage("deferredInteraction") private var deferredInteraction = true
+    @State private var arPlacementMode = false
+    @State private var arVisionAttach = false
+    @State private var cleanDeskMode = false
+    @State private var lastPinchScale: CGFloat = 1
+    @State private var lastRotateAngle: Angle = .zero
+    private var orientationMode: AppOrientationMode { AppOrientationMode(rawValue: orientationModeRaw) ?? .auto }
     @State private var preparingSend = false
     @State private var photoPicker = false
     @State private var imageFilePicker = false
@@ -47,7 +58,7 @@ struct CompanionHome: View {
     @State private var touchTicket=UUID()
     @AppStorage("snowbreakVoice") private var snowbreakVoice = true
     private static let sourceActionLabels:[String:String] = ["snowbreak_home_jealous":"芬妮 · 吃醋","snowbreak_home_marry":"芬妮 · 婚礼互动","snowbreak_home_sigh":"芬妮 · 叹气","snowbreak_home_stage":"芬妮 · 主页展示","snowbreak_home_stand":"站立待机","snowbreak_home_login":"看板娘 · 登录招呼","snowbreak_home_invite":"看板娘 · 邀请","snowbreak_home_shy":"看板娘 · 害羞","snowbreak_home_check":"看板娘 · 检查","snowbreak_home_kiss":"看板娘 · 亲吻","snowbreak_show_02":"互动展示 02","snowbreak_show_03":"互动展示 03","snowbreak_show_04":"互动展示 04","snowbreak_show_05":"互动展示 05","snowbreak_sequence":"完整展示片段","snowbreak_idle_01":"互动待机变化 01","snowbreak_idle_02":"互动待机变化 02","snowbreak_head":"头部原作反应","snowbreak_left":"左手原作反应","snowbreak_right":"右手原作反应","enya_yuki_hello":"学习 Yuki · 挥手","enya_yuki_Yes":"学习 Yuki · 点头","enya_yuki_No":"学习 Yuki · 摇头","enya_yuki_Peace_hand":"学习 Yuki · 比 V","enya_yuki_dance_90bpm":"站立舞蹈 · 90 BPM","enya_yuki_dance_120bpm":"站立舞蹈 · 120 BPM","enya_yuki_f_vibe_dance_60_bpm_002":"站立舞蹈 · 60 BPM"]
-    private func sourceActionLabel(_ id:String)->String {DialogueMotion.fennyScenes.first{$0.id == id}?.label ?? snowbreak.sampleLabels[id] ?? Self.sourceActionLabels[id] ?? id}
+    private func sourceActionLabel(_ id:String)->String {DialogueMotion.fennyScenes.first{$0.id == id}?.label ?? snowbreak.universalLabels[id] ?? snowbreak.sampleLabels[id] ?? Self.sourceActionLabels[id] ?? id}
     private var isSnowbreak:Bool { engine == "snowbreak" }
     private var isPortrait:Bool {engine == "portrait"}
     private var interactionModeLabel:String {["Fenny","Katya"].contains(snowbreak.characterID) ? "皮肤互动":"皮肤互动（坐姿）"}
@@ -59,7 +70,7 @@ struct CompanionHome: View {
     private var modelLabel:String {isPortrait ? portrait.name : isSnowbreak ? snowbreak.characterName:stage.name}
     private func companionContext(_ origin:String) -> CompanionContext {
         CompanionContext(modelKey:modelKey,modelName:modelLabel,
-                         mode:isPortrait ? "2D剧情立绘面对面":isSnowbreak ? (snowbreak.companionMode == "standing" ? "看板娘站立":"皮肤互动场景（以身体实况为准）"):"本地角色展示",
+                         mode:isPortrait ? "2D剧情立绘面对面":isSnowbreak ? (ar.active ? "AR 现实投射模式（\(proportionMode == "chibi" ? "Q版大头身" : "1:1原比例") · \(snowbreak.companionMode == "standing" ? "看板娘" : "皮肤互动")）" : (snowbreak.companionMode == "standing" ? "看板娘站立":"皮肤互动场景（以身体实况为准）")):"本地角色展示",
                          activeAction:activeAction ?? "待机",origin:origin,bodyStatus:(modelEditing ? "手动编辑中，自动动作暂停；":"")+(isPortrait ? portrait.bodyState : isSnowbreak ? snowbreak.bodyState:stage.bodyState).summary+"；最近屏幕互动："+recentTouchSummary)
     }
     private func stopReading(){waitingBodyAction=nil;touchTicket=UUID();pendingTouches.removeAll();speech.stop();senses.resumeAfterPlayback()}
@@ -80,14 +91,18 @@ struct CompanionHome: View {
         } else {
             store.activateCompanion(modelKey)
             portrait.pause()
-            if isSnowbreak { stage.stop(); snowbreak.resume(); greetIfReady() }
-            else { snowbreak.pause(); stage.resume() }
+            if isSnowbreak { stage.stop(); snowbreak.resume(); ar.resumeSessionIfActive(); greetIfReady() }
+            else { ar.stop(); snowbreak.pause(); stage.resume() }
         }
     }
 
     var body: some View {
         ZStack {
-            background.ignoresSafeArea()
+            if isSnowbreak && ar.active {
+                SnowbreakARCameraView(controller: ar).ignoresSafeArea()
+            } else {
+                background.ignoresSafeArea()
+            }
             if isPortrait {
                 PortraitCharacterView(stage:portrait).ignoresSafeArea().accessibilityIdentifier("portraitScene")
                 if let error=portrait.error{VStack{Text(error);Button("重新载入"){portrait.select(portrait.selectedID)}}.padding(20).background(.ultraThinMaterial,in:RoundedRectangle(cornerRadius:18))}
@@ -95,6 +110,9 @@ struct CompanionHome: View {
                 else if !portrait.ready {ProgressView("正在加载官方2D角色…")}
             } else if isSnowbreak {
                 SnowbreakCharacterView(stage:snowbreak).id("snowbreak-renderer").ignoresSafeArea().accessibilityIdentifier("snowbreakScene")
+                if ar.active && (!ar.placed || arPlacementMode) {
+                    arPlacementOverlay.ignoresSafeArea()
+                }
                 if let error = snowbreak.error {
                     VStack { Text(error);Button("返回原伙伴") { engine = "native" } }.padding(24).background(.ultraThinMaterial,in:RoundedRectangle(cornerRadius:20))
                 } else if !snowbreak.ready { ProgressView("正在加载本地角色…").accessibilityIdentifier("snowbreakLoading") }
@@ -113,6 +131,24 @@ struct CompanionHome: View {
                     }
                 }.foregroundStyle(.white).padding(32)
             }
+            if cleanDeskMode {
+                VStack {
+                    HStack {
+                        Spacer()
+                        Button {
+                            cleanDeskMode = false
+                        } label: {
+                            Image(systemName: "eye.slash").font(.system(size: 16))
+                                .foregroundStyle(.white.opacity(0.8))
+                                .frame(width: 38, height: 38)
+                                .background(.black.opacity(0.35), in: Circle())
+                        }.accessibilityLabel("显示界面").padding(.trailing, 16).padding(.top, 10)
+                    }
+                    Spacer()
+                }
+            } else if isSnowbreak && ar.active {
+                arTopHUD
+            } else {
             VStack {
                 HStack(alignment: .top) {
                     VStack(spacing: 12) {
@@ -137,6 +173,10 @@ struct CompanionHome: View {
                             if isPortrait {ForEach(portrait.actions,id:\.self){id in Button(DialogueMotion.portraitActionLabel(id)){portrait.play(id)}}}
                             else if isSnowbreak {
                                 ForEach(snowbreak.savedCharacters,id:\.self){id in Button("切换到\(SnowbreakStage.displayName(for: id))"){snowbreak.selectCharacter(id)}}
+                                Section("形态与比例") {
+                                    Button(proportionMode == "normal" ? "✓ 1:1 原比例" : "1:1 原比例") { setProportion("normal") }
+                                    Button(proportionMode == "chibi" ? "✓ Q版大头身" : "Q版大头身") { setProportion("chibi") }
+                                }
                                 if snowbreak.availableModes.count > 1 {
                                     Section("陪伴模式") {
                                         Button(snowbreak.companionMode == "standing" ? "✓ 看板娘（站立）" : "看板娘（站立）") { snowbreak.selectVariant(mode:"standing") }
@@ -171,6 +211,9 @@ struct CompanionHome: View {
                                 .frame(width: 46, height: 46).background(.ultraThinMaterial, in: Circle())
                                 .overlay(Circle().stroke(.white.opacity(0.23)))
                         }.accessibilityLabel("动作").accessibilityIdentifier("characterActions").disabled(availableActions.isEmpty)
+                        if isSnowbreak {
+                            circle("arkit", label: "AR 现实投射模式") { toggleAR() }
+                        }
                     }
                     Spacer()
                     VStack(spacing: 2) {
@@ -183,7 +226,7 @@ struct CompanionHome: View {
                         Menu {
                             Button("从相册发送图片"){senses.suspend();photoPicker = true}
                             Button("从文件发送图片"){senses.suspend();imageFilePicker = true}
-                            Button(localVisionBusy ? "正在本机识图…":"本机识图（已选照片／后摄）"){analyzeLocally()}.disabled(localVisionBusy || (attachedImage == nil && !camera.enabled)).accessibilityIdentifier("analyzeLocally")
+                            Button(localVisionBusy ? "正在本机识图…":"本机识图（已选照片／后摄）"){analyzeLocally()}.disabled(localVisionBusy || (attachedImage == nil && !camera.enabled && !ar.active)).accessibilityIdentifier("analyzeLocally")
                             Button("附上自身模型画面"){Task{do{attachedImage = try await ownPortrait()}catch{store.error = error.localizedDescription}}}
                             Picker("自身形象输入",selection:$selfAppearanceImagePolicy) {
                                 Text("仅身体状态文字").tag("off")
@@ -192,6 +235,32 @@ struct CompanionHome: View {
                             }
                         } label:{Image(systemName:"photo.badge.plus").font(.system(size:22)).foregroundStyle(.white).frame(width:46,height:46).background(.ultraThinMaterial,in:Circle())}
                             .accessibilityLabel("图片与自身形象").disabled(preparingSend)
+                        Menu {
+                            Section("屏幕方向（桌宠显示器）") {
+                                ForEach(AppOrientationMode.allCases) { mode in
+                                    Button(orientationMode == mode ? "✓ \(mode.label)" : mode.label) {
+                                        orientationModeRaw = mode.rawValue
+                                        GameOrientation.setUserMode(mode)
+                                    }
+                                }
+                            }
+                            Button(deskPetKeepAwake ? "✓ 桌宠屏幕常亮" : "桌宠屏幕常亮（防息屏）") {
+                                deskPetKeepAwake.toggle()
+                                GameOrientation.setKeepAwake(deskPetKeepAwake)
+                            }
+                            if isSnowbreak {
+                                Divider()
+                                Button(proportionMode == "chibi" ? "切换回 1:1 原比例" : "切换为 Q版大头身") {
+                                    setProportion(proportionMode == "chibi" ? "normal" : "chibi")
+                                }
+                            }
+                            Divider()
+                            Button("纯净桌宠显示（隐藏界面）") { cleanDeskMode = true }
+                        } label: {
+                            Image(systemName: orientationMode.icon).font(.system(size: 19)).foregroundStyle(.white)
+                                .frame(width: 46, height: 46).background(.ultraThinMaterial, in: Circle())
+                                .overlay(Circle().stroke(.white.opacity(0.23)))
+                        }.accessibilityLabel("屏幕方向与桌宠模式")
                         if camera.enabled, let session = camera.session {
                             VStack(spacing:6) {
                                 RearCameraPreview(session:session).frame(width:112,height:164)
@@ -206,6 +275,7 @@ struct CompanionHome: View {
                     }.frame(width:46,alignment:.trailing)
                 }.padding(.horizontal, 18).padding(.top, 8)
                 Spacer()
+            }
             }
         }
         .preferredColorScheme(.dark)
@@ -230,7 +300,9 @@ struct CompanionHome: View {
                 }catch{store.error = error.localizedDescription}
             }
         }
-        .safeAreaInset(edge: .bottom, spacing: 0) { composer }
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            if !cleanDeskMode { composer }
+        }
         .fullScreenCover(item: $sheet, onDismiss: {
             resumeStage()
         }) { destination in
@@ -256,7 +328,7 @@ struct CompanionHome: View {
             case .games: CardGameView(store:store,onClose:{sheet=nil})
             }
         }
-        .onChange(of: sheet) { if $0 != nil { clearTouches();camera.stop();senses.suspend();if !callManager.active { speech.stop() };stage.stop();snowbreak.pause();portrait.pause() } }
+        .onChange(of: sheet) { if $0 != nil { clearTouches();camera.stop();ar.pauseSession();senses.suspend();if !callManager.active { speech.stop() };stage.stop();snowbreak.pause();portrait.pause() } }
         .onChange(of:camera.enabled) { value in if !value { store.discardCameraFrame() } }
         .onChange(of:senses.utterance?.id) { _ in
             guard let event=senses.utterance,!store.busy else{return};send(event.text,origin:"语音转录")
@@ -297,6 +369,8 @@ struct CompanionHome: View {
         }
         .onChange(of:speech.busy){if !$0 {waitingBodyAction=nil;scheduleTouches()}}
         .onChange(of:snowbreak.isEditing){value in if value{waitingBodyAction=nil}else{scheduleTouches()}}
+        .onChange(of:snowbreak.isInteracting){interacting in if !interacting {scheduleTouches()}}
+        .onChange(of:deferredInteraction){value in snowbreak.setDeferredFeedback(value)}
         .onChange(of:nativeEditing){value in if value{waitingBodyAction=nil}else{scheduleTouches()}}
         .alert("心情与行为状态",isPresented:$showingMood){Button("关闭",role:.cancel){}}message:{Text(store.mood.summary+"\n当前动作："+(activeAction ?? "待机")+"\n"+store.behaviorStatus+"\n非结构化回复会补一次动作决策请求。行为在语音实际开始时启动。")}
         .onChange(of:snowbreak.touch?.id) { _ in
@@ -306,7 +380,7 @@ struct CompanionHome: View {
         .onChange(of:engine) { _ in clearTouches();pendingMotionRevision = nil;nativeEditing = false;resumeStage() }
         .onChange(of:nativePresentation) { value in stage.setPresentation(value);value.save() }
         .onChange(of:showBackground) { value in snowbreak.sceneVisible(value) }
-        .onChange(of:snowbreak.ready) { ready in if !ready {clearTouches();waitingBodyAction=nil};if ready {store.activateCompanion(modelKey);snowbreak.sceneVisible(showBackground);snowbreak.setVoice(snowbreakVoice);snowbreak.setOriginalLanguage(store.archive.settings.speech?.language ?? "zh");snowbreak.setTouchPolicy(touchAI && !store.archive.settings.endpoint.isEmpty);greetIfReady() } }
+        .onChange(of:snowbreak.ready) { ready in if !ready {clearTouches();waitingBodyAction=nil};if ready {store.activateCompanion(modelKey);snowbreak.sceneVisible(showBackground);snowbreak.setVoice(snowbreakVoice);snowbreak.setOriginalLanguage(store.archive.settings.speech?.language ?? "zh");snowbreak.setTouchPolicy(touchAI && !store.archive.settings.endpoint.isEmpty);snowbreak.setDeferredFeedback(deferredInteraction);snowbreak.setProportionMode(proportionMode);if ar.active { snowbreak.setARMode(true, hideRoom: ar.roomHidden) };greetIfReady() } }
         .onChange(of:snowbreak.characterID){_ in clearTouches();waitingBodyAction=nil;pendingMotionRevision=nil;speech.stop();store.activateCompanion(modelKey)}
         .onChange(of:snowbreakVoice) { value in snowbreak.setVoice(value) }
         .onChange(of:stage.name){_ in greetIfReady()}
@@ -314,10 +388,11 @@ struct CompanionHome: View {
         .onReceive(NotificationCenter.default.publisher(for:Notification.Name.NSProcessInfoPowerStateDidChange)){_ in snowbreak.applyHardwareBudget();stage.applyHardwareBudget()}
         .onReceive(NotificationCenter.default.publisher(for:AppleHardwareBudget.modeChangedNotification)){_ in stage.applyHardwareBudget()}
         .task {
+            GameOrientation.applySaved()
             resumeStage()
             DailyInteractionTracker.shared.autoGenerateIfDue(store: store)
         }
-        .onDisappear { localVisionTicket=UUID();localVisionBusy=false;waitingBodyAction=nil;clearTouches();camera.stop();senses.suspend();speech.stop();stage.stop();snowbreak.pause();portrait.pause() }
+        .onDisappear { localVisionTicket=UUID();localVisionBusy=false;waitingBodyAction=nil;clearTouches();camera.stop();ar.stop();senses.suspend();speech.stop();stage.stop();snowbreak.pause();portrait.pause() }
         .onChange(of: scenePhase) { phase in
             callManager.handleScenePhase(phase)
             if phase == .active, sheet == nil {
@@ -325,7 +400,7 @@ struct CompanionHome: View {
                 DailyInteractionTracker.shared.autoGenerateIfDue(store: store)
             }
             else {
-                clearTouches();camera.stop();senses.suspend()
+                clearTouches();camera.stop();ar.pauseSession();senses.suspend()
                 if !(callManager.active && callManager.mode == .fullPhone) { speech.stop() }
                 stage.stop();snowbreak.pause();portrait.pause()
             }
@@ -341,7 +416,199 @@ struct CompanionHome: View {
             catch {if localVisionTicket==ticket{store.error=error.localizedDescription}}
         }
     }
-    private func selectedFrameForLocalVision(_ selected:CameraFrame?) async throws -> CameraFrame? {if let selected=selected{return selected};return try await camera.frame()}
+    private func selectedFrameForLocalVision(_ selected:CameraFrame?) async throws -> CameraFrame? {
+        if let selected = selected { return selected }
+        if ar.active, let arFrame = ar.captureFrame() { return arFrame }
+        return try await camera.frame()
+    }
+    private func toggleAR() {
+        guard isSnowbreak else { return }
+        if ar.active {
+            ar.stop()
+            snowbreak.setARMode(false)
+            arPlacementMode = false
+            arVisionAttach = false
+        } else {
+            camera.stop()
+            ar.onFrame = { [weak snowbreak] proj, mv, exposure, warmth in
+                snowbreak?.pushARFrame(proj: proj, mv: mv, exposure: exposure, warmth: warmth)
+            }
+            ar.start()
+            snowbreak.setARMode(true, hideRoom: ar.roomHidden)
+            arPlacementMode = true
+        }
+    }
+    private func setProportion(_ mode: String) {
+        proportionMode = mode == "chibi" ? "chibi" : "normal"
+        snowbreak.setProportionMode(proportionMode)
+    }
+    private var arPlacementOverlay: some View {
+        ZStack {
+            Color.clear.contentShape(Rectangle())
+                .onTapGesture(coordinateSpace: .local) { point in
+                    ar.placeAtScreenPoint(point)
+                    arPlacementMode = false
+                }
+                .gesture(
+                    MagnificationGesture()
+                        .onChanged { value in
+                            let delta = value / max(0.01, lastPinchScale)
+                            lastPinchScale = value
+                            ar.adjustScale(factor: Float(delta))
+                        }
+                        .onEnded { _ in lastPinchScale = 1 }
+                )
+                .simultaneousGesture(
+                    RotationGesture()
+                        .onChanged { angle in
+                            let delta = angle - lastRotateAngle
+                            lastRotateAngle = angle
+                            ar.adjustYaw(radians: Float(-delta.radians))
+                        }
+                        .onEnded { _ in lastRotateAngle = .zero }
+                )
+            VStack(spacing: 12) {
+                Spacer()
+                if !ar.placed {
+                    Image(systemName: "viewfinder")
+                        .font(.system(size: 42, weight: .ultraLight))
+                        .foregroundStyle(.white.opacity(0.85))
+                }
+                VStack(spacing: 8) {
+                    Text(ar.statusHint.isEmpty ? "点桌面／地面重放 · 双指缩放与旋转" : ar.statusHint)
+                        .font(.caption).foregroundStyle(.white).multilineTextAlignment(.center)
+                    HStack(spacing: 10) {
+                        Button("立即放置面前") {
+                            ar.placeInFront()
+                            arPlacementMode = false
+                        }.font(.caption.bold()).padding(.horizontal, 14).padding(.vertical, 7)
+                            .background(.white, in: Capsule()).foregroundStyle(.black)
+                        if ar.placed {
+                            Button("完成调整") { arPlacementMode = false }
+                                .font(.caption).padding(.horizontal, 14).padding(.vertical, 7)
+                                .background(.ultraThinMaterial, in: Capsule()).foregroundStyle(.white)
+                        }
+                    }
+                }
+                .padding(.horizontal, 16).padding(.vertical, 10)
+                .background(.black.opacity(0.55), in: RoundedRectangle(cornerRadius: 18))
+                .padding(.bottom, 120)
+            }
+        }
+    }
+    private var arTopHUD: some View {
+        VStack(spacing: 8) {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    arPill("xmark", title: "退出AR", active: false) { toggleAR() }
+                    arPill(proportionMode == "chibi" ? "face.smiling.inverse" : "figure.stand",
+                           title: proportionMode == "chibi" ? "Q版大头" : "1:1原比",
+                           active: proportionMode == "chibi") {
+                        setProportion(proportionMode == "chibi" ? "normal" : "chibi")
+                    }
+                    arPill("cube.transparent",
+                           title: ar.scalePreset.label,
+                           active: ar.scalePreset == .realScale) {
+                        ar.setScalePreset(ar.scalePreset == .tabletop ? .realScale : .tabletop)
+                    }
+                    arPill("scope", title: arPlacementMode ? "完成调整" : "放置/缩放", active: arPlacementMode) {
+                        arPlacementMode.toggle()
+                    }
+                    Menu {
+                        if !snowbreak.universalARActions.isEmpty {
+                            Section("AR 通用互动动作") {
+                                ForEach(snowbreak.universalARActions, id: \.self) { id in
+                                    Button(sourceActionLabel(id)) { snowbreak.play(id, withVoice: snowbreakVoice) }
+                                }
+                            }
+                        }
+                        if snowbreak.availableModes.count > 1 {
+                            Section("模式切换") {
+                                Button(snowbreak.companionMode == "standing" ? "✓ 看板娘（站立）" : "看板娘（站立）") { snowbreak.selectVariant(mode: "standing") }
+                                Button(snowbreak.companionMode == "interaction" ? "✓ " + interactionModeLabel : interactionModeLabel) { snowbreak.selectVariant(mode: "interaction") }
+                            }
+                        }
+                        if snowbreak.availableOutfits.count > 1 {
+                            Section("服饰／形态") {
+                                ForEach(snowbreak.availableOutfits, id: \.self) { outfit in
+                                    let title = outfit == "underwear" ? "婚纱内衣版" : outfit == "nude" ? "果体版" : outfit == "lv2" ? "Lv2 形态" : (snowbreak.characterID == "Fenny" ? "原婚纱" : "正常服饰")
+                                    Button(snowbreak.companionOutfit == outfit ? "✓ \(title)" : title) { snowbreak.selectVariant(outfit: outfit) }
+                                }
+                            }
+                        }
+                        Section("角色切换") {
+                            ForEach(snowbreak.savedCharacters, id: \.self) { id in
+                                Button("切换到\(SnowbreakStage.displayName(for: id))") { snowbreak.selectCharacter(id) }
+                            }
+                        }
+                        Section("角色专属动作") {
+                            ForEach(snowbreak.actions.filter { !$0.hasPrefix("universal_ar_") }, id: \.self) { id in
+                                Button(sourceActionLabel(id)) { snowbreak.play(id, withVoice: snowbreakVoice) }
+                            }
+                        }
+                        Section("AR 场景") {
+                            Button(ar.roomHidden ? "显示原游戏房间／家具" : "隐藏原游戏房间（纯现实背景）") {
+                                let nextHidden = !ar.roomHidden
+                                ar.setRoomHidden(nextHidden)
+                                snowbreak.setARMode(true, hideRoom: nextHidden)
+                            }
+                            Button("重新放置锚点") {
+                                ar.resetPlacement()
+                                arPlacementMode = true
+                            }
+                            Button("停止当前动作") { stopAction() }
+                        }
+                    } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: "figure.dance").font(.system(size: 13))
+                            Text("动作/角色").font(.caption.weight(.medium))
+                        }
+                        .foregroundStyle(.white).padding(.horizontal, 11).padding(.vertical, 7)
+                        .background(.ultraThinMaterial, in: Capsule())
+                        .overlay(Capsule().stroke(.white.opacity(0.25)))
+                    }
+                    arPill("camera.viewfinder", title: "看看现实", active: arVisionAttach) {
+                        send("看看 AR 镜头里的现实画面，告诉我你看到了什么。")
+                    }
+                    Menu {
+                        ForEach(AppOrientationMode.allCases) { mode in
+                            Button(orientationMode == mode ? "✓ \(mode.label)" : mode.label) {
+                                orientationModeRaw = mode.rawValue
+                                GameOrientation.setUserMode(mode)
+                            }
+                        }
+                        Divider()
+                        Button(deskPetKeepAwake ? "✓ 桌宠屏幕常亮" : "桌宠屏幕常亮") {
+                            deskPetKeepAwake.toggle()
+                            GameOrientation.setKeepAwake(deskPetKeepAwake)
+                        }
+                    } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: orientationMode.icon).font(.system(size: 13))
+                            Text(orientationMode.shortLabel).font(.caption.weight(.medium))
+                        }
+                        .foregroundStyle(.white).padding(.horizontal, 11).padding(.vertical, 7)
+                        .background(.ultraThinMaterial, in: Capsule())
+                        .overlay(Capsule().stroke(.white.opacity(0.25)))
+                    }
+                    arPill("eye", title: "纯净", active: false) { cleanDeskMode = true }
+                }.padding(.horizontal, 14)
+            }.padding(.top, 8)
+            Spacer()
+        }
+    }
+    private func arPill(_ icon: String, title: String, active: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 4) {
+                Image(systemName: icon).font(.system(size: 13))
+                Text(title).font(.caption.weight(.medium))
+            }
+            .foregroundStyle(active ? .black : .white)
+            .padding(.horizontal, 11).padding(.vertical, 7)
+            .background(active ? AnyShapeStyle(.white) : AnyShapeStyle(.ultraThinMaterial), in: Capsule())
+            .overlay(Capsule().stroke(.white.opacity(active ? 0.9 : 0.25)))
+        }
+    }
     private var background: some View {
         GeometryReader { proxy in
             if showBackground, let image = stage.backgrounds[backgroundName] ?? stage.backgrounds.values.first {
@@ -413,7 +680,10 @@ struct CompanionHome: View {
                     .foregroundStyle(.white).padding(.horizontal, 16).padding(.vertical, 14)
                     .background(.ultraThinMaterial, in: Capsule()).overlay(Capsule().stroke(.white.opacity(0.2)))
                     .accessibilityIdentifier("homeMessageInput")
-                circle(camera.enabled ? "video.fill" : "video.slash", label:camera.enabled || camera.starting ? "关闭后置视频" : "开启后置视频") { camera.toggle() }
+                circle(ar.active ? (arVisionAttach ? "eye.fill" : "eye") : (camera.enabled ? "video.fill" : "video.slash"),
+                       label: ar.active ? (arVisionAttach ? "关闭对话自动带AR画面" : "对话自动附带AR现实画面") : (camera.enabled || camera.starting ? "关闭后置视频" : "开启后置视频")) {
+                    if ar.active { arVisionAttach.toggle() } else { camera.toggle() }
+                }
                 if callManager.active {
                     circle("phone.down.fill", label: "挂断语音通话") { callManager.hangUp() }
                 } else {
@@ -462,7 +732,8 @@ struct CompanionHome: View {
                 if isSnowbreak {await snowbreak.refreshBodyState()}
                 var images:[CameraFrame] = []
                 if let selectedImage = selectedImage {images.append(selectedImage)}
-                if let frame = try await camera.frame(){images.append(frame)}
+                if ar.active && (arVisionAttach || explicitText?.contains("镜头") == true), let arFrame = ar.captureFrame() { images.append(arFrame) }
+                else if let frame = try await camera.frame(){images.append(frame)}
                 if (selfAppearanceImagePolicy == "always" || selfAppearanceImagePolicy == "questions" && BodyCommand.asksAppearance(text)),!images.contains(where:{$0.source == .selfPortrait}) {images.append(try await ownPortrait())}
                 guard sheet == nil,scenePhase == .active,!store.busy,store.conversationID == conversationID else { return }
                 let before = store.archive.messages.count
@@ -480,6 +751,7 @@ struct CompanionHome: View {
     private func startHomeCall(mode: VoiceCallMode) {
         guard !store.archive.settings.endpoint.isEmpty else { sheet = .api; return }
         senses.stop(); camera.stop(); speech.stop()
+        if mode == .fullPhone { ar.pauseSession() }
         callManager.start(
             mode: mode,
             store: store,
@@ -510,12 +782,12 @@ struct CompanionHome: View {
         pendingTouches.append(message);scheduleTouches()
     }
     private func scheduleTouches(){
-        guard !pendingTouches.isEmpty,!store.busy,!speech.busy,!modelEditing,sheet == nil,scenePhase == .active else{return}
+        guard !pendingTouches.isEmpty,!store.busy,!speech.busy,!modelEditing,!snowbreak.isInteracting,sheet == nil,scenePhase == .active else{return}
         let ticket=UUID(),conversation=store.conversationID;touchTicket=ticket
         Task{@MainActor in
             try? await Task.sleep(nanoseconds:400_000_000)
-            guard ticket==touchTicket,conversation==store.conversationID,!store.busy,sheet == nil,scenePhase == .active,touchAI,!pendingTouches.isEmpty else{return}
-            let batch=pendingTouches.drain(chatBusy:store.busy,speechBusy:speech.busy,editing:modelEditing);guard !batch.isEmpty else{return};let records=batch.joined(separator:"\n")
+            guard ticket==touchTicket,conversation==store.conversationID,!store.busy,!snowbreak.isInteracting,sheet == nil,scenePhase == .active,touchAI,!pendingTouches.isEmpty else{return}
+            let batch=pendingTouches.drain(chatBusy:store.busy,speechBusy:speech.busy,editing:modelEditing || snowbreak.isInteracting);guard !batch.isEmpty else{return};let records=batch.joined(separator:"\n")
             store.send(records,actions:availableActions,context:companionContext("屏幕触碰事件，已合并连续触碰"));pendingMotionRevision=currentRevision
         }
     }
@@ -584,6 +856,27 @@ struct CompanionHome: View {
                 }
                 VStack(spacing: 0) {
                     Toggle(isOn: $showBackground) { Label("显示背景", systemImage: "person.and.background.dotted") }.tint(.green).padding(16).accessibilityIdentifier("showBackground")
+                    Divider().padding(.leading, 50)
+                    Picker("屏幕方向（桌宠显示器）", selection: Binding(get: { orientationMode }, set: { mode in
+                        orientationModeRaw = mode.rawValue
+                        GameOrientation.setUserMode(mode)
+                    })) {
+                        ForEach(AppOrientationMode.allCases) { mode in
+                            Text(mode.label).tag(mode)
+                        }
+                    }.padding(16)
+                    Divider().padding(.leading, 50)
+                    Toggle(isOn: Binding(get: { deskPetKeepAwake }, set: { val in
+                        deskPetKeepAwake = val
+                        GameOrientation.setKeepAwake(val)
+                    })) { Label("桌宠模式屏幕常亮", systemImage: "sun.max.fill") }.tint(.green).padding(16)
+                    Divider().padding(.leading, 50)
+                    Picker("3D 角色比例", selection: Binding(get: { proportionMode }, set: { setProportion($0) })) {
+                        Text("1:1 原比例").tag("normal")
+                        Text("Q版大头身").tag("chibi")
+                    }.padding(16)
+                    Divider().padding(.leading, 50)
+                    Toggle(isOn: $deferredInteraction) { Label("互动松手后回应（允许自由拉动）", systemImage: "hand.draw") }.tint(.green).padding(16)
                     Divider().padding(.leading, 50)
                     if !stage.backgrounds.isEmpty {
                         Picker("场景", selection: $backgroundName) {

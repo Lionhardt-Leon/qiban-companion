@@ -10,7 +10,7 @@ struct SnowbreakLibrary {
     init(directory: URL? = nil) {
         self.directory = directory ?? FileManager.default.urls(for:.applicationSupportDirectory,in:.userDomainMask)[0]
             .appendingPathComponent(AppIdentity.storageNamespace+"/SnowbreakLibrary",isDirectory:true)
-        for deprecated in ["Augusta.snowbreak","Qingxiao.snowbreak","universal-motions.json"] {
+        for deprecated in ["Augusta.snowbreak","Qingxiao.snowbreak"] {
             try? FileManager.default.removeItem(at: self.directory.appendingPathComponent(deprecated))
         }
     }
@@ -278,10 +278,11 @@ final class SnowbreakScheme: NSObject, WKURLSchemeHandler {
 }
 
 struct SnowbreakTouchEvent {
-    let id = UUID(); let label:String;var gesture="tap";var confidence=1.0;var source="manual-skinned-triangle"
+    let id = UUID(); let label:String;var gesture="tap";var confidence=1.0;var source="manual-skinned-triangle";var held=false
     var message:String {
-        let kind=["tap":"轻触","double_tap":"连续轻触","long_press":"按住","stroke":"抚摸","drag":"划过"][gesture] ?? "触碰"
-        return "[屏幕触碰] 用户\(kind)了你的\(label)。识别来源：\(source)，置信度\(Int(confidence*100))%。这是模型表面事件，不代表现实触觉；具体部位未确认时不能自行猜测。请按人设决定回应或拒绝，额外动作只在你接受时选择。"
+        let kind=["tap":"轻触","double_tap":"连续轻触","long_press":"按住","stroke":"抚摸","drag":"拉动／调整"][gesture] ?? "触碰"
+        let holdNote = held ? "（用户自由调整完成后已松手，并保持了当前腿部姿态）" : ""
+        return "[屏幕触碰] 用户\(kind)了你的\(label)\(holdNote)。识别来源：\(source)，置信度\(Int(confidence*100))%。这是模型表面事件，不代表现实触觉；具体部位未确认时不能自行猜测。请按人设决定回应或拒绝，额外动作只在你接受时选择。"
     }
 }
 
@@ -303,14 +304,20 @@ struct SnowbreakTouchEvent {
     var modelKey:String {characterID.lowercased()}
     @Published private(set) var savedCharacters:[String]=[]
     @Published private(set) var sampleLabels:[String:String]=[:]
+    @Published private(set) var universalLabels:[String:String]=[:]
     @Published private(set) var ready = false
     @Published private(set) var isEditing=false
+    @Published private(set) var isInteracting=false
+    @Published private(set) var arModeEnabled=false
+    @Published private(set) var proportionMode="normal"
     @Published private(set) var error: String?
     @Published private(set) var notice: String?
     @Published private(set) var activeAction: String?
     @Published private(set) var actions: [String] = []
     @Published private(set) var touch: SnowbreakTouchEvent?
     private(set) var interactionRevision = 0
+    private var arFrameInFlight = false
+    var universalARActions:[String] { actions.filter { $0.hasPrefix("universal_ar_") } }
     let library:SnowbreakLibrary
     private weak var webView:WKWebView?
     private var pageReady = false
@@ -478,15 +485,20 @@ struct SnowbreakTouchEvent {
         guard body["nonce"] as? String == nonce else { return }
         switch type {
         case "editing": isEditing=body["active"] as? Bool == true
+        case "interacting": isInteracting=body["active"] as? Bool == true
         case "universalReady":
             let learned = body["learned"] as? [String] ?? []
+            let rawUniversal = body["learnedLabels"] as? [String:String] ?? [:]
+            for (k, v) in rawUniversal where k.hasPrefix("mmd_") || k.hasPrefix("ar_") {
+                universalLabels["universal_" + k] = v
+            }
             let existingSamples = Set(actions.filter { $0.hasPrefix("snowbreak_") }.map { String($0.dropFirst("snowbreak_".count)) })
             actions.removeAll { $0.hasPrefix("universal_") }
-            for clip in learned where clip.hasPrefix("mmd_") && !existingSamples.contains(clip) {
+            for clip in learned where (clip.hasPrefix("mmd_") || clip.hasPrefix("ar_")) && !existingSamples.contains(clip) {
                 actions.append("universal_" + clip)
             }
         case "ready":
-            applyHardwareBudget();isEditing=false
+            applyHardwareBudget();isEditing=false;isInteracting=false
             guard let identity=body["characterId"] as? String,SnowbreakLibrary.supportedCharacters.contains(identity) else {error="不支持的角色包。";return}
             do {
                 if staged == nil { try library.ensureSavedCopy(for: identity) }
@@ -502,6 +514,10 @@ struct SnowbreakTouchEvent {
                 var labelMap: [String:String] = [:]
                 for (k,v) in rawLabels { labelMap["snowbreak_" + k] = v }
                 sampleLabels = labelMap
+                let rawUniversal = body["learnedLabels"] as? [String:String] ?? [:]
+                var uMap: [String:String] = [:]
+                for (k,v) in rawUniversal where k.hasPrefix("mmd_") || k.hasPrefix("ar_") { uMap["universal_" + k] = v }
+                universalLabels = uMap
                 if identity == "Enya" || identity == "Fenny" {
                     actions = ["head","left","right","home_login","home_invite","home_shy","home_check","home_kiss","home_jealous","home_marry","home_sigh","home_stage","home_stand","show_02","show_03","show_04","show_05","sequence","idle_01","idle_02"].filter { samples.contains($0) }.map { "snowbreak_"+$0 }
                     if identity == "Fenny" {actions += DialogueMotion.fennyScenes.map(\.id).filter{samples.contains(String($0.dropFirst("snowbreak_".count)))}}
@@ -510,7 +526,7 @@ struct SnowbreakTouchEvent {
                 }
                 let learned = body["learned"] as? [String] ?? []
                 actions += ["yuki_hello","yuki_Yes","yuki_No","yuki_Peace_hand","yuki_dance_90bpm","yuki_dance_120bpm","yuki_f_vibe_dance_60_bpm_002"].filter { learned.contains($0) && (!$0.contains("dance") || body["stance"] as? String == "standing") }.map { "enya_"+$0 }
-                for clip in learned where clip.hasPrefix("mmd_") && !samples.contains(clip) {
+                for clip in learned where (clip.hasPrefix("mmd_") || clip.hasPrefix("ar_")) && !samples.contains(clip) {
                     actions.append("universal_" + clip)
                 }
                 ready = true;error = nil;if notice?.hasPrefix("渲染已中断") == true {notice=nil}
@@ -521,14 +537,14 @@ struct SnowbreakTouchEvent {
             let active = body["active"] as? Bool == true
             // Playback events are not user edits and must not invalidate a pending AI turn.
             let status = body["status"] as? String ?? ""
-            let fallbackLabel = status.hasPrefix("learned:mmd_") ? "通用动作" : (status.hasPrefix("learned:") ? "学习动作" : "\(characterName)互动")
+            let fallbackLabel = status.hasPrefix("learned:ar_") ? "AR 通用动作" : (status.hasPrefix("learned:mmd_") ? "通用动作" : (status.hasPrefix("learned:") ? "学习动作" : "\(characterName)互动"))
             activeAction = active ? String((body["label"] as? String ?? fallbackLabel).prefix(60)) : nil
         case "selfState": if let value = body["state"] as? [String:Any] {updateBody(value)}
         case "touch":
             if !paused,body["completed"] as? Bool == true,let label = body["label"] as? String,label.count <= 30 {
                 let confidence=body["confidence"] as? Double ?? 1
                 guard confidence.isFinite,(0...1).contains(confidence) else{return}
-                interactionRevision += 1;touch = SnowbreakTouchEvent(label:label,gesture:String((body["gesture"] as? String ?? "tap").prefix(24)),confidence:confidence,source:String((body["source"] as? String ?? "manual-skinned-triangle").prefix(60)))
+                interactionRevision += 1;touch = SnowbreakTouchEvent(label:label,gesture:String((body["gesture"] as? String ?? "tap").prefix(24)),confidence:confidence,source:String((body["source"] as? String ?? "manual-skinned-triangle").prefix(60)),held:body["held"] as? Bool == true)
                 if UserDefaults.standard.object(forKey:"touchHaptics") as? Bool ?? true {UIImpactFeedbackGenerator(style:.light).impactOccurred()}
             }
         case "error":
@@ -583,6 +599,25 @@ struct SnowbreakTouchEvent {
         if webView === view { webView = nil;pageReady = false;ready = false;needsRenderRecovery=false }
     }
     func setTouchPolicy(_ value:Bool){send(["type":"touchPolicy","aiControlled":value])}
+    func setDeferredFeedback(_ value:Bool){send(["type":"deferredFeedback","enabled":value])}
+    func setProportionMode(_ mode:String){
+        proportionMode = mode == "chibi" ? "chibi" : "normal"
+        send(["type":"proportionMode","mode":proportionMode])
+    }
+    func setARMode(_ enabled:Bool,hideRoom:Bool = true){
+        arModeEnabled = enabled
+        send(["type":"arMode","enabled":enabled,"hideRoom":hideRoom])
+    }
+    func pushARFrame(proj:[Float],mv:[Float],exposure:Float,warmth:Float){
+        guard pageReady,ready,arModeEnabled,!paused,!arFrameInFlight,let view = webView,proj.count == 16,mv.count == 16 else { return }
+        arFrameInFlight = true
+        let pStr = proj.map { String(format: "%.5f", $0) }.joined(separator: ",")
+        let mStr = mv.map { String(format: "%.5f", $0) }.joined(separator: ",")
+        let js = String(format: "window.SnowbreakHost?.arFrame([%@],[%@],%.4f,%.4f)", pStr, mStr, exposure, warmth)
+        view.evaluateJavaScript(js) { [weak self] _, _ in
+            Task { @MainActor in self?.arFrameInFlight = false }
+        }
+    }
     func setSpeechLevel(_ value:Float){if ready{send(["type":"speechLevel","value":value.isFinite ? min(1,max(0,value)):0])}}
     func setVoice(_ value:Bool) { send(["type":"voice","enabled":value]) }
     func setOriginalLanguage(_ language:String){send(["type":"voiceLanguage","language":language == "ja" ? "ja":"zh"])}
@@ -640,10 +675,10 @@ struct SnowbreakImportView:View {
                     if stage.library.hasCurrent { Text("已保存角色素材，下次启动会从本机加载。") }
                     if let error = stage.error { Text(error).foregroundStyle(.red) }
                 }
-                Section("通用 3D 动作包") {
-                    Text("导入 .qmotion 通用动作包后，所有已导入的 3D 角色均可使用该动作。")
+                Section("通用 3D / AR 动作包") {
+                    Text("导入 .qmotion 通用动作包（如奈莉德 AR 通用动作包）后，所有已导入的 3D 角色在看板娘与 AR 模式均可使用。")
                     Button("导入通用动作包 (.qmotion)") { pickingMotion = true }
-                    if stage.library.hasUniversalMotions { Text("已安装通用 3D 动作包。").foregroundStyle(.secondary) }
+                    if stage.library.hasUniversalMotions { Text("已安装通用 3D / AR 动作包。").foregroundStyle(.secondary) }
                     if let notice = stage.notice, notice.contains("通用动作") { Text(notice).foregroundStyle(.secondary) }
                 }
                 Section("触碰") {

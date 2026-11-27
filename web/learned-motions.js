@@ -3,7 +3,7 @@ import * as THREE from 'three';
 export function createLearnedMotions(root,camera,config,stance,extraConfig=null){
  const catalogs=[config,extraConfig].filter(Boolean);
  if(!catalogs.length)return {available:()=>[],apply(){},snapshot:()=>({available:false})};
- const validCatalog=cat=>['companion-upper-body-transfer/1','companion-upper-body-transfer/2','companion-upper-body-transfer/3'].includes(cat.schema)&&['Yuki','UniversalMMD'].includes(cat.sourceCharacter)&&/^[A-Za-z0-9_-]{1,64}$/.test(cat.targetCharacter)&&Array.isArray(cat.clips)&&cat.clips.length<=24;
+ const validCatalog=cat=>['companion-upper-body-transfer/1','companion-upper-body-transfer/2','companion-upper-body-transfer/3'].includes(cat.schema)&&['Yuki','UniversalMMD','SnowbreakAR'].includes(cat.sourceCharacter)&&/^[A-Za-z0-9_-]{1,64}$/.test(cat.targetCharacter)&&Array.isArray(cat.clips)&&cat.clips.length<=24;
  for(const cat of catalogs){
   if(!validCatalog(cat))throw new Error('Invalid learned motion catalog');
   if(cat.schema.endsWith('/3')&&cat.targetCharacter!=='Universal'&&(cat.stance!=='standing'||stance!=='standing'))throw new Error('Standing motion requires standing source');
@@ -26,7 +26,7 @@ export function createLearnedMotions(root,camera,config,stance,extraConfig=null)
   const catStanding=cat.schema.endsWith('/3')&&cat.stance==='standing';
   const isUniversal=cat.targetCharacter==='Universal';
   for(const c of cat.clips){
-   const allowedId=['yuki_hello','yuki_Yes','yuki_No','yuki_Peace_hand','yuki_dance_90bpm','yuki_dance_120bpm','yuki_f_vibe_dance_60_bpm_002'].includes(c.id)||/^mmd_[a-zA-Z0-9_-]{1,48}$/.test(c.id);
+   const allowedId=['yuki_hello','yuki_Yes','yuki_No','yuki_Peace_hand','yuki_dance_90bpm','yuki_dance_120bpm','yuki_f_vibe_dance_60_bpm_002'].includes(c.id)||/^(mmd|ar)_[a-zA-Z0-9_-]{1,48}$/.test(c.id);
    if(!allowedId||clips.has(c.id)||!Number.isInteger(c.frames)||c.frames<2||c.frames>1800||!Number.isFinite(c.fps)||c.fps<=0||c.fps>60)throw new Error('Invalid learned clip');
    const channels={};for(const [key,value] of Object.entries(c.channels||{})){
     const width=/^(left|right)(Curl[0-4]_[0-2]|Spread[0-4])$/.test(key)?1:['headDelta','chestDelta',...(catStanding?['pelvisDelta','leftFootDelta','rightFootDelta']:[])].includes(key)?4:(['leftUpper','leftLower','rightUpper','rightLower','rightHandWidth','rightHandForward','leftHandWidth','leftHandForward',...(catStanding?['leftThigh','rightThigh','leftCalf','rightCalf']:[])].includes(key)||/^(left|right)Finger[0-4]_[0-2]$/.test(key))?3:0;
@@ -38,7 +38,7 @@ export function createLearnedMotions(root,camera,config,stance,extraConfig=null)
     channels[key]={values,width};
    }
    if(!channels.headDelta)throw new Error('Missing learned head reference');
-   const isMmd=c.id.startsWith('mmd_'),dance=c.id.includes('dance')||isMmd;
+   const isMmd=c.id.startsWith('mmd_')||c.id.startsWith('ar_'),dance=c.id.includes('dance')||isMmd;
    const expectedKind=dance?(catStanding?'standing-dance':'seated-dance'):c.id==='yuki_Peace_hand'?'peace':c.id==='yuki_hello'?'greeting':'head',arms=dance?['left','right']:expectedKind==='head'?[]:['right'];
    if(!cat.schema.endsWith('/1')&&(c.motionKind!==expectedKind||JSON.stringify(c.arms)!==JSON.stringify(arms)))throw new Error('Invalid learned action capability');
    if(dance&&!standing&&!isUniversal)continue;

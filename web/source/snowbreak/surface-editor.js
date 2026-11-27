@@ -1,7 +1,7 @@
 import {SURFACE_REGIONS,surfaceKey,classifySurface} from './surface.js';
 import {SURFACE_COLORS} from './surface-overlay.js';
 import {createSurfaceLabels} from './surface-labels.js';
-export function mountSurfaceEditor(display,canvas,host,{load,save,tracker,onEvent,enabled}){
+export function mountSurfaceEditor(display,canvas,host,{load,save,tracker,onEvent,onInteracting,enabled}){
   let stored={};try{stored=load();}catch{}const labels=createSurfaceLabels(stored);
   const title=document.createElement('h3');title.textContent='精细触碰表面标注';host.appendChild(title);
   const label=document.createElement('label'),edit=document.createElement('input');edit.type='checkbox';edit.id='snowSurfaceEdit';label.append(edit,document.createTextNode('标注模式：点按或拖过模型表面写入部位'));host.appendChild(label);
@@ -17,7 +17,7 @@ export function mountSurfaceEditor(display,canvas,host,{load,save,tracker,onEven
   function sync(){if(disposed)return;const state=labels.state();undo.disabled=!state.undo;redo.disabled=!state.redo;const overlay=display.setSurfaceLabels?.(labels.snapshot(),view.checked);overlayInfo.textContent=view.checked?`已显示 ${overlay?.triangles||0} 个标签三角形${overlay?.truncated?'（显示上限5000，其余标签仍保留）':''}；颜色不是自动识别准确率。`:'显示颜色默认关闭；撤销历史仅保留本次页面最近30次操作。';}
   function schedule(){if(!scheduled)scheduled=requestAnimationFrame(()=>{scheduled=0;sync();});}
   function persist(){save(labels.snapshot());sync();}
-  function cancelActive(){if(!active)return;if(active.mode==='paint')labels.cancel();tracker.cancel();const id=active.id;active=null;if(canvas.hasPointerCapture(id))canvas.releasePointerCapture(id);sync();}
+  function cancelActive(){if(!active)return;if(active.mode==='paint')labels.cancel();else if(active.known)onInteracting?.(false);tracker.cancel();const id=active.id;active=null;if(canvas.hasPointerCapture(id))canvas.releasePointerCapture(id);sync();}
   edit.onchange=()=>{cancelActive();if(edit.checked)view.checked=true;sync();};select.onchange=cancelActive;view.onchange=sync;
   undo.onclick=()=>{cancelActive();if(labels.undo()){persist();status.textContent='已撤销一次标注操作。';}};redo.onclick=()=>{cancelActive();if(labels.redo()){persist();status.textContent='已重做一次标注操作。';}};
   reset.onclick=()=>{cancelActive();labels.begin();for(const key of Object.keys(labels.snapshot()))labels.set(key,undefined);if(labels.commit())persist();status.textContent='已移除当前模型的旧标注，改用绑定姿态分区；可撤销。';};
@@ -26,14 +26,14 @@ export function mountSurfaceEditor(display,canvas,host,{load,save,tracker,onEven
     if(active||canvas.dataset.snowbreakFrameEdit==='true'||(!edit.checked&&!enabled()))return;e.stopPropagation();const hit=display.pickSurface(e.clientX,e.clientY);
     active={id:e.pointerId,mode:edit.checked?'paint':'touch',region:select.value};canvas.setPointerCapture(e.pointerId);
     if(active.mode==='paint'){labels.begin();try{mark(hit);}catch(err){status.textContent=err.message;}}
-    else{const region=classify(hit);display.senseTouch?.(hit,region);if(region){tracker.begin({pointerId:e.pointerId,x:e.clientX,y:e.clientY,region,source:'skinned-surface'});active.known=true;active.hit=hit;}else if(hit?.alphaVerified){tracker.begin({pointerId:e.pointerId,x:e.clientX,y:e.clientY,region:{id:'body',label:'身体（具体部位未确认）',confidence:0,source:'unknown-skinned-triangle'},source:'skinned-surface'});active.known=true;active.hit=hit;}else status.textContent='背景：未命中角色。';}
+    else{const region=classify(hit);display.senseTouch?.(hit,region);if(region){tracker.begin({pointerId:e.pointerId,x:e.clientX,y:e.clientY,region,source:'skinned-surface'});active.known=true;active.hit=hit;onInteracting?.(true);}else if(hit?.alphaVerified){tracker.begin({pointerId:e.pointerId,x:e.clientX,y:e.clientY,region:{id:'body',label:'身体（具体部位未确认）',confidence:0,source:'unknown-skinned-triangle'},source:'skinned-surface'});active.known=true;active.hit=hit;onInteracting?.(true);}else status.textContent='背景：未命中角色。';}
   }
   function move(e){if(active?.id!==e.pointerId)return;if(canvas.dataset.snowbreakFrameEdit==='true'){cancelActive();return;}e.stopPropagation();if(active.mode==='paint'){try{mark(display.pickSurface(e.clientX,e.clientY));}catch(err){status.textContent=err.message;}}else if(active.known)tracker.move({pointerId:e.pointerId,x:e.clientX,y:e.clientY});}
   function up(e){
     if(active?.id!==e.pointerId)return;e.stopPropagation();const gesture=active;active=null;
     if(gesture.mode==='paint'){if(labels.commit())persist();status.textContent=`已保存 ${labels.state().count} 个表面三角形；可撤销本次笔划。`;}
-    else if(gesture.known&&enabled()){const event=tracker.finish({pointerId:e.pointerId,x:e.clientX,y:e.clientY});if(event){event.surface=gesture.hit;status.textContent='命中已确认部位：'+event.regionLabel;onEvent(event);}}
-    else tracker.cancel();if(canvas.hasPointerCapture(e.pointerId))canvas.releasePointerCapture(e.pointerId);
+    else if(gesture.known&&enabled()){onInteracting?.(false);const event=tracker.finish({pointerId:e.pointerId,x:e.clientX,y:e.clientY});if(event){event.surface=gesture.hit;status.textContent='命中已确认部位：'+event.regionLabel;onEvent(event);}}
+    else{if(gesture.known)onInteracting?.(false);tracker.cancel();}if(canvas.hasPointerCapture(e.pointerId))canvas.releasePointerCapture(e.pointerId);
   }
   function cancel(e){if(active?.id===e.pointerId)cancelActive();}
   for(const [type,fn] of [['pointerdown',down],['pointermove',move],['pointerup',up],['pointercancel',cancel],['lostpointercapture',cancel]])canvas.addEventListener(type,fn);

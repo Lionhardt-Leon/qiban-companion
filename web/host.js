@@ -8,10 +8,20 @@ import {mountSurfaceEditor} from './source/snowbreak/surface-editor.js';
 import {createTouchTracker} from './source/body/touch.js';
 import {FULL_FRAME,createPresentationEditor} from './presentation-editor.js';
 
-let aiControlledTouch=true;
+let aiControlledTouch=true,arModeEnabled=false,arHideRoom=true,proportionMode='normal',deferredFeedback=true,interactionDepth=0;
 const canvas=document.querySelector('#stage'), status=document.querySelector('#status'), editorHost=document.querySelector('#editor');
 let collection=null,lastPackageUrl=null,pausedScene=null,loading=Promise.resolve(),hardwareBudget={},originalLanguage='Chinese',universalMotions=null;
 let generation=0,nonce='',runtime,display,adapter,voices,editor,presentation,modelEditor,lighting,learned,last=0,paused=false,voiceEnabled=true;
+function setInteracting(active){
+  const prev=interactionDepth>0;
+  interactionDepth=Math.max(0,interactionDepth+(active?1:-1));
+  const next=interactionDepth>0;
+  if(prev!==next)emit({type:'interacting',active:next});
+}
+function syncBackground(){
+  const bg=(arModeEnabled||!display?.sceneState?.().available)?'transparent':'#201d29';
+  document.body.style.background=bg;document.documentElement.style.background=bg;
+}
 const danceControls=createDanceControls(value=>retimeDance(learned,value.tempo,performance.now()));
 const finishPaint=document.createElement('button');finishPaint.id='finishPaint';finishPaint.hidden=true;
 finishPaint.style.cssText='position:fixed;bottom:23%;left:8%;right:8%;z-index:5';document.body.appendChild(finishPaint);
@@ -28,7 +38,7 @@ const emit=message=>{
   window.dispatchEvent(new CustomEvent('snowbreak-event',{detail:value}));
 };
 const text=value=>{status.textContent=value;status.hidden=!value;};
-function cleanup(){window.__snowbreakMigration=null;pausedScene=null;modelEditor?.dispose();modelEditor=null;danceControls.close();learned=null;finishPaint.hidden=true;presentation?.dispose();lighting?.dispose();editor?.dispose();adapter?.stop('renderer-close');voices?.dispose();display?.dispose();void runtime?.dispose();lighting=presentation=editor=adapter=voices=display=runtime=null;editorHost.replaceChildren();}
+function cleanup(){interactionDepth=0;window.__snowbreakMigration=null;pausedScene=null;modelEditor?.dispose();modelEditor=null;danceControls.close();learned=null;finishPaint.hidden=true;presentation?.dispose();lighting?.dispose();editor?.dispose();adapter?.stop('renderer-close');voices?.dispose();display?.dispose();void runtime?.dispose();lighting=presentation=editor=adapter=voices=display=runtime=null;editorHost.replaceChildren();}
 
 function load(url,id,variant){const ticket=++generation;const task=loading.catch(()=>{}).then(()=>ticket===generation?performLoad(url,id,variant,ticket):undefined);loading=task;return task;}
 async function performLoad(url,id,variant,ticket){
@@ -54,11 +64,12 @@ async function performLoad(url,id,variant,ticket){
     collection=opened.variants.length?opened:null;if(opened.selection)localStorage.setItem(opened.manifest.characterId.toLowerCase()+'-collection-selection',opened.selection.id);
     runtime=opened.runtime;display=nextDisplay;voices=nextVoices;display.setRenderBudget(hardwareBudget);
     voices.setLanguage?.(originalLanguage);
-    const background=display.sceneState().available?'#201d29':'transparent';document.body.style.background=background;document.documentElement.style.background=background;
+    syncBackground();
     adapter=createSnowbreakSampleAdapter(display,{audioForSample:sample=>voices.getAudio(sample)});
-    display.sceneInteractions.configure({beforeDrag:()=>{learned=null;display.embodiment.releaseHands();display.resetSenses();},scene:()=>adapter.snapshot().sceneId||display.editingScene,reaction:id=>{void adapter.playSceneReaction(id,{withVoice:voiceEnabled});},voice:id=>{if(voiceEnabled){const audio=voices.getAudio(id);if(audio){audio.currentTime=0;void audio.play().catch(()=>{});}}},event:emit});
+    display.sceneInteractions.setDeferredFeedback?.(deferredFeedback);
+    display.sceneInteractions.configure({beforeDrag:()=>{learned=null;display.embodiment.releaseHands();display.resetSenses();},interacting:setInteracting,scene:()=>adapter.snapshot().sceneId||display.editingScene,reaction:id=>{void adapter.playSceneReaction(id,{withVoice:voiceEnabled});},voice:id=>{if(voiceEnabled){const audio=voices.getAudio(id);if(audio){audio.currentTime=0;void audio.play().catch(()=>{});}}},event:emit});
     // The original body/face tracks, morph curves and scene transforms stay in the old renderer.
-    display.showFaceCandidate(true);const initial=display.sampleOptions().find(s=>s.id===display.sampleState().sampleId);const sceneKey='resting-scene:'+opened.manifest.characterId+':'+opened.selection?.mode;const remembered=localStorage.getItem(sceneKey);if(initial?.persistentState)adapter.enterScene(display.sampleOptions().some(s=>s.id===remembered&&s.persistentState)?remembered:initial.id);else adapter.enterStandby();display.sceneSelectionKey=sceneKey;display.faceViewer();last=performance.now();
+    display.showFaceCandidate(true);const initial=display.sampleOptions().find(s=>s.id===display.sampleState().sampleId);const sceneKey='resting-scene:'+opened.manifest.characterId+':'+opened.selection?.mode;const remembered=localStorage.getItem(sceneKey);if(initial?.persistentState)adapter.enterScene(display.sampleOptions().some(s=>s.id===remembered&&s.persistentState)?remembered:initial.id);else adapter.enterStandby();display.sceneSelectionKey=sceneKey;display.faceViewer();if(proportionMode!=='normal')display.setProportionMode?.(proportionMode);if(arModeEnabled){display.setARMode?.(true,{hideRoom:arHideRoom});syncBackground();}last=performance.now();
     let editingScene=null;
     const placementEditing=editing=>{emit({type:'editing',active:editing});if(editing){const state=adapter.snapshot();editingScene=state.sceneId?{id:state.sceneId,time:state.sceneTime}:null;display.editingScene=editingScene?.id||null;display.sceneInteractions.cancel();adapter.stop('placement-edit');if(editingScene){display.selectSample(editingScene.id);display.seek(editingScene.time%display.duration);}closeEditor();}else if(!paused){if(editingScene)adapter.enterScene(editingScene.id,editingScene.time);else adapter.enterStandby();editingScene=null;display.editingScene=null;}};
     const setupModelEditor=()=>{modelEditor?.dispose();const prefix=opened.manifest.characterId==='Enya'?'':opened.manifest.characterId.toLowerCase()+':';modelEditor=createPresentationEditor({setFrame:display.setModelFrame,frameState:display.modelFrameState},canvas,'model-placement:'+prefix+opened.selection?.mode+':'+(adapter.snapshot().sceneId||'main'),{initialFrame:{...FULL_FRAME,depth:0},title:'仅移动角色',idPrefix:'model',allowDepth:true,allowStretch:false,verticalSign:-1,dragScale:display.modelDragScale,onEditing:placementEditing});};
@@ -86,6 +97,7 @@ async function performLoad(url,id,variant,ticket){
     editor=mountSurfaceEditor(display,canvas,editorHost,{
       load:()=>JSON.parse(localStorage.getItem(labelKey)||'{}'),save:value=>localStorage.setItem(labelKey,JSON.stringify(value)),
       tracker:createTouchTracker({modelId:opened.manifest.skinId,source:'skinned-surface'}),enabled:()=>!paused,
+      onInteracting:setInteracting,
       onEvent:async event=>{
         if(ticket!==generation||paused)return;emit({type:'touch',region:event.region,label:event.regionLabel,gesture:event.gesture,confidence:event.confidence,source:event.regionSource,durationMs:event.durationMs,frequency:event.frequency,completed:true});
         if(!aiControlledTouch)await adapter.dispatchSurfaceTouch(event,{withVoice:voiceEnabled});
@@ -95,7 +107,7 @@ async function performLoad(url,id,variant,ticket){
     const select=editorHost.querySelector('#snowSurfaceRegion'),edit=editorHost.querySelector('#snowSurfaceEdit');
     edit.addEventListener('change',()=>{if(edit.checked){editorHost.classList.remove('open');finishPaint.textContent='完成'+select.selectedOptions[0].textContent+'标注';finishPaint.hidden=false;}});
     text('');emit({type:'ready',bodyActions:[...display.embodiment.snapshot().available,...display.sceneInteractions.available()],selection:opened.selection,variants:opened.variants,characterId:opened.manifest.characterId,skinId:opened.manifest.skinId,
-      stance:opened.runtime.getAsset('stateTransition')?.data.stance||'seated',samples:display.sampleOptions().map(x=>x.id),sampleLabels:Object.fromEntries(display.sampleOptions().map(x=>[x.id,x.label])),voices:voices.snapshot().available,learned:display.learnedOptions().map(x=>x.id)});
+      stance:opened.runtime.getAsset('stateTransition')?.data.stance||'seated',samples:display.sampleOptions().map(x=>x.id),sampleLabels:Object.fromEntries(display.sampleOptions().map(x=>[x.id,x.label])),voices:voices.snapshot().available,learned:display.learnedOptions().map(x=>x.id),learnedLabels:Object.fromEntries(display.learnedOptions().map(x=>[x.id,x.label]))});
     window.__snowbreakMigration={display,adapter,voices,editor,presentation,manifest:opened.manifest};
   }catch(error){
     if(ticket!==generation){nextDisplay?.dispose();nextVoices?.dispose();void opened?.runtime.dispose();return;}
@@ -130,8 +142,31 @@ async function command(value){
     universalMotions=value.catalog||null;
     if(display){
       const updated=display.setUniversalMotions(universalMotions);
-      emit({type:'universalReady',learned:updated.map(x=>x.id)});
+      emit({type:'universalReady',learned:updated.map(x=>x.id),learnedLabels:Object.fromEntries(updated.map(x=>[x.id,x.label]))});
     }
+    return;
+  }
+  if(value.type==='arMode'){
+    arModeEnabled=!!value.enabled;
+    if(value.hideRoom!==undefined)arHideRoom=!!value.hideRoom;
+    if(display){
+      const st=display.setARMode(arModeEnabled,{hideRoom:arHideRoom});
+      syncBackground();
+      emit({type:'arState',...st});
+    }
+    return;
+  }
+  if(value.type==='proportionMode'){
+    proportionMode=value.mode==='chibi'?'chibi':'normal';
+    if(display){
+      const st=display.setProportionMode(proportionMode);
+      emit({type:'proportionState',...st});
+    }
+    return;
+  }
+  if(value.type==='deferredFeedback'){
+    deferredFeedback=!!value.enabled;
+    display?.sceneInteractions.setDeferredFeedback?.(deferredFeedback);
     return;
   }
   if(value.type==='dispose'){generation++;cleanup();return;}
@@ -192,6 +227,6 @@ async function command(value){
 }
 function inspect(){if(!display)return null;const body=display.embodiment.snapshot(),state=adapter?.snapshot(),sample=display.sampleOptions().find(s=>s.id===display.sampleState().sampleId);const leg=display.sceneInteractions.legState();return {...body,legs:leg.legs,available:[...body.available,...leg.available],lastResult:state?.status==='playing'&&sample?'正在播放原作动作：'+sample.label:body.lastResult,legResult:leg.lastResult,sourceAction:state?.status==='playing'?sample?.id:null,learnedMotion:learned?{id:learned.id,time:motionTime(learned,performance.now()),rate:learned.rate,amplitude:danceControls.get().amplitude}:null,interactionScene:state?.sceneId||null,outfit:collection?.selection?.outfit||'unknown',mode:collection?.selection?.mode||'unknown'};}
 function portrait(){if(!display||paused)throw new Error('模型尚未就绪');const c=document.createElement('canvas'),ratio=1024/Math.max(canvas.width,canvas.height);c.width=Math.round(canvas.width*ratio);c.height=Math.round(canvas.height*ratio);const ctx=c.getContext('2d');ctx.fillStyle='#22202a';ctx.fillRect(0,0,c.width,c.height);display.drawSnapshot(ctx,c.width,c.height);return c.toDataURL('image/jpeg',.65);}
-window.SnowbreakHost={inspect,portrait,performance:()=>display?.performanceState(),receive:value=>{void command(value).catch(error=>emit({type:'notice',message:String(error.message||error)}));}};
+window.SnowbreakHost={inspect,portrait,performance:()=>display?.performanceState(),arFrame:(proj,mv,exp,warmth)=>display?.setARFrame?.(proj,mv,exp,warmth),receive:value=>{void command(value).catch(error=>emit({type:'notice',message:String(error.message||error)}));}};
 addEventListener('pagehide',()=>{generation++;cleanup();});
 emit({type:'pageReady'});
