@@ -27,7 +27,32 @@
     bodyState = {},
     currentPane = '',
     editingMessage = null,
+    universalActions = [],
+    arState = { active: false, placed: false, scalePreset: 'tabletop' },
+    arAdjustOpen = false,
+    cleanDesk = false,
+    lastNormalModel = '',
+    pendingChibiVariant = '',
     timer;
+  const SNOWBREAK_IDS = ['Enya', 'Fenny', 'Katya', 'Cherno', 'Longyan', 'Nerida', 'Mia', 'Clarina', 'HeimdallQ'];
+  const CHARACTER_NAMES = {
+    Enya: '恩雅护士',
+    Fenny: '芬妮婚皮',
+    Katya: '凯茜娅婚皮',
+    Cherno: '琴诺',
+    Longyan: '胧嫣',
+    Nerida: '奈莉德',
+    Mia: '米娅',
+    Clarina: '克拉丽娜',
+    HeimdallQ: '海姆达尔 · Q版小人',
+    generic: '本地伙伴'
+  };
+  const CHIBI_VARIANT_BY_CHAR = {
+    Fenny: 'standing_fenny_starshine',
+    Katya: 'standing_katya',
+    Longyan: 'standing_longyan'
+  };
+  const isSnowbreak = id => SNOWBREAK_IDS.includes(id);
   const labels = {
     turn_left: '向左转',
     turn_right: '向右转',
@@ -182,9 +207,11 @@
   function action(id, motion, automatic = false) {
     if(id==='stop')return stage({type:'stop'});
     if(id==='procedural')return stage({type:'gesture',id,plan:motion,automatic});
+    if(id.startsWith('universal_'))return stage({type:'universal',id:id.slice(10),automatic});
+    if(id.startsWith('universal:'))return stage({type:'universal',id:id.slice(10),automatic});
     if(id.startsWith('snowbreak_'))return stage({type:'sample',id:id.slice(10),withVoice:automatic?false:state.preferences?.snowbreakVoice!==false,automatic});
     if(id.startsWith('enya_yuki_'))return stage({type:'learned',id:id.slice(5),automatic});
-    const variant=/^(?:enya|fenny)_(mode|outfit)_(.+)$/.exec(id);
+    const variant=/^(?:enya|fenny|snowbreak)_(mode|outfit)_(.+)$/.exec(id);
     if(variant){const selection=readyData?.selection||{mode:'standing',outfit:'normal'},mode=variant[1]==='mode'?variant[2]:selection.mode,outfit=variant[1]==='outfit'?variant[2]:selection.outfit;const item=(readyData?.variants||[]).find(v=>v.mode===mode&&v.outfit===outfit);if(item)stage({type:'variant',id:item.id});return;}
     if((readyData?.samples||[]).includes(id))return stage({type:'sample',id,automatic});
 
@@ -218,13 +245,42 @@
   async function refresh() {
     state = await call('bootstrap');
     archive = state.archive;
+    if (state.arState && typeof state.arState.active === 'boolean') arState = state.arState;
     applyTouchPolicy();
     render();
+    syncARUI();
     return state;
   }
   const icon=window.QibanUI.icon;
   let personaDraft=null,personaID='',personaTab='AI 人设',attachedImage=null,voiceCall=false,visionTicket=0,visionBusy=false;
-  const paneParents={api:'settings',services:'api',service:'services',persona:'settings',speech:'settings',history:'settings',messages:'settings',memories:'settings',diary:'settings',appearance:'settings',snowbreak:'settings',embodiment:'settings',assets:'settings',network:'settings',images:'',actions:'',mood:'actions','body-state':'actions',sources:'',greetings:'','edit-message':'messages','persona-transfer':'persona-return','prompt-preview':'persona-return','local-vision':'images'};
+  const paneParents={api:'settings',services:'api',service:'services',persona:'settings',speech:'settings',history:'settings',messages:'settings',memories:'settings',diary:'settings',appearance:'settings',snowbreak:'settings',embodiment:'settings',assets:'settings',network:'settings',images:'',actions:'','display-menu':'',mood:'actions','body-state':'actions',sources:'',greetings:'','edit-message':'messages','persona-transfer':'persona-return','prompt-preview':'persona-return','local-vision':'images'};
+  function syncARUI() {
+    const active = Boolean(arState?.active);
+    const placing = active && (!arState.placed || arAdjustOpen);
+    const snow = isSnowbreak(state?.selectedModel);
+    const arBtn = $('#ar-btn');
+    if (arBtn) arBtn.hidden = !snow;
+    document.documentElement?.classList?.toggle('ar-active', active);
+    document.body?.classList?.toggle('ar-active', active);
+    document.body?.classList?.toggle('ar-placing', placing);
+    document.body?.classList?.toggle('clean-desk', Boolean(cleanDesk));
+    const hud = $('#ar-hud');
+    if (hud) hud.hidden = !active;
+    const adj = $('#ar-adjust-bar');
+    if (adj) adj.hidden = !placing;
+    const cleanBtn = $('#clean-exit');
+    if (cleanBtn) cleanBtn.hidden = !cleanDesk;
+    const chibiBtn = $('#ar-chibi-btn');
+    if (chibiBtn) chibiBtn.textContent = (state?.selectedModel === 'HeimdallQ' || state?.preferences?.proportionMode === 'chibi') ? 'Q版小人' : '1:1原比';
+    const presetBtn = $('#ar-preset-btn');
+    if (presetBtn) presetBtn.textContent = arState?.scalePreset === 'realScale' ? '1:1等身' : '桌面手办';
+    const adjBtn = $('#ar-adjust-btn');
+    if (adjBtn) adjBtn.textContent = placing ? '完成调整' : '放置/调高';
+    const confirmBtn = $('#ar-confirm-btn');
+    if (confirmBtn) confirmBtn.textContent = arState?.placed ? '完成调整' : '确认放置';
+    const hint = $('#ar-hint');
+    if (hint) hint.textContent = arState?.placed ? '模型已锁定位置 · 可微调高度 / 大小 / 朝向，或点击完成' : '对准桌面或地面后点击「确认放置」，支持升降贴地与缩放';
+  }
   function render() {
     if(!archive)return;
     const last=archive.messages.at(-1),reply=last?.role==='assistant'?last:null;
@@ -281,6 +337,9 @@
       type: 'voiceLanguage',
       language: archive.settings.speech.language
     });
+    if (state?.universalMotions && selected.endsWith('.snowbreak')) {
+      stage({ type: 'universalMotions', catalog: state.universalMotions });
+    }
   }
   function button(id, text, cls = '') {
     return `<button type="button" data-do="${id}" class="${cls}">${escape(text)}</button>`;
@@ -295,7 +354,7 @@
     return `<label>${escape(label)}<select id="${id}">${values.map(([v, t]) => `<option value="${escape(v)}" ${String(value) === String(v) ? 'selected' : ''}>${escape(t)}</option>`).join('')}</select></label>`;
   }
   function panel(title,html,pane){
-    const menu=['actions','images','greetings','persona-transfer'].includes(pane);if(!menu)stage({type:'pause'});call('editing',{value:!menu}).catch(()=>{});call('homePage',{open:!menu}).catch(()=>{});restoreModel();currentPane=pane;
+    const menu=['actions','images','greetings','persona-transfer','display-menu'].includes(pane);if(!menu)stage({type:'pause'});call('editing',{value:!menu}).catch(()=>{});call('homePage',{open:!menu}).catch(()=>{});restoreModel();currentPane=pane;
     $('#panel').dataset.pane=pane;$('#panel-title').textContent=title;$('#panel-content').innerHTML=html;
     $('#panel-back').hidden=!paneParents[pane];window.QibanUI.hydrate($('#panel-content'));
     if(!$('#panel').open)$('#panel').showModal();$('#panel').scrollTop=0;
@@ -307,14 +366,17 @@
   function slider(id,label,value,min,max,step=.01){return `<label>${escape(label)}<span class="slider-value" data-value="${id}">${Number(value).toFixed(step===.1?1:2)}</span><input type="range" id="${id}" min="${min}" max="${max}" step="${step}" value="${Number(value)}"></label>`;}
   function confirm(title,description,label,work,danger=false){$('#confirmation-content').innerHTML=`<h3>${escape(title)}</h3><p>${escape(description)}</p><button id="confirm-go" class="${danger?'danger':''}">${escape(label)}</button><button id="confirm-cancel">取消</button>`;$('#confirmation').showModal();$('#confirm-cancel').onclick=()=>$('#confirmation').close();$('#confirm-go').onclick=()=>{$('#confirmation').close();run(work);};}
   async function preference(key,value){await call('preference',{key,value});state.preferences={...state.preferences,[key]:value};}
-  function modelName(){return readyData?.displayName||({Enya:'恩雅护士',Fenny:'芬妮婚皮',generic:'本地伙伴'}[state.selectedModel]||'本地伙伴');}
+  function modelName(){return readyData?.displayName||(CHARACTER_NAMES[state?.selectedModel]||'本地伙伴');}
   function settings(){
-    const selected=state.selectedModel,prefs=state.preferences||{},snow=['Enya','Fenny'].includes(selected);
-    panel('设置',`<button data-do="close" class="circle" aria-label="返回陪伴">${icon('chevron.left')}</button><h1 class="large-title">设置</h1><div class="grid settings-shortcuts settings-gap">${[['chat','通讯','bubble.left.and.bubble.right'],['game','游戏','suit.spade.fill']].map(([id,t,i])=>`<button data-do="${id}">${icon(i)}${t}</button>`).join('')}</div><button data-do="new-conversation" class="settings-link">${icon('plus.bubble')}开启新对话</button><button data-do="history" class="settings-link settings-gap">${icon('bubble.left.and.bubble.right')}历史对话／切换对话</button><div class="muted" style="margin:0 0 10px">我的伙伴</div><div class="section hero">${icon('person.crop.circle')}<h3>${escape(role().name||modelName())}</h3>${options('current-model','当前伙伴',state.models.map(m=>[m.id,m.name||(m.id==='generic'?'本地伙伴':m.id==='Enya'?'恩雅护士':'芬妮婚皮')]),state.selectedModel)}${snow?check('source-voice',modelName()+'原声',prefs.snowbreakVoice!==false):''}<button data-do="appearance" class="switch-model full">${icon('arrow.triangle.2.circlepath')}切换 / 导入伙伴</button></div><div class="section group">${check('show-background','显示背景',prefs.showSceneBackground!==false)}${(readyData?.backgrounds||[]).length?options('background-name','场景',readyData.backgrounds.map(n=>[n,({Morning_BG:'清晨',SunnyDay_BG:'晴天',Night_BG:'夜晚'}[n]||n)]),prefs.sceneBackgroundName||'Morning_BG'):''}${nav('','画中画 · 接入中','pip','',true)}${nav('','音乐 · 接入中','music.note','',true)}</div><div class="section group">${nav('snowbreak','导入尘白角色','person.crop.rectangle.stack')}${!snow?nav('embodiment','身体、触碰与光照','sun.max'):`<p class="muted">角色沿用现有 iOS 项目的材质、原作动作与场景打光。</p>`}${nav('api','模型与自定义 API','slider.horizontal.3')}${nav('chat','通讯聊天 · 会话与群聊','bubble.left.and.bubble.right')}${nav('game','游戏 · 大富翁牌桌','suit.spade.fill')}${nav('persona','人设与陪伴','person.text.rectangle')}${nav('speech','离线语音与中／日配音','speaker.wave.2')}${nav('messages','聊天记录','bubble.left.and.bubble.right')}${nav('memories','记忆','heart.text.square')}${nav('diary','日记','book')}</div><p class="muted">本地保存 · 自定义服务<br>人设、聊天与记忆随角色卡保存。语音和后置识图按需开启。</p>`,'settings');
+    const selected=state.selectedModel,prefs=state.preferences||{},snow=isSnowbreak(selected),perf=['performance','balanced','powersave'].includes(state.renderer)?state.renderer:'balanced';
+    panel('设置',`<button data-do="close" class="circle" aria-label="返回陪伴">${icon('chevron.left')}</button><h1 class="large-title">设置</h1><div class="grid settings-shortcuts settings-gap">${[['chat','通讯','bubble.left.and.bubble.right'],['game','游戏','suit.spade.fill']].map(([id,t,i])=>`<button data-do="${id}">${icon(i)}${t}</button>`).join('')}</div><button data-do="new-conversation" class="settings-link">${icon('plus.bubble')}开启新对话</button><button data-do="history" class="settings-link settings-gap">${icon('bubble.left.and.bubble.right')}历史对话／切换对话</button><div class="muted" style="margin:0 0 10px">我的伙伴</div><div class="section hero">${icon('person.crop.circle')}<h3>${escape(role().name||modelName())}</h3>${options('current-model','当前伙伴',state.models.map(m=>[m.id,m.name||(CHARACTER_NAMES[m.id]||m.id)]),state.selectedModel)}${snow?check('source-voice',modelName()+'原声',prefs.snowbreakVoice!==false):''}<button data-do="appearance" class="switch-model full">${icon('arrow.triangle.2.circlepath')}切换 / 导入伙伴</button></div><div class="section group">${check('show-background','显示背景',prefs.showSceneBackground!==false)}${(readyData?.backgrounds||[]).length?options('background-name','场景',readyData.backgrounds.map(n=>[n,({Morning_BG:'清晨',SunnyDay_BG:'晴天',Night_BG:'夜晚'}[n]||n)]),prefs.sceneBackgroundName||'Morning_BG'):''}${check('deferred-interaction','按住拖动结束后再回应',prefs.deferredInteraction!==false)}${check('desk-keep-awake','常亮不息屏（桌宠显示器）',Boolean(prefs.deskPetKeepAwake))}${options('perf-mode','性能与画质调度',[['performance','性能模式 · 4K原画（满血打光）'],['balanced','普通模式 · 2K均衡（日常推荐）'],['powersave','省电模式 · 1K低功耗']],perf)}<button data-do="release-memory" class="nav-row">${icon('arrow.triangle.2.circlepath')}<span class="row-copy">释放显存与贴图缓存<small>切换高精模型后可手动回收 GPU 与解码缓存</small></span></button></div><div class="section group">${nav('snowbreak','导入尘白角色与 AR 动作包','person.crop.rectangle.stack')}${!snow?nav('embodiment','身体、触碰与光照','sun.max'):`<p class="muted">采用 4K PBR / MatCap 光照与实时地面投影，兼容全部尘白角色与官方海姆达尔 Q 版小人。</p>`}${nav('api','模型与自定义 API','slider.horizontal.3')}${nav('chat','通讯聊天 · 会话与群聊','bubble.left.and.bubble.right')}${nav('game','游戏 · 大富翁牌桌','suit.spade.fill')}${nav('persona','人设与陪伴','person.text.rectangle')}${nav('speech','离线语音与中／日配音','speaker.wave.2')}${nav('messages','聊天记录','bubble.left.and.bubble.right')}${nav('memories','记忆','heart.text.square')}${nav('diary','日记','book')}</div><p class="muted">本地保存 · 自定义服务 · Android 1 GB 模型流式引擎<br>人设、聊天与记忆随角色卡保存。语音、AR 现实投射和后置识图按需开启。</p>`,'settings');
     $('#current-model').onchange=e=>{const id=e.target.value;return run(()=>selectModel(id));};
     if($('#source-voice'))$('#source-voice').onchange=e=>run(async()=>{await preference('snowbreakVoice',e.target.checked);stage({type:'voice',enabled:e.target.checked});});
     $('#show-background').onchange=e=>run(async()=>{await preference('showSceneBackground',e.target.checked);stage({type:snow?'scene':'background',visible:e.target.checked,name:prefs.sceneBackgroundName||'Morning_BG'});});
     if($('#background-name'))$('#background-name').onchange=e=>run(async()=>{await preference('sceneBackgroundName',e.target.value);stage({type:'background',visible:$('#show-background').checked,name:e.target.value});});
+    if($('#deferred-interaction'))$('#deferred-interaction').onchange=e=>run(async()=>{await preference('deferredInteraction',e.target.checked);stage({type:'deferredInteraction',enabled:e.target.checked});notice(e.target.checked?'已开启：拖动互动松手后再自然回应。':'已关闭延迟回应。');});
+    if($('#desk-keep-awake'))$('#desk-keep-awake').onchange=e=>run(async()=>{await preference('deskPetKeepAwake',e.target.checked);notice(e.target.checked?'已开启常亮不息屏（桌宠模式）。':'已恢复系统自动息屏。');});
+    if($('#perf-mode'))$('#perf-mode').onchange=e=>run(async()=>{const r=await call('renderQuality',{value:e.target.value});state.renderer=r.value||e.target.value;notice('已切换至：'+({performance:'性能模式（4K）',balanced:'普通模式（2K）',powersave:'省电模式（1K）'}[state.renderer]||state.renderer));});
   }
   function api(){const s=archive.settings;panel('设置',`<form id="api-form"><div class="section group">${nav('services','独立功能接口','network')}<p class="muted">分别配置识图、联网搜索、TTS 和语音识别。未启用的功能沿用原设置。</p></div>${heading('主对话 API')}<div class="section">${field('endpoint','HTTPS 接口地址',s.endpoint)}${field('main-key','API Key（留空保留本设备密钥）','',false,'password')}${field('model-name','模型名称',s.model)}${slider('temperature','温度',s.temperature,0,2,.1)}</div><p class="hint">支持 OpenAI 兼容的 Chat Completions。填写完整接口路径或以 /v1 结尾的地址；当前仅支持 HTTPS。密钥保存在本机安全存储，不包含在备份中。</p><div class="section"><p class="muted">系统提示词、用户身份、AI 角色卡与身体能力，请在主页设置 → 人设与陪伴中管理。</p></div><div class="section group"><button class="full" id="save-api">保存设置</button></div>${heading('数据')}<div class="section group">${button('native-backup','导出本地备份')}${button('restore','从备份恢复')}</div><p class="hint">备份包含聊天、记忆、日记、人设和接口地址，不含密钥。恢复前自动保留当前资料快照。备份文件为明文，请妥善保管。</p><p class="hint">仅在发起对话时连接你配置的服务。最近最多 30 条消息及人设、记忆用于上下文；日记不会自动发送。没有官方登录或自动更新。</p></form>`,'api');$('#api-form').onsubmit=e=>run(async()=>{e.preventDefault();const settings=structuredClone(archive.settings);Object.assign(settings,{endpoint:$('#endpoint').value.trim(),model:$('#model-name').value.trim(),temperature:Number($('#temperature').value)});await call('saveSettings',{settings,mainKey:$('#main-key').value});await refresh();$('#save-api').textContent='已保存';notice('设置已保存。');});}
   const serviceKinds={vision:['图片与镜头识别','photo','跟随主对话接口'],search:['联网搜索','globe','关闭'],tts:['语音合成 TTS','speaker.wave.2','使用本机音色'],asr:['语音识别 ASR','waveform','使用本机识别']};
@@ -347,8 +409,44 @@
       await loadModel(file);
     });
   }
-  function appearance(){panel('角色预览',`<div class="character-preview">${icon('person.crop.rectangle.stack')}</div><p class="muted" style="text-align:center">${ready?escape(modelName()):'角色资源迁移预览'}</p><p style="text-align:center">导入角色包或单个网格 JSON。支持拖动旋转、双指缩放。</p>${state.models.length?`<div class="section group">${state.models.map(m=>`<button data-model="${escape(m.id)}" class="nav-row"><span class="row-copy">${escape(m.name||(m.id==='Enya'?'恩雅护士':m.id==='Fenny'?'芬妮婚皮':'本地伙伴'))}</span>${m.id===state.selectedModel?icon('checkmark.circle.fill'):icon('chevron.right')}</button>`).join('')}</div>`:''}${readyData?.frameCount?`<div class="inline">${button('idle-toggle','暂停待机')}${button('idle-rewind','回到开头')}<span class="muted" id="preview-frame">1/${readyData.frameCount}</span></div>`:''}${readyData?.morphs?`<div class="section">${check('expression-blink','自动眨眼',true)}${slider('expression-eyes','闭眼',0,0,1)}${slider('expression-mouth','张嘴',0,0,1)}${slider('expression-smile','微笑',0,0,1)}${button('expression-reset','重置表情')}</div>`:''}<div class="grid">${button('import','选择角色文件','primary')}${button('assets','App 文件夹','bordered')}</div><p class="muted" style="text-align:center">版本 ${escape(state.version)} · 已导入的素材保存在本机</p>`,'appearance');if(ready){const slot=$('.character-preview');slot.replaceChildren($('#model'));$('#model').style.cssText='position:relative;inset:0;width:100%;height:100%;';stage({type:'resume'});if($('#expression-blink'))$('#expression-blink').onchange=e=>stage({type:'expression',value:{autoBlink:e.target.checked}});}}
-  function snowbreakImport(){panel('导入尘白角色',`${heading('尘白角色 · 本地移植')}<div class="section"><p>导入本地恩雅／芬妮 .snowbreak 整合包。可用模式、动作、场景和原声由素材包决定。</p>${button('import','选择角色素材包')}${button('assets','App 文件夹')}${state.models.some(m=>m.id!=='generic')?'<p>已保存角色素材，下次启动会从本机加载。</p>':''}</div>${heading('触碰')}<div class="section"><p>导入后可在动作菜单切换已保存的角色、陪伴模式和服饰。显示原作触点可查看当前场景已有的触点；也可通过精细触碰表面标注补充身体分区。</p><p>原 App 内保存的标注不会跨 App 自动读取；模型和原始互动资源可以沿用。</p></div>`,'snowbreak');}
+  function appearance(){panel('角色预览',`<div class="character-preview">${icon('person.crop.rectangle.stack')}</div><p class="muted" style="text-align:center">${ready?escape(modelName()):'角色资源迁移预览'}</p><p style="text-align:center">导入角色 .snowbreak、官方 Q 版小人、.qmotion 通用动作包或网格 JSON。支持拖动旋转、双指缩放。</p>${state.models.length?`<div class="section group">${state.models.map(m=>`<button data-model="${escape(m.id)}" class="nav-row"><span class="row-copy">${escape(m.name||(CHARACTER_NAMES[m.id]||m.id))}</span>${m.id===state.selectedModel?icon('checkmark.circle.fill'):icon('chevron.right')}</button>`).join('')}</div>`:''}${readyData?.frameCount?`<div class="inline">${button('idle-toggle','暂停待机')}${button('idle-rewind','回到开头')}<span class="muted" id="preview-frame">1/${readyData.frameCount}</span></div>`:''}${readyData?.morphs?`<div class="section">${check('expression-blink','自动眨眼',true)}${slider('expression-eyes','闭眼',0,0,1)}${slider('expression-mouth','张嘴',0,0,1)}${slider('expression-smile','微笑',0,0,1)}${button('expression-reset','重置表情')}</div>`:''}<div class="grid">${button('import','选择角色 / 动作包','primary')}${button('assets','App 文件夹','bordered')}</div><p class="muted" style="text-align:center">版本 ${escape(state.version)} · 已导入的素材保存在本机</p>`,'appearance');if(ready){const slot=$('.character-preview');slot.replaceChildren($('#model'));$('#model').style.cssText='position:relative;inset:0;width:100%;height:100%;';stage({type:'resume'});if($('#expression-blink'))$('#expression-blink').onchange=e=>stage({type:'expression',value:{autoBlink:e.target.checked}});}}
+  function snowbreakImport(){panel('导入尘白角色与 AR 动作包',`${heading('尘白角色与 Q 版小人 · 本地流式加载')}<div class="section"><p>支持导入恩雅、芬妮、凯茜娅、琴诺、胧嫣、奈莉德、米娅、克拉丽娜 4K 整合包，以及官方《海姆达尔向前冲》Q 版小人整合包（HeimdallRush-Chibi-4K-v1.snowbreak，单包最高 1 GB 零爆内存流式加载）。</p><p>同时支持导入 .qmotion 通用 3D / AR 动作包（如 Nerida-AR-Universal-Motions-v1.qmotion），导入后所有 3D 角色均可复用。</p>${button('import','选择 .snowbreak / .qmotion 素材包','primary')}${button('assets','App 文件夹')}${state.models.some(m=>m.id!=='generic')?'<p class="package-notice">已保存角色素材，下次启动直接从本机加载。</p>':''}${state.hasUniversalMotions?'<p class="package-notice">已安装通用 3D / AR 动作包，可在动作菜单中随时播放。</p>':''}</div>${heading('触碰与 AR 互动')}<div class="section"><p>导入后可在动作菜单切换角色、陪伴模式、服饰与通用 AR 动作。开启 AR 模式可将角色实时投射到桌面或地面，支持 1:1 等身、桌面手办、Q 版小人一键切换及语音/文字通话。</p></div>`,'snowbreak');}
+  function displayMenu(){
+    const ori=state.preferences?.appOrientationMode||'auto',awake=Boolean(state.preferences?.deskPetKeepAwake),chibi=state.selectedModel==='HeimdallQ'||state.preferences?.proportionMode==='chibi';
+    panel('旋转与桌宠模式',`<div class="section"><button data-do="orient-auto">${ori==='auto'?'✓ ':''}自动跟随屏幕旋转</button><button data-do="orient-portrait">${ori==='portrait'?'✓ ':''}锁定竖屏</button><button data-do="orient-landscape">${ori==='landscape'?'✓ ':''}锁定横屏（旧机桌宠显示器）</button></div><div class="section"><button data-do="toggle-chibi">${chibi?'切换回 1:1 原比例角色':'切换到海姆达尔 Q 版小人'}</button><button data-do="toggle-awake">${awake?'✓ ':''}常亮不息屏（桌宠模式）</button><button data-do="clean-desk">${cleanDesk?'退出纯净展示':'纯净桌宠展示（隐藏全部界面）'}</button></div>`,'display-menu');
+  }
+  async function toggleChibi() {
+    const hasHeimdall = (state.models || []).some(m => m.id === 'HeimdallQ');
+    if (state.selectedModel === 'HeimdallQ') {
+      const target = (lastNormalModel && lastNormalModel !== 'HeimdallQ' && state.models.some(m => m.id === lastNormalModel))
+        ? lastNormalModel
+        : (state.models.find(m => m.id !== 'HeimdallQ' && isSnowbreak(m.id))?.id || '');
+      await preference('proportionMode', 'normal');
+      if (target) {
+        await selectModel(target);
+        notice('已切回 1:1 原比例：' + (CHARACTER_NAMES[target] || target));
+      } else {
+        stage({ type: 'proportion', mode: 'normal' });
+        notice('已切回 1:1 原比例。');
+      }
+      syncARUI();
+      return;
+    }
+    if (hasHeimdall) {
+      if (isSnowbreak(state.selectedModel)) lastNormalModel = state.selectedModel;
+      pendingChibiVariant = CHIBI_VARIANT_BY_CHAR[state.selectedModel] || '';
+      await preference('proportionMode', 'normal');
+      await selectModel('HeimdallQ');
+      notice('已切换至海姆达尔向前冲官方 Q 版小人！');
+      syncARUI();
+      return;
+    }
+    const next = state.preferences?.proportionMode === 'chibi' ? 'normal' : 'chibi';
+    await preference('proportionMode', next);
+    stage({ type: 'proportion', mode: next });
+    syncARUI();
+    notice(next === 'chibi' ? '已切换为程序化 Q 版比例（导入 HeimdallRush-Chibi-4K-v1.snowbreak 可解锁官方 Q 版小人）。' : '已恢复 1:1 原比例。');
+  }
   function embodiment(){const p=state.preferences||{};panel('身体与光照',`${heading('身体反馈')}<div class="section">${check('body-breathing','自然呼吸',p.bodyBreathing!==false)}${check('body-physics','胸部与臀部惯性',p.bodyPhysics!==false)}${slider('body-strength','物理强度',p.bodyStrength??.65,0,1.5)}${check('touch-ai','触碰时让 AI 回应',state.touchAI!==false)}${check('touch-haptics','手机轻振反馈',p.touchHaptics!==false)}<p class="muted">触碰额头、脸颊、手臂等位置可触发反馈。AI 回应使用你配置的 API。</p></div>${heading('打光与着色')}<div class="section"><div class="inline">${button('light-soft','柔和')}${button('light-sunset','夕阳')}${button('light-cool','清冷')}</div>${[['lightAzimuth','主光左右',34,-90,90],['lightElevation','主光高度',38,5,85],['lightKey','主光强度',1,0,1.8],['lightFill','环境补光',.7,.1,1.2],['lightWarmth','冷暖',.12,-1,1],['lightSoftness','阴影柔和度',.18,.02,.5],['lightRim','边缘光',.12,0,.5]].map(([k,t,d,min,max])=>slider(k,t,p[k]??d,min,max)).join('')}<p class="muted">返回主屏后应用。使用角色原贴图、MatCap 和脸部阴影，叠加可调卡通打光。</p>${button('save-embodiment','保存身体与光照','primary')}</div>`,'embodiment');}
   function images(){panel('图片与自身形象',`<div class="section group">${button('choose-photo','从相册发送图片')}${button('choose-photo','从文件发送图片')}${button('local-vision','本机识图（已选照片／后摄）')}${button('self-portrait','附上自身模型画面')}</div><div class="section">${options('self-image-policy','自身形象输入',[['off','仅身体状态文字'],['questions','问及外观时附模型画面'],['always','每轮附模型画面（需识图 API）']],state.preferences?.selfAppearanceImagePolicy||'questions')}</div>`,'images');$('#self-image-policy').onchange=e=>run(()=>preference('selfAppearanceImagePolicy',e.target.value));}
   function showAttachment(){const p=$('#image-preview');p.hidden=!attachedImage;p.innerHTML=attachedImage?`<img alt="待发送的图片" src="${attachedImage.dataURL}"><span>${attachedImage.source==='selfPortrait'?'自身模型截图':'用户附图'}\n发送时交给当前识图 API，不写入备份</span>${button('remove-image','移除')}`:'';render();}
@@ -356,9 +454,9 @@
   async function photo(file){if(!file)return;if(file.size>20e6)throw Error('图片超过20MB。');const bitmap=await createImageBitmap(file),ratio=Math.min(1,1024/Math.max(bitmap.width,bitmap.height)),canvas=document.createElement('canvas');canvas.width=Math.max(1,Math.round(bitmap.width*ratio));canvas.height=Math.max(1,Math.round(bitmap.height*ratio));canvas.getContext('2d').drawImage(bitmap,0,0,canvas.width,canvas.height);bitmap.close();attachedImage={dataURL:canvas.toDataURL('image/jpeg',.78),source:'user'};close();showAttachment();}
   function mood(){const m=archive.moods?.[archive.personaSessionKey]||{emotion:'calm',intensity:.25,closeness:.25,reason:'初次见面，平静陪伴。'},name={calm:'平静',happy:'开心',shy:'害羞',affectionate:'亲近',curious:'好奇',sad:'低落',uncomfortable:'不自在'}[m.emotion]||'平静';panel('心情与行为状态',`<div class="section"><h3>${name}</h3><p>${escape(m.reason)}</p><label>心情强度 ${Math.round(m.intensity*100)}%<div class="mood-meter"><i style="width:${m.intensity*100}%"></i></div></label><label>亲近度 ${Math.round(m.closeness*100)}%<div class="mood-meter"><i style="width:${m.closeness*100}%"></i></div></label></div><p class="hint">心情由本轮对话决定，动作以播放器身体实况为准。每段对话分别保存状态。</p>`,'mood');}
   function bodyInspector(){stage({type:'bodyState'});panel('当前身体状态',`<pre id="body-inspector" class="preview-code">${escape(JSON.stringify(bodyState,null,2))}</pre>`,'body-state');}
-  function actions(){if(selected.startsWith('portrait:')){panel('官方2D表情与动作',`<div class="section"><p>播放素材自带的骨骼动画。</p>${(readyData?.animations||[]).map(id=>`<button data-action="${escape(id)}" class="full">${escape(id.replace(/^sp_girl\d+_/,''))}</button>`).join('')}${button('stop','恢复待机')}</div>`,'actions');return;}const r=readyData||{},items=(ids)=>ids.map(id=>`<button data-action="${escape(id)}" class="full">${escape(labels[id]||id)}</button>`).join(''),body=r.bodyActions||[],gestures=body.filter(id=>id.startsWith('gesture_'));panel('动作',`<div class="section"><details><summary>身体控制</summary>${items(body.filter(id=>!id.startsWith('gesture_')))}</details><details><summary>更多肢体动作</summary>${items(gestures)}</details>${button('body-state','查看当前身体状态')}${button('mood','心情与行为状态')}${button('hearing',voiceCall?'停止环境聆听':'环境声音反馈（本机）')}</div>${state.models.filter(m=>m.id!==state.selectedModel).map(m=>`<div class="section group"><button data-model="${m.id}">切换到${escape(m.id==='Fenny'?'芬妮婚皮':m.id==='Enya'?'恩雅护士':'本地伙伴')}</button></div>`).join('')}${(r.variants||[]).length?heading('陪伴模式与服饰')+`<div class="section group">${r.variants.map(v=>`<button data-action="variant:${escape(v.id)}">${escape((r.selection?.mode===v.mode&&r.selection?.outfit===v.outfit?'✓ ':'')+(v.mode==='standing'?'看板娘（站立）':state.selectedModel==='Fenny'?'皮肤互动':'皮肤互动（坐姿）')+' · '+({normal:state.selectedModel==='Fenny'?'原婚纱':'正常服饰',nude:'果体版',underwear:'婚纱内衣版'}[v.outfit]||v.outfit))}</button>`).join('')}</div>`:''}<div class="section group">${(r.samples||[]).map(id=>`<button data-action="sample:${escape(id)}">${escape(labels[id]||id)}</button>`).join('')}${(r.learned||[]).map(id=>`<button data-action="learned:${escape(id)}">${escape(id.replace('yuki_',''))}</button>`).join('')}</div><div class="section group">${[['edit','精细触碰表面标注'],['officialTouchPoints','显示／隐藏原作触点'],['modelEdit','仅移动角色（场景不动）'],['frameEdit','整体场景与镜头编辑'],['lightingEdit','采光与材质'],['danceEdit','舞蹈幅度与节奏']].map(([id,t])=>button('stage-'+id,t)).join('')}${button('stage-stop','停止动作')}</div>`,'actions');}
+  function actions(){if(selected.startsWith('portrait:')){panel('官方2D表情与动作',`<div class="section"><p>播放素材自带的骨骼动画。</p>${(readyData?.animations||[]).map(id=>`<button data-action="${escape(id)}" class="full">${escape(id.replace(/^sp_girl\d+_/,''))}</button>`).join('')}${button('stop','恢复待机')}</div>`,'actions');return;}const r=readyData||{},items=(ids)=>ids.map(id=>`<button data-action="${escape(id)}" class="full">${escape(labels[id]||id)}</button>`).join(''),body=r.bodyActions||[],gestures=body.filter(id=>id.startsWith('gesture_'));const variantLabel=v=>v.label||((v.mode==='standing'?'看板娘（站立）':state.selectedModel==='Fenny'?'皮肤互动':'皮肤互动（坐姿）')+' · '+({normal:state.selectedModel==='Fenny'?'原婚纱':'正常服饰',nude:'果体版',underwear:'婚纱内衣版'}[v.outfit]||v.outfit));panel('动作',`<div class="section"><details><summary>身体控制</summary>${items(body.filter(id=>!id.startsWith('gesture_')))}</details><details><summary>更多肢体动作</summary>${items(gestures)}</details>${button('toggle-chibi',state.selectedModel==='HeimdallQ'?'切回 1:1 原比例':'切换海姆达尔 Q 版小人')}${button('body-state','查看当前身体状态')}${button('mood','心情与行为状态')}${button('hearing',voiceCall?'停止环境聆听':'环境声音反馈（本机）')}</div>${state.models.filter(m=>m.id!==state.selectedModel).map(m=>`<div class="section group"><button data-model="${escape(m.id)}">切换到${escape(m.name||(CHARACTER_NAMES[m.id]||m.id))}</button></div>`).join('')}${(r.variants||[]).length?heading(state.selectedModel==='HeimdallQ'?'海姆达尔小人切换':'陪伴模式与服饰')+`<div class="section group">${r.variants.map(v=>`<button data-action="variant:${escape(v.id)}">${escape((r.selection?.mode===v.mode&&r.selection?.outfit===v.outfit?'✓ ':'')+variantLabel(v))}</button>`).join('')}</div>`:''}${universalActions.length?heading('通用 3D / AR 动作（全角色可用）')+`<div class="section group">${universalActions.map(a=>`<button data-action="universal:${escape(a.id)}">${escape(a.label||a.id)}</button>`).join('')}</div>`:''}<div class="section group">${(r.samples||[]).map(id=>`<button data-action="sample:${escape(id)}">${escape(r.sampleLabels?.[id]||labels[id]||id)}</button>`).join('')}${(r.learned||[]).map(id=>`<button data-action="learned:${escape(id)}">${escape(r.learnedLabels?.[id]||id.replace('yuki_',''))}</button>`).join('')}</div><div class="section group">${[['edit','精细触碰表面标注'],['officialTouchPoints','显示／隐藏原作触点'],['modelEdit','仅移动角色（场景不动）'],['frameEdit','整体场景与镜头编辑'],['lightingEdit','采光与材质'],['danceEdit','舞蹈幅度与节奏']].map(([id,t])=>button('stage-'+id,t)).join('')}${button('stage-stop','停止动作')}</div>`,'actions');}
   function assets() {
-    panel('本地素材库', `<div class="section">${button('import', '导入素材包', 'primary')}<p class="muted">.snowbreak：完整角色、原作动作与录音<br>.qcards：原版牌桌视听包、尘白与自定义立绘<br>.qchat：完整通讯程序（${state.chatInstalled ? '已安装' : '待导入'}）<br>.qvoice：中文／日文离线克隆配音<br>.qbackup / JSON：恢复历史、人设与设置</p>${button('backup', '导出完整文字备份')}</div><div class="section">${button('chat', '打开完整通讯')}${button('game', '打开原版牌桌')}</div>`, 'assets');
+    panel('本地素材库', `<div class="section">${button('import', '导入素材包', 'primary')}<p class="muted">.snowbreak：4K 尘白角色、海姆达尔 Q 版小人、原作动作与录音（最高 1 GB）<br>.qmotion：通用 3D / AR 动作包（${state.hasUniversalMotions ? '已导入' : '待导入'}）<br>.qcards：原版牌桌视听包、尘白与自定义立绘<br>.qchat：完整通讯程序（${state.chatInstalled ? '已安装' : '待导入'}）<br>.qvoice：中文／日文离线克隆配音<br>.qbackup / JSON：恢复历史、人设与设置</p>${button('backup', '导出完整文字备份')}</div><div class="section">${button('chat', '打开完整通讯')}${button('game', '打开原版牌桌')}</div>`, 'assets');
   }
   function network() {
     panel('手机本地与 UU 联机', `<div class="section"><h3>iOS 与安卓共同牌桌</h3><p>1. 在各自手机的 UU 云联机进入同一个“通用联机房”。<br><br>2. 任一手机打开栖伴 → 游戏 → 手机开房。<br><br>3. 房主在游戏邀请里填入 UU 显示的虚拟 IP，复制游戏端口与游戏房间号。<br><br>4. 朋友在栖伴“通过 UU 加入”中填写房主 IP、游戏端口、游戏房间号。</p><p class="muted">UU 的通用房间号与栖伴游戏房间号各自使用。手机负责牌局，UU 负责网络通路。相同 Wi-Fi／热点也可以搜索附近房间。实际通路取决于 UU 是否转发本 App 的流量，两部真机需确认；不需要 PC。房主在后台设置 UU 时安卓会显示房间运行通知，打牌时保持 App 前台。</p>${button('game', '进入游戏', 'primary')}</div>`, 'network');
@@ -523,6 +621,119 @@
           value: $('#quality').value
         });
         return notice('功耗设置已应用。');
+      case 'release-memory':
+        await call('releaseMemory');
+        return notice('正在释放显存与贴图缓存…');
+      case 'display-menu':
+        return displayMenu();
+      case 'orient-auto':
+      case 'orient-portrait':
+      case 'orient-landscape': {
+        const mode = id.slice(7);
+        await preference('appOrientationMode', mode);
+        close();
+        return notice('屏幕方向已切换：' + ({ auto: '自动旋转', portrait: '锁定竖屏', landscape: '锁定横屏' }[mode] || mode));
+      }
+      case 'toggle-awake': {
+        const next = !state.preferences?.deskPetKeepAwake;
+        await preference('deskPetKeepAwake', next);
+        close();
+        return notice(next ? '已开启常亮不息屏（旧机桌宠模式）。' : '已恢复系统自动息屏。');
+      }
+      case 'clean-desk':
+        cleanDesk = !cleanDesk;
+        close();
+        syncARUI();
+        return;
+      case 'toggle-chibi':
+        close(false);
+        return toggleChibi();
+      case 'ar-toggle': {
+        if (arState.active) {
+          const r = await call('arStop');
+          arState = r.state || { active: false, placed: false, scalePreset: 'tabletop' };
+          arAdjustOpen = false;
+          stage({ type: 'arMode', enabled: false });
+          syncARUI();
+          return notice('已退出 AR 模式。');
+        }
+        if (!isSnowbreak(state?.selectedModel)) return notice('请先加载任意尘白 3D 角色或 Q 版小人再开启 AR。');
+        const r = await call('arStart');
+        if (!r.active) return;
+        arState = r.state || { active: true, placed: false, scalePreset: 'tabletop' };
+        arAdjustOpen = false;
+        stage({ type: 'arMode', enabled: true, scalePreset: arState.scalePreset || 'tabletop' });
+        syncARUI();
+        return notice('已开启 AR 现实投射，对准桌面或地面后点击「确认放置」。');
+      }
+      case 'ar-preset': {
+        const next = arState.scalePreset === 'realScale' ? 'tabletop' : 'realScale';
+        const r = await call('arCommand', { action: 'preset', preset: next });
+        arState = r.state || { ...arState, scalePreset: next };
+        stage({ type: 'arMode', enabled: true, scalePreset: arState.scalePreset });
+        syncARUI();
+        return notice(arState.scalePreset === 'realScale' ? '已切换：1:1 等身现实投射' : '已切换：桌面手办尺寸');
+      }
+      case 'ar-adjust': {
+        if (!arState.placed) {
+          const r = await call('arCommand', { action: 'place' });
+          arState = r.state || { ...arState, placed: true };
+          arAdjustOpen = false;
+          syncARUI();
+          return notice('已锁定当前位置。');
+        }
+        arAdjustOpen = !arAdjustOpen;
+        syncARUI();
+        return;
+      }
+      case 'ar-confirm': {
+        if (!arState.placed) {
+          const r = await call('arCommand', { action: 'place' });
+          arState = r.state || { ...arState, placed: true };
+        }
+        arAdjustOpen = false;
+        syncARUI();
+        return notice('模型位置已固定，可继续语音通话或互动。');
+      }
+      case 'ar-snap': {
+        const r = await call('arCommand', { action: 'snapFloor' });
+        arState = r.state || arState;
+        syncARUI();
+        return notice('已重置吸地对齐。');
+      }
+      case 'ar-down': {
+        const r = await call('arCommand', { action: 'height', delta: -0.05 });
+        arState = r.state || arState;
+        return;
+      }
+      case 'ar-up': {
+        const r = await call('arCommand', { action: 'height', delta: 0.05 });
+        arState = r.state || arState;
+        return;
+      }
+      case 'ar-smaller': {
+        const r = await call('arCommand', { action: 'scale', factor: 0.88 });
+        arState = r.state || arState;
+        return;
+      }
+      case 'ar-larger': {
+        const r = await call('arCommand', { action: 'scale', factor: 1.14 });
+        arState = r.state || arState;
+        return;
+      }
+      case 'ar-rot-l': {
+        const r = await call('arCommand', { action: 'yaw', radians: -0.26 });
+        arState = r.state || arState;
+        return;
+      }
+      case 'ar-rot-r': {
+        const r = await call('arCommand', { action: 'yaw', radians: 0.26 });
+        arState = r.state || arState;
+        return;
+      }
+      case 'ar-look':
+        if (!archive.settings.endpoint) return api();
+        return sendHome('看看 AR 镜头里的现实画面，告诉我你看到了什么。', true, true);
     }
   }
   function run(work) {
@@ -582,8 +793,8 @@
       });
     });
   });
-  async function sendHome(value,fromHome=true){let text=value.trim();if(busy)return;const images=[];if(attachedImage)images.push(attachedImage);const policy=state.preferences?.selfAppearanceImagePolicy||'questions';if(ready&&(policy==='always'||policy==='questions'&&/(穿|衣服|外貌|样子|形象|头发|头髮|打扮|看.{0,4}你|你的.{0,5}(眼睛|身材|姿势))/.test(text))&&!images.some(i=>i.source==='selfPortrait'))images.push(await portrait());if(!text&&images.length)text=images[0].source==='selfPortrait'?'这是你自己的模型画面，看看你现在的样子。':'请看看这张图片，告诉我你看到了什么。';if(!text)return;const r=await call('send',{text,search,images});archive=r.archive;busy=true;attachedImage=null;$('#input').value='';if($('#history-input'))$('#history-input').value='';showAttachment();render();}
-  $('#panel').addEventListener('click',e=>{if(e.target===$('#panel')&&['actions','images','greetings','persona-transfer'].includes(currentPane)){const r=$('#panel').getBoundingClientRect();if(e.clientX<r.left||e.clientX>r.right||e.clientY<r.top||e.clientY>r.bottom)close();}});
+  async function sendHome(value,fromHome=true,arVision=false){let text=value.trim();if(busy)return;const images=[];if(attachedImage)images.push(attachedImage);const policy=state.preferences?.selfAppearanceImagePolicy||'questions';if(ready&&(policy==='always'||policy==='questions'&&/(穿|衣服|外貌|样子|形象|头发|头髮|打扮|看.{0,4}你|你的.{0,5}(眼睛|身材|姿势))/.test(text))&&!images.some(i=>i.source==='selfPortrait'))images.push(await portrait());if(!text&&images.length)text=images[0].source==='selfPortrait'?'这是你自己的模型画面，看看你现在的样子。':'请看看这张图片，告诉我你看到了什么。';if(!text)return;const useARVision=arVision||(arState.active&&/(镜头|看到|看看|现实|前面|眼前|周围|房间|桌上|手里)/.test(text));const r=await call('send',{text,search,images,arVision:useARVision});archive=r.archive;busy=true;attachedImage=null;$('#input').value='';if($('#history-input'))$('#history-input').value='';showAttachment();render();}
+  $('#panel').addEventListener('click',e=>{if(e.target===$('#panel')&&['actions','images','greetings','persona-transfer','display-menu'].includes(currentPane)){const r=$('#panel').getBoundingClientRect();if(e.clientX<r.left||e.clientX>r.right||e.clientY<r.top||e.clientY>r.bottom)close();}});
   $('#composer').onsubmit=e=>run(async()=>{e.preventDefault();await sendHome($('#input').value);});
   $('#input').oninput=()=>{const e=$('#input');e.style.height='50px';e.style.height=Math.min(126,Math.max(50,e.scrollHeight))+'px';render();};
   $('#photo-file').onchange=e=>run(()=>photo(e.target.files[0]));
@@ -593,7 +804,14 @@
     if (!ready || selected.startsWith('portrait:')) return;
     stage({type: 'touchPolicy', aiControlled: state.touchAI !== false && Boolean(archive.settings.endpoint)});
   }
-  function applyStagePreferences(){stage({type:'androidPreferences',preferences:state.preferences||{}});stage({type:'voice',enabled:state.preferences?.snowbreakVoice!==false});}
+  function applyStagePreferences(){
+    stage({type:'androidPreferences',preferences:state.preferences||{}});
+    stage({type:'voice',enabled:state.preferences?.snowbreakVoice!==false});
+    stage({type:'deferredInteraction',enabled:state.preferences?.deferredInteraction!==false});
+    if(isSnowbreak(state?.selectedModel)){
+      stage({type:'proportion',mode:state.selectedModel==='HeimdallQ'?'normal':(state.preferences?.proportionMode||'normal')});
+    }
+  }
   $('#input').onkeydown = e => {
     if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
       e.preventDefault();
@@ -630,7 +848,26 @@
       readyData = value;
       applyTouchPolicy();
       applyStagePreferences();
-      $('#model-label').textContent = (value.characterId === 'Enya' ? '恩雅' : value.characterId === 'Fenny' ? '芬妮' : value.displayName || value.characterId) + (value.selection?' · '+(value.selection.mode==='standing'?'看板娘':'皮肤互动')+' · '+({normal:value.characterId==='Fenny'?'原婚纱':'正常服饰',nude:'果体版',underwear:'婚纱内衣版'}[value.selection.outfit]||value.selection.outfit):'');
+      if (state?.universalMotions && selected.endsWith('.snowbreak')) {
+        stage({ type: 'universalMotions', catalog: state.universalMotions });
+      }
+      if (arState.active) {
+        stage({ type: 'arMode', enabled: true, scalePreset: arState.scalePreset || 'tabletop' });
+      }
+      if (value.characterId === 'HeimdallQ' && pendingChibiVariant) {
+        const wanted = pendingChibiVariant;
+        pendingChibiVariant = '';
+        if ((value.variants || []).some(v => v.id === wanted)) {
+          stage({ type: 'variant', id: wanted });
+        }
+      }
+      const selVariant = (value.variants || []).find(v => v.mode === value.selection?.mode && v.outfit === value.selection?.outfit);
+      const charTitle = CHARACTER_NAMES[value.characterId] || value.displayName || value.characterId;
+      $('#model-label').textContent = charTitle + (selVariant?.label ? ' · ' + selVariant.label : (value.selection ? ' · ' + (value.selection.mode === 'standing' ? '看板娘' : '皮肤互动') + ' · ' + ({ normal: value.characterId === 'Fenny' ? '原婚纱' : '正常服饰', nude: '果体版', underwear: '婚纱内衣版' }[value.selection.outfit] || value.selection.outfit) : ''));
+      syncARUI();
+    }
+    if (value.type === 'universalReady') {
+      universalActions = Array.isArray(value.actions) ? value.actions : [];
     }
     if(value.type==='previewFrame'&&$('#preview-frame'))$('#preview-frame').textContent=value.frame+'/'+value.total;
     if (value.type === 'selfState'){bodyState=value.state;if($('#body-inspector'))$('#body-inspector').textContent=JSON.stringify(bodyState,null,2);}
@@ -642,6 +879,10 @@
   });
   window.QibanHome = {
     stage,
+    arFrame(proj, mv, exposure, warmth) {
+      const win = $('#model')?.contentWindow;
+      if (win) win.postMessage({ qibanStageCommand: { type: 'arFrame', proj, mv, exposure, warmth } }, location.origin);
+    },
     receive: async event => {
       if (event.type === 'notice') notice(event.message);
       if (event.type === 'busy') {
@@ -654,6 +895,25 @@
         render();
       }
       if (event.type === 'refresh') await refresh();
+      if (event.type === 'arState' && event.state) {
+        arState = event.state;
+        if (!arState.active) {
+          arAdjustOpen = false;
+          stage({ type: 'arMode', enabled: false });
+        }
+        syncARUI();
+      }
+      if (event.type === 'universalMotions' && event.catalog) {
+        if (state) {
+          state.universalMotions = event.catalog;
+          state.hasUniversalMotions = true;
+        }
+        if (selected.endsWith('.snowbreak')) stage({ type: 'universalMotions', catalog: event.catalog });
+      }
+      if (event.type === 'releaseMemory') {
+        stage({ type: 'releaseMemory' });
+        notice('已释放显存与贴图缓存。');
+      }
       if (event.type === 'settings') {
         await refresh();
         close();
@@ -670,7 +930,7 @@
       });
       if (event.type === 'action') action(event.action, event.motion, true);
       if (event.type === 'hearing') {
-        document.querySelector('[data-do=hearing]')?.classList.toggle('selected',event.enabled);
+        document.querySelector('[data-do=hearing]')?.classList?.toggle('selected',event.enabled);
         notice(event.enabled ? '已开启本机环境听觉，不保存录音。' : '环境听觉已关闭。');
       }
       if (event.type === 'sound') {
@@ -679,7 +939,7 @@
       if(event.type==='cameraDescribe')run(()=>sendHome('看看镜头里的内容，告诉我你看到了什么。'));
       if (event.type === 'camera') {
         camera = event.enabled;
-        $('#camera').classList.toggle('on',camera);$('#camera').innerHTML=icon(camera?'video.fill':'video.slash');$('#camera').ariaLabel=camera?'关闭后置视频':'开启后置视频';
+        $('#camera').classList?.toggle('on',camera);$('#camera').innerHTML=icon(camera?'video.fill':'video.slash');$('#camera').ariaLabel=camera?'关闭后置视频':'开启后置视频';
       }
       if (event.type === 'transcript') {
         $('#input').value = event.text;
@@ -687,15 +947,22 @@
       }
       if (event.type === 'listening') {
         listening = event.value;
-        $('#mic').classList.toggle('on',listening);$('#mic').innerHTML=icon(listening?'phone.down.fill':'mic');$('#sense-status').textContent=listening?(event.mode||'正在聆听，说完后会自动发送'):'';
+        $('#mic').classList?.toggle('on',listening);$('#mic').innerHTML=icon(listening?'phone.down.fill':'mic');$('#sense-status').textContent=listening?(event.mode||'正在聆听，说完后会自动发送'):'';
         notice(listening ? event.mode : '语音输入已结束。');
       }
       if(event.type==='speech'){$('#speech-status').textContent=event.status||'';$('#stop-reading').hidden=!event.busy;}
-      if (event.type === 'budget') stage({
-        type: 'hardwareBudget',
-        thermal: event.thermal,
-        lowPower: event.lowPower
-      });
+      if (event.type === 'budget') {
+        stage({
+          type: 'hardwareBudget',
+          mode: event.mode,
+          thermal: event.thermal,
+          lowPower: event.lowPower,
+          maxTextureSize: event.maxTextureSize
+        });
+        if (event.reload && ready && isSnowbreak(state?.selectedModel)) {
+          await queueModelChange(() => loadModel(modelFile(state.selectedModel)));
+        }
+      }
       if (event.type === 'ttsState') {
         archive.settings.speech.enabled = event.enabled;
         stage({
@@ -722,7 +989,8 @@
       }
     },
     back() {
-      if($('#confirmation').open)$('#confirmation').close();else if($('#panel').open){if(currentPane==='settings')close();else run(()=>handle(paneParents[currentPane]||'settings'));}else settings();
+      if(cleanDesk){cleanDesk=false;syncARUI();return;}
+      if($('#confirmation').open)$('#confirmation').close();else if($('#panel').open){if(currentPane==='settings')close();else run(()=>handle(paneParents[currentPane]||'settings'));}else if(arAdjustOpen){arAdjustOpen=false;syncARUI();}else settings();
     }
   };
   run(() => queueModelChange(async () => {

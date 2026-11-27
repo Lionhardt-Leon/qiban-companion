@@ -19,15 +19,15 @@ function parseCollection(input,expectedNames){
   if(expected.size!==expectedNames.size||[...expected].some(n=>!expectedNames.has(n)))throw new Error('缺失或多余资产');
   return {variants,manifests};
 }
-export async function openStreamingSkinArchive(packageName){
-  const indexRes=await fetch('companion-snowbreak://local/pkg-index/'+encodeURIComponent(packageName));
-  if(!indexRes.ok)throw new Error('流式角色包索引读取失败');
+export async function openStreamingSkinArchive(packageName,baseOrigin='companion-snowbreak://local'){
+  const indexRes=await fetch(baseOrigin+'/pkg-index/'+encodeURIComponent(packageName));
+  if(!indexRes.ok){const err=new Error('流式角色包索引读取失败');err.status=indexRes.status;throw err;}
   const index=await indexRes.json();
   if(!Array.isArray(index.names)||!index.manifest||typeof index.total!=='number'||index.total>1536*1024*1024)throw new Error('角色包索引格式或大小非法');
   const input=index.manifest;
   const {variants,manifests}=parseCollection(input,new Set(index.names));
   async function readRemoteAsset(assetId){
-    const res=await fetch('companion-snowbreak://local/pkg-entry/'+encodeURIComponent(packageName)+'/'+assetId);
+    const res=await fetch(baseOrigin+'/pkg-entry/'+encodeURIComponent(packageName)+'/'+assetId);
     if(!res.ok)throw new Error('资源读取失败：'+assetId.slice(0,12));
     return new Uint8Array(await res.arrayBuffer());
   }

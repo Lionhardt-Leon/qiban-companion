@@ -52,7 +52,12 @@ async function performLoad(url,id,variant,ticket,preferredVariant){
     if(variant){if(!collection)throw new Error('请先导入角色整合包');opened=await collection.selectVariant(variant);}else{
       collection=null;lastPackageUrl=url;
       const streamMatch=typeof url==='string'?url.match(/^companion-snowbreak:\/\/local\/package\/([A-Za-z0-9._-]+)$/):null;
-      if(streamMatch){opened=await openStreamingSkinArchive(streamMatch[1]);}
+      const androidStreamMatch=!streamMatch&&typeof url==='string'?url.match(/^\/package\/([A-Za-z0-9._-]+\.snowbreak)$/):null;
+      if(streamMatch){opened=await openStreamingSkinArchive(streamMatch[1],'companion-snowbreak://local');}
+      else if(androidStreamMatch){
+        try{opened=await openStreamingSkinArchive(androidStreamMatch[1],'');}
+        catch(e){if(e?.status!==404)throw e;const response=await fetch(url);if(!response.ok)throw new Error('本地角色包读取失败');opened=await openSkinArchive(new Uint8Array(await response.arrayBuffer()));}
+      }
       else{const response=await fetch(url);if(!response.ok)throw new Error('本地角色包读取失败');opened=await openSkinArchive(new Uint8Array(await response.arrayBuffer()));}
       if(preferredVariant&&opened.variants?.some(v=>v.id===preferredVariant)&&opened.selection?.id!==preferredVariant){
         void opened.runtime.dispose();

@@ -5,6 +5,7 @@
     window.addEventListener('message',async e=>{
       if(e.origin!==location.origin||e.source!==parent||!e.data?.qibanStageCommand)return;
       const value=e.data.qibanStageCommand;
+      if(value.type==='arFrame'){window.SnowbreakHost?.arFrame?.(value.proj,value.mv,value.exposure,value.warmth);return;}
       if(value.type==='androidPortrait'){
         try{window.SnowbreakHost?.receive({type:'resume'});await new Promise(resolve=>requestAnimationFrame(resolve));const dataURL=window.SnowbreakHost?.portrait();parent.postMessage({qibanPortrait:{ticket:value.ticket,dataURL}},location.origin);}
         catch(error){parent.postMessage({qibanPortrait:{ticket:value.ticket,error:error.message}},location.origin);}

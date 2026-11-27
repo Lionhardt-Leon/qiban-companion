@@ -10,18 +10,57 @@ import org.json.*;
 
 /** Streamed, verified imports. A failed import cannot replace the working library. */
 final class PackLibrary {
+    static final List<String> SUPPORTED_CHARACTERS = List.of("Enya","Fenny","Katya","Cherno","Longyan","Nerida","Mia","Clarina","HeimdallQ");
+    static final long MAX_SNOWBREAK_BYTES = 1024L * 1024 * 1024;
+    static String displayName(String id) {
+        if (id == null) return "本地伙伴";
+        return switch (id) {
+            case "Enya" -> "恩雅护士";
+            case "Fenny" -> "芬妮婚皮";
+            case "Katya" -> "凯茜娅 · 婚约";
+            case "Cherno" -> "琴诺 · 见习侍奉";
+            case "Longyan" -> "胧嫣 · 珠光曳影";
+            case "Nerida" -> "奈莉德 · 热沙激浪";
+            case "Mia" -> "米娅 · 星空魅影";
+            case "Clarina" -> "克罗瑞娜 · 绯月";
+            case "HeimdallQ" -> "海姆达尔 · Q版小人";
+            default -> "本地伙伴";
+        };
+    }
     final File root,chat,art,voice,models;
     private File state,game;
-    PackLibrary(File root){this.root=root;chat=new File(root,"chat");art=new File(root,"art");voice=new File(root,"voice");models=new File(root,"models");state=new File(root,"chat-state");game=new File(root,"game-state.json");root.mkdirs();state.mkdirs();models.mkdirs();art.mkdirs();}
+    PackLibrary(File root){this.root=root;chat=new File(root,"chat");art=new File(root,"art");voice=new File(root,"voice");models=new File(root,"models");state=new File(root,"chat-state");game=new File(root,"game-state.json");root.mkdirs();state.mkdirs();models.mkdirs();art.mkdirs();for(String dep:List.of("Augusta.snowbreak","Qingxiao.snowbreak")){File f=new File(models,dep);if(f.isFile())f.delete();}}
+    File universalMotionsFile(){return new File(models,"universal-motions.json");}
+    boolean hasUniversalMotions(){return universalMotionsFile().isFile();}
+    JSONObject loadUniversalMotions(){try{File f=universalMotionsFile();if(!f.isFile())return null;return FilesSupport.json(f,16*1024*1024);}catch(Exception e){return null;}}
+    JSONObject saveUniversalMotions(File input)throws Exception {
+        if(input.length()<16||input.length()>16L*1024*1024)throw new IOException("通用动作包超过 16 MB 或为空。");
+        JSONObject incoming=FilesSupport.json(input,16*1024*1024);
+        String schema=incoming.optString("schema");
+        JSONArray incomingClips=incoming.optJSONArray("clips");
+        if(!schema.startsWith("companion-upper-body-transfer/")||incomingClips==null||incomingClips.length()==0)throw new IOException("请选择有效的通用动作包（.qmotion）。");
+        JSONObject merged=loadUniversalMotions();
+        if(merged==null)merged=FilesSupport.copy(incoming);
+        LinkedHashMap<String,JSONObject> byId=new LinkedHashMap<>();
+        JSONArray existingClips=merged.optJSONArray("clips");
+        if(existingClips!=null)for(int i=0;i<existingClips.length();i++){JSONObject c=existingClips.optJSONObject(i);if(c!=null&&!c.optString("id").isEmpty())byId.put(c.getString("id"),c);}
+        for(int i=0;i<incomingClips.length();i++){JSONObject c=incomingClips.optJSONObject(i);if(c!=null&&!c.optString("id").isEmpty())byId.put(c.getString("id"),c);}
+        JSONArray outClips=new JSONArray();for(JSONObject c:byId.values())outClips.put(c);
+        merged.put("schema",schema).put("sourceCharacter",incoming.optString("sourceCharacter","UniversalMMD")).put("targetCharacter","Universal").put("stance",incoming.optString("stance","standing")).put("clips",outClips);
+        FilesSupport.atomic(universalMotionsFile(),merged.toString());
+        return merged;
+    }
     boolean hasChat(){try{return FilesSupport.text(new File(chat,"package.sha256"),100).equals(BuildConfig.CHAT_SHA256);}catch(Exception e){return false;}}
     JSONObject install(File input,String name,java.util.function.Consumer<String> progress)throws Exception {
         if(name.toLowerCase(Locale.ROOT).endsWith(".qstage"))return new PortraitLibrary(root).install(input);
-        String lower=name.toLowerCase(Locale.ROOT);if(lower.endsWith(".snowbreak")){
-            if(input.length()>128L*1024*1024||input.length()<22)throw new IOException("角色包须完整且不超过128MB。");
-            try(ZipFile zip=new ZipFile(input)){JSONObject manifest=readJSON(zip,"manifest.json",2*1024*1024);if(!List.of("snowbreak-collection/1","snowbreak-skin/1").contains(manifest.optString("schema")))throw new IOException("不支持的角色包版本。");}
+        String lower=name.toLowerCase(Locale.ROOT);
+        if(lower.endsWith(".qmotion")){JSONObject catalog=saveUniversalMotions(input);return new JSONObject().put("type","qmotion").put("catalog",catalog);}
+        if(lower.endsWith(".snowbreak")){
+            if(input.length()>MAX_SNOWBREAK_BYTES||input.length()<22)throw new IOException("角色包须完整且不超过 1 GB。");
+            try(ZipFile zip=new ZipFile(input)){JSONObject manifest=readJSON(zip,"manifest.json",4*1024*1024);if(!List.of("snowbreak-collection/1","snowbreak-skin/1","snowbreak-chibi-collection/1").contains(manifest.optString("schema")))throw new IOException("不支持的角色包版本。");}
             String ticket=UUID.randomUUID().toString();File staged=new File(models,"staged-"+ticket+".snowbreak");Files.copy(input.toPath(),staged.toPath());return new JSONObject().put("type","model").put("staged",staged.getName()).put("ticket",ticket);
         }
-        if(!lower.endsWith(".qchat")&&!lower.endsWith(".qcards")&&!lower.endsWith(".qvoice"))throw new IOException("请选择 .snowbreak、.qcards、.qchat 或 .qvoice 包。");
+        if(!lower.endsWith(".qchat")&&!lower.endsWith(".qcards")&&!lower.endsWith(".qvoice"))throw new IOException("请选择 .snowbreak、.qmotion、.qstage、.qcards、.qchat 或 .qvoice 包。");
         boolean isChat=lower.endsWith(".qchat"),isArt=lower.endsWith(".qcards");long max=isChat?200L*1024*1024:isArt?500L*1024*1024:3L*1024*1024*1024;if(input.length()>max)throw new IOException("素材包超过大小上限。");
         if(isChat&&!FilesSupport.sha(input).equals(BuildConfig.CHAT_SHA256))throw new IOException("请选择随本版 App 提供的 .qchat 模块；摘要不匹配，原模块已保留。");
         File staging=new File(root,".import-"+UUID.randomUUID());staging.mkdirs();try(ZipFile zip=new ZipFile(input)){
@@ -42,7 +81,7 @@ final class PackLibrary {
         }finally{if(staging.exists())FilesSupport.deleteTree(staging,root);}
     }
     private void replace(File from,File target)throws Exception {File previous=new File(root,".previous-"+UUID.randomUUID());boolean moved=false;try{if(target.exists()){Files.move(target.toPath(),previous.toPath());moved=true;}Files.move(from.toPath(),target.toPath());}catch(Exception e){if(moved&&!target.exists())Files.move(previous.toPath(),target.toPath());throw e;}if(previous.exists())FilesSupport.deleteTree(previous,root);}
-    void commitModel(String staged,String character)throws Exception {if(staged.matches("staged-[a-f0-9-]+\\.json")&&character.equals("generic")){File source=FilesSupport.child(models,staged);FilesSupport.atomic(new File(models,"generic.json"),java.nio.file.Files.readAllBytes(source.toPath()));java.nio.file.Files.delete(source.toPath());return;}if(!staged.matches("staged-[a-f0-9-]+\\.snowbreak")||!List.of("Enya","Fenny").contains(character))throw new IOException("角色验证失败。");File source=FilesSupport.child(models,staged);File target=new File(models,character+".snowbreak");File copy=new File(models,".current.tmp");Files.copy(source.toPath(),copy.toPath(),StandardCopyOption.REPLACE_EXISTING);Files.move(copy.toPath(),target.toPath(),StandardCopyOption.REPLACE_EXISTING);FilesSupport.atomic(new File(models,"selection.txt"),character);Files.delete(source.toPath());}
+    void commitModel(String staged,String character)throws Exception {if(staged.matches("staged-[a-f0-9-]+\\.json")&&character.equals("generic")){File source=FilesSupport.child(models,staged);FilesSupport.atomic(new File(models,"generic.json"),java.nio.file.Files.readAllBytes(source.toPath()));java.nio.file.Files.delete(source.toPath());return;}if(!staged.matches("staged-[a-f0-9-]+\\.snowbreak")||!SUPPORTED_CHARACTERS.contains(character))throw new IOException("角色验证失败。");File source=FilesSupport.child(models,staged);File target=new File(models,character+".snowbreak");File copy=new File(models,".current.tmp");Files.copy(source.toPath(),copy.toPath(),StandardCopyOption.REPLACE_EXISTING);Files.move(copy.toPath(),target.toPath(),StandardCopyOption.REPLACE_EXISTING);FilesSupport.atomic(new File(models,"selection.txt"),character);Files.delete(source.toPath());}
     File model(String character){return new File(models,character+".snowbreak");}
     JSONObject catalog()throws Exception {JSONArray characters=new JSONArray(),themes=new JSONArray();File[] folders=art.listFiles();if(folders!=null)for(File folder:folders){File file=new File(folder,"catalog.json");if(!file.isFile())continue;JSONObject m=FilesSupport.json(file,2*1024*1024);String prefix="art/"+m.getString("id")+"/";JSONArray list=m.getJSONArray("characters");for(int i=0;i<list.length();i++){JSONObject c=FilesSupport.copy(list.getJSONObject(i));c.put("id",m.getString("id")+"/"+c.getString("id"));for(String key:List.of("portrait","avatar"))if(c.has(key))c.put(key,prefix+c.getString(key));for(String key:List.of("states","stateLayers","blinkLayers"))if(c.has(key))c.put(key,prefix(c.getJSONObject(key),prefix));if(c.has("layers"))c.put("layers",paths(c.getJSONArray("layers"),prefix));characters.put(c);}if(m.has("theme")){JSONObject t=FilesSupport.copy(m.getJSONObject("theme"));t.put("images",prefix(t.getJSONObject("images"),prefix)).put("audio",prefix(t.getJSONObject("audio"),prefix));themes.put(t);}}return new JSONObject().put("characters",characters).put("themes",themes);}
     private JSONObject prefix(JSONObject object,String prefix)throws Exception{JSONObject out=new JSONObject();Iterator<String> keys=object.keys();while(keys.hasNext()){String key=keys.next();Object v=object.get(key);out.put(key,v instanceof JSONArray?paths((JSONArray)v,prefix):prefix+v);}return out;}

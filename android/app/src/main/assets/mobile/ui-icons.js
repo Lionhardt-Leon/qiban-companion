@@ -33,7 +33,12 @@
     'sparkles':'<path d="m12 1 2.5 7.5L22 11l-7.5 2.5L12 21l-2.5-7.5L2 11l7.5-2.5ZM21 2v4m-2-2h4"/>',
     'arrow.up.circle.fill':'<circle cx="12" cy="12" r="10" fill="currentColor" stroke="none"/><path d="M12 18V6m-5 5 5-5 5 5" stroke="#fff"/>',
     'person.and.background.dotted':'<path d="M3 3h1m3 0h1m3 0h1m3 0h1m3 0h2M3 7v1m0 3v1m0 3v1m0 3v2h2m3 0h1m3 0h1m3 0h1m3 0h1v-2m0-3v-1m0-3v-1m0-3V7"/><circle cx="12" cy="9" r="3"/><path d="M6 19v-2c0-5 12-5 12 0v2"/>',
-    'stop':'<rect x="6" y="6" width="12" height="12" rx="1" fill="currentColor"/>','heart':'<path d="M12 21C-8 9 5-3 12 5c7-8 20 4 0 16Z"/>','plus':'<path d="M12 4v16M4 12h16"/>'
+    'stop':'<rect x="6" y="6" width="12" height="12" rx="1" fill="currentColor"/>','heart':'<path d="M12 21C-8 9 5-3 12 5c7-8 20 4 0 16Z"/>','plus':'<path d="M12 4v16M4 12h16"/>',
+    'arkit':'<path d="M12 3 4 7.5v9L12 21l8-4.5v-9L12 3Z"/><path d="M4 7.5 12 12l8-4.5M12 12v9"/>',
+    'rotate':'<rect x="6" y="3" width="12" height="18" rx="2"/><path d="M19 6a7 7 0 0 1 2 5m-1 4-2-1 1-2"/>',
+    'eye':'<path d="M2 12s3.8-6.5 10-6.5S22 12 22 12s-3.8 6.5-10 6.5S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/>',
+    'eye.slash':'<path d="M3 3l18 18M10.6 10.6a3 3 0 0 0 4.2 4.2M9.9 5.3A10.7 10.7 0 0 1 12 5.5c6.2 0 10 6.5 10 6.5a18 18 0 0 1-4.1 4.8M6.6 6.6A18.3 18.3 0 0 0 2 12s3.8 6.5 10 6.5a10.4 10.4 0 0 0 3.7-.7"/>',
+    'xmark':'<path d="M6 6l12 12M18 6 6 18"/>'
   };
   const icon = (name,extra='') => `<svg class="icon ${extra}" viewBox="0 0 24 24" aria-hidden="true">${paths[name]||paths.sparkles}</svg>`;
   window.QibanUI={icon,hydrate(root=document){for(const e of root.querySelectorAll('[data-icon]'))e.innerHTML=icon(e.dataset.icon);}};
