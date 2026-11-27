@@ -1,4 +1,4 @@
-name: QibanCompanion
+name: AnimatesLocal
 options:
   deploymentTarget:
     iOS: "16.0"
@@ -9,12 +9,11 @@ packages:
 settings:
   base:
     SWIFT_VERSION: "5.0"
-    STORAGE_NAMESPACE: QibanCompanion
-    KEYCHAIN_SERVICE: com.local.qibancompanion.api
-    COMPAT_APP_BUNDLE: com.local.qibancompanion
+    STORAGE_NAMESPACE: AnimatesLocal
+    KEYCHAIN_SERVICE: com.local.animatescompanion.api
     TARGETED_DEVICE_FAMILY: "1"
 targets:
-  QibanCompanion:
+  AnimatesLocal:
     type: application
     platform: iOS
     sources:
@@ -29,9 +28,9 @@ targets:
         buildPhase: resources
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: $(COMPAT_APP_BUNDLE)
-        MARKETING_VERSION: "0.40.0"
-        CURRENT_PROJECT_VERSION: "66"
+        PRODUCT_BUNDLE_IDENTIFIER: com.local.animatescompanion
+        MARKETING_VERSION: "0.41.0"
+        CURRENT_PROJECT_VERSION: "67"
         GENERATE_INFOPLIST_FILE: YES
     dependencies:
       - package: ONNXRuntime
@@ -95,28 +94,28 @@ targets:
             UTTypeTagSpecification:
               public.filename-extension: [qmotion]
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait, UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight]
-  QibanCompanionTests:
+  AnimatesLocalTests:
     type: bundle.unit-test
     platform: iOS
     sources: [Tests]
     dependencies:
-      - target: QibanCompanion
+      - target: AnimatesLocal
     settings:
       base:
         GENERATE_INFOPLIST_FILE: YES
-  QibanCompanionUITests:
+  AnimatesLocalUITests:
     type: bundle.ui-testing
     platform: iOS
     sources: [UITests]
     dependencies:
-      - target: QibanCompanion
+      - target: AnimatesLocal
     settings:
       base:
         GENERATE_INFOPLIST_FILE: YES
 schemes:
-  QibanCompanion:
+  AnimatesLocal:
     build:
       targets:
-        QibanCompanion: all
+        AnimatesLocal: all
     test:
-      targets: [QibanCompanionTests, QibanCompanionUITests]
+      targets: [AnimatesLocalTests, AnimatesLocalUITests]

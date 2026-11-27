@@ -22,7 +22,13 @@ export function createEmbodiedActions(root,setYaw,frameYaw=()=>0){
  const torso=root.getObjectByName('Bip001-Spine2')||root.getObjectByName('Bip001-Spine');
  let gesture=null;
  let speechTarget=0,speechValue=0;const speechSaved=[];
- const mouthTargets=[];root.traverse(m=>{if(m.isMesh&&m.morphTargetDictionary&&m.morphTargetInfluences){const index=m.morphTargetDictionary.Viseme_A;if(Number.isInteger(index))mouthTargets.push({mesh:m,index});}});
+ const mouthTargets=[];root.traverse(m=>{if(m.isMesh&&m.morphTargetDictionary&&m.morphTargetInfluences){
+  const index=m.morphTargetDictionary.Viseme_A;if(!Number.isInteger(index))return;
+  let maxDelta=0;const attr=m.geometry?.morphAttributes?.position?.[index];
+  if(attr){for(let i=0;i<attr.count;i++){const d=Math.hypot(attr.getX(i),attr.getY(i),attr.getZ(i));if(d>maxDelta)maxDelta=d;}}
+  const gain=maxDelta>0.001?THREE.MathUtils.clamp(0.0125/maxDelta,0.85,2.2):0.85;
+  mouthTargets.push({mesh:m,index,gain});
+ }});
  function playGesture(id,plan){
   if(!available.includes(id)||!id.startsWith('gesture_')||!Number.isFinite(plan?.duration)||plan.duration<1||plan.duration>8||!Array.isArray(plan.poses)||plan.poses.length<2||plan.poses.length>8)throw new Error('无效肢体动作');
   let last=-1;for(const p of plan.poses){if(p.smile!==undefined&&(!Number.isFinite(p.smile)||p.smile<0||p.smile>1))throw new Error('表情越界');if(!Number.isFinite(p.time)||p.time<=last||p.time<0||p.time>plan.duration)throw new Error('动作时间无效');last=p.time;for(const [key,limit] of [['head',[45,25,20]],['torso',[20,15,15]],['leftHand',[1.5,2,1.5]],['rightHand',[1.5,2,1.5]]])if(p[key]&&(!Array.isArray(p[key])||p[key].length!==3||p[key].some((n,i)=>!Number.isFinite(n)||Math.abs(n)>limit[i])))throw new Error('动作目标越界');}
@@ -105,7 +111,7 @@ export function createEmbodiedActions(root,setYaw,frameYaw=()=>0){
   for(const e of eyes){const base=e.mesh.morphTargetInfluences[e.index]||0,applied=THREE.MathUtils.lerp(base,closed?1:0,eyeWeight);savedEyes.push({...e,base,applied});e.mesh.morphTargetInfluences[e.index]=applied;}
   if(pose?.smile){root.traverse(m=>{if(!m.isMesh||!m.morphTargetInfluences)return;const d=m.morphTargetDictionary||{};for(const index of [d.L_Eye_smile??d.L_eye_smile??d.eyemileL??d.eyesmileL,d.R_Eye_smile??d.R_eye_smile??d.eyemileR??d.eyesmileR]){if(!Number.isInteger(index))continue;const base=m.morphTargetInfluences[index]||0,applied=Math.max(base,Math.min(.5,pose.smile));speechSaved.push({mesh:m,index,base,applied});m.morphTargetInfluences[index]=applied;}});}
   speechValue+=(speechTarget-speechValue)*(1-Math.exp(-dt*(speechTarget>speechValue?24:16)));
-  for(const e of mouthTargets){const base=e.mesh.morphTargetInfluences[e.index]||0,applied=Math.max(base,speechValue*.85);speechSaved.push({...e,base,applied});e.mesh.morphTargetInfluences[e.index]=applied;}
+  for(const e of mouthTargets){const base=e.mesh.morphTargetInfluences[e.index]||0,applied=Math.max(base,speechValue*(e.gain||.85));speechSaved.push({...e,base,applied});e.mesh.morphTargetInfluences[e.index]=applied;}
   root.updateWorldMatrix(true,true);for(const skeleton of skeletons)skeleton.update();
  }
  function snapshot(){root.updateWorldMatrix(true,true);for(const side of ['left','right']){const c=chains[side];if(!c)continue;const a=c.upper.getWorldPosition(new THREE.Vector3()),b=c.lower.getWorldPosition(new THREE.Vector3()),h=c.hand.getWorldPosition(new THREE.Vector3());actual[side]=h.y>a.y+(a.distanceTo(b)+b.distanceTo(h))*.25;}

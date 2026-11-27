@@ -9,7 +9,7 @@ export function planTextureBudget(config,runtime,requested=4096,profile=null){
  const propCap=isPerf?2048:isBattery?512:1024;
  for(const m of config?.materials||[]){
   if(m.renderState?.opacity===0)continue;
-  for(const [field,normal] of [['diffuseAssetId',false],['normalAssetId',true]]){
+  for(const [field,normal] of [['diffuseAssetId',false],['normalAssetId',true],['ormAssetId',true]]){
    const id=m[field];if(!id)continue;const key=(normal?'normal:':'')+id,info=runtime.getAsset('texture_'+id)?.data;
    if(!info||![info.width,info.height].every(n=>Number.isInteger(n)&&n>0&&n<=4096))throw new Error('Missing texture dimensions');
    const prop=/^(ma_|house_)/i.test(m.name),priority=normal?10:prop?(isPerf?150:5):/head|face|eye/i.test(m.name)?1000:/body00/i.test(m.name)?500:/body01/i.test(m.name)?400:/hair/i.test(m.name)?120:60;
