@@ -1,4 +1,4 @@
-name: AnimatesLocal
+name: QibanCompanion
 options:
   deploymentTarget:
     iOS: "16.0"
@@ -9,11 +9,12 @@ packages:
 settings:
   base:
     SWIFT_VERSION: "5.0"
-    STORAGE_NAMESPACE: AnimatesLocal
-    KEYCHAIN_SERVICE: com.local.animatescompanion.api
+    STORAGE_NAMESPACE: QibanCompanion
+    KEYCHAIN_SERVICE: com.local.qibancompanion.api
+    COMPAT_APP_BUNDLE: com.local.qibancompanion
     TARGETED_DEVICE_FAMILY: "1"
 targets:
-  AnimatesLocal:
+  QibanCompanion:
     type: application
     platform: iOS
     sources:
@@ -28,7 +29,7 @@ targets:
         buildPhase: resources
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.local.animatescompanion
+        PRODUCT_BUNDLE_IDENTIFIER: $(COMPAT_APP_BUNDLE)
         MARKETING_VERSION: "0.41.0"
         CURRENT_PROJECT_VERSION: "67"
         GENERATE_INFOPLIST_FILE: YES
@@ -94,28 +95,28 @@ targets:
             UTTypeTagSpecification:
               public.filename-extension: [qmotion]
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait, UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight]
-  AnimatesLocalTests:
+  QibanCompanionTests:
     type: bundle.unit-test
     platform: iOS
     sources: [Tests]
     dependencies:
-      - target: AnimatesLocal
+      - target: QibanCompanion
     settings:
       base:
         GENERATE_INFOPLIST_FILE: YES
-  AnimatesLocalUITests:
+  QibanCompanionUITests:
     type: bundle.ui-testing
     platform: iOS
     sources: [UITests]
     dependencies:
-      - target: AnimatesLocal
+      - target: QibanCompanion
     settings:
       base:
         GENERATE_INFOPLIST_FILE: YES
 schemes:
-  AnimatesLocal:
+  QibanCompanion:
     build:
       targets:
-        AnimatesLocal: all
+        QibanCompanion: all
     test:
-      targets: [AnimatesLocalTests, AnimatesLocalUITests]
+      targets: [QibanCompanionTests, QibanCompanionUITests]
