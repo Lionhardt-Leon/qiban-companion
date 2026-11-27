@@ -3,15 +3,15 @@ import { sha256Hex } from './sha256.js';
 const LIMIT = { entries: 256, file: 32*1024*1024, total: 128*1024*1024, archive: 64*1024*1024, pixels: 64000000 };
 const decoder = new TextDecoder('utf-8', { fatal:true });
 export function inspectArchive(bytes, allowedPath = /^(manifest\.json|LICENSE\.txt|layers\/[a-z0-9_.-]+\.png)$/i,archiveLimit=LIMIT.archive,decodedLimit=LIMIT.total) {
-  if(![LIMIT.total,192*1024*1024].includes(decodedLimit))throw new Error('资源包解压上限非法');
-  if (![LIMIT.archive,128*1024*1024].includes(archiveLimit)||!(bytes instanceof Uint8Array) || bytes.length < 22 || bytes.length > archiveLimit) throw new Error('资源包大小非法');
+  if(![LIMIT.total,192*1024*1024,384*1024*1024].includes(decodedLimit))throw new Error('资源包解压上限非法');
+  if (![LIMIT.archive,128*1024*1024,256*1024*1024].includes(archiveLimit)||!(bytes instanceof Uint8Array) || bytes.length < 22 || bytes.length > archiveLimit) throw new Error('资源包大小非法');
   const d = new DataView(bytes.buffer,bytes.byteOffset,bytes.byteLength);
   let eocd=-1;
   for(let i=bytes.length-22;i>=Math.max(0,bytes.length-65557);i--) if(d.getUint32(i,true)===0x06054b50 && i+22+d.getUint16(i+20,true)===bytes.length){eocd=i;break;}
   if(eocd<0 || d.getUint16(eocd+4,true) || d.getUint16(eocd+6,true)) throw new Error('不支持分卷或无效 ZIP');
   const count=d.getUint16(eocd+10,true), start=d.getUint32(eocd+16,true), size=d.getUint32(eocd+12,true);
   if(!count || count>LIMIT.entries || start+size!==eocd || d.getUint16(eocd+8,true)!==count) throw new Error('ZIP 目录或数量非法');
-  const names=new Set(); let pos=start,total=0;
+  const names=new Set(), entries=new Map(); let pos=start,total=0;
   for(let i=0;i<count;i++) {
     if(pos+46>eocd || d.getUint32(pos,true)!==0x02014b50) throw new Error('ZIP 目录损坏');
     const flags=d.getUint16(pos+8,true), method=d.getUint16(pos+10,true), n=d.getUint16(pos+28,true);
@@ -27,10 +27,11 @@ export function inspectArchive(bytes, allowedPath = /^(manifest\.json|LICENSE\.t
     if(local+30>start || d.getUint32(local,true)!==0x04034b50) throw new Error('ZIP 本地条目非法');
     const ln=d.getUint16(local+26,true),le=d.getUint16(local+28,true),compressed=d.getUint32(pos+20,true);
     if(local+30+ln+le+compressed>start || decoder.decode(bytes.subarray(local+30,local+30+ln))!==name) throw new Error('ZIP 本地目录不一致');
+    entries.set(name,{offset:local+30+ln+le,compressed,original,method});
     pos+=46+n+extra+comment;
   }
   if(pos!==eocd || !names.has('manifest.json')) throw new Error('缺少 manifest');
-  return { names, total };
+  return { names, total, entries };
 }
 function imageDataURL(bytes) {
   let s='';for(let i=0;i<bytes.length;i+=0x8000)s+=String.fromCharCode(...bytes.subarray(i,i+0x8000));

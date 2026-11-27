@@ -2,23 +2,31 @@ import * as THREE from 'three';
 
 // Local rendering profiles, not a reconstruction of the unavailable UE shader.
 export function characterMaterial(name,map,normal,state){
- const eye=/eye01/.test(name),face=/face01/.test(name),hair=/hair01/.test(name);
+ if(state.opacity===0){
+  const hidden=new THREE.MeshBasicMaterial({visible:false,transparent:true,opacity:0,depthWrite:false});
+  hidden.userData.profile='hidden';
+  return hidden;
+ }
+ const eye=/eye01/.test(name),eyeShadow=/eye01_shadow/.test(name),eyebrow=/face01_inst_2/.test(name),face=/face01/.test(name),hair=/hair01/.test(name);
  const skin=/body00(?:_ma)?_inst|face01/.test(name);
  if(state.opacity!==undefined&&(!Number.isFinite(state.opacity)||state.opacity<0||state.opacity>1))throw new Error('Invalid material opacity');
  const shared={opacity:state.opacity??1,color:map?0xffffff:0xcac7c3,map,transparent:!!state.transparent,depthWrite:!state.transparent,alphaTest:map?(state.alphaCutoff||0):0,side:state.doubleSided===false?THREE.FrontSide:THREE.DoubleSide};
  let material;
  if(eye)material=new THREE.MeshBasicMaterial(shared);
  else {
-  material=new THREE.MeshPhysicalMaterial({...shared,normalMap:normal||null,normalScale:new THREE.Vector2(face?.22:.48,face?-.22:-.48),roughness:hair?.42:skin?.68:.6,metalness:0,clearcoat:hair?.22:0,clearcoatRoughness:.48,envMapIntensity:hair?.6:skin?.25:.35});
+  const nScale=face?.22:skin?.24:.48;
+  material=new THREE.MeshPhysicalMaterial({...shared,normalMap:normal||null,normalScale:new THREE.Vector2(nScale,-nScale),roughness:hair?.42:skin?.68:.6,metalness:0,clearcoat:hair?.22:0,clearcoatRoughness:.48,envMapIntensity:hair?.6:skin?.25:.35});
   if(face||skin){
    material.onBeforeCompile=shader=>{
     // Broad, soft facial lighting avoids a faceted nose/chin under a single key.
-    shader.fragmentShader=shader.fragmentShader.replace('#include <normal_fragment_maps>',`#include <normal_fragment_maps>\nnormal=normalize(mix(normal,vec3(0.0,0.0,1.0),${face?'0.72':'0.18'}));`);
+    shader.fragmentShader=shader.fragmentShader.replace('#include <normal_fragment_maps>',`#include <normal_fragment_maps>\nnormal=normalize(mix(normal,vec3(0.0,0.0,1.0),${face?'0.72':'0.26'}));`);
    };
-   material.customProgramCacheKey=()=>face?'enya-soft-face-v1':'enya-soft-skin-v1';
+   material.customProgramCacheKey=()=>face?'enya-soft-face-v1':'enya-soft-skin-v2';
   }
  }
- if(state.transparent){material.polygonOffset=true;material.polygonOffsetFactor=-.5;material.polygonOffsetUnits=-.5;}
+ // Never pull eye01_shadow_inst forward (causes dark blotches over closed eyelids when blinking).
+ if(eyebrow){material.polygonOffset=true;material.polygonOffsetFactor=-1.5;material.polygonOffsetUnits=-1.5;}
+ else if(state.transparent&&!eyeShadow){material.polygonOffset=true;material.polygonOffsetFactor=-.25;material.polygonOffsetUnits=-.25;}
  material.userData.profile=eye?'eye':face?'soft-face':hair?'hair':skin?'skin':'cloth-or-room';
  return material;
 }

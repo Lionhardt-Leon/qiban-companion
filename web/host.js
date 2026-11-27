@@ -32,7 +32,11 @@ function cleanup(){window.__snowbreakMigration=null;pausedScene=null;modelEditor
 
 function load(url,id,variant){const ticket=++generation;const task=loading.catch(()=>{}).then(()=>ticket===generation?performLoad(url,id,variant,ticket):undefined);loading=task;return task;}
 async function performLoad(url,id,variant,ticket){
-  nonce=id;paused=false;canvas.dataset.snowbreakPaused='false';cleanup();text('正在加载本地角色…');
+  nonce=id;paused=false;canvas.dataset.snowbreakPaused='false';
+  if(variant&&collection?.manifest?.characterId){try{localStorage.setItem(collection.manifest.characterId.toLowerCase()+'-collection-selection',variant);}catch{}}
+  cleanup();text('正在加载本地角色…');
+  if(variant)await new Promise(r=>setTimeout(r,120));
+  if(ticket!==generation)return;
   let opened,nextDisplay,nextVoices;
   try{
     if(variant){if(!collection)throw new Error('请先导入角色整合包');opened=await collection.selectVariant(variant);}else{collection=null;const response=await fetch(url);if(!response.ok)throw new Error('本地角色包读取失败');opened=await openSkinArchive(new Uint8Array(await response.arrayBuffer()));}

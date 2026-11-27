@@ -22,7 +22,7 @@ export async function createSnowbreakRenderer(canvas,runtime,{isCurrent=()=>true
   if(orientation&&(orientation.schema!=="snowbreak-view-orientation/1"||!Number.isFinite(orientation.yawDegrees)||Math.abs(orientation.yawDegrees)>180))throw new Error("Invalid view orientation");
   let baseYaw=-Math.PI/2+THREE.MathUtils.degToRad(orientation?.yawDegrees||0);
   const renderer=new THREE.WebGLRenderer({canvas,alpha:true,antialias:true,powerPreference:'high-performance'});
-  const scene=new THREE.Scene(),group=new THREE.Group(),characterGroup=new THREE.Group(),camera=new THREE.PerspectiveCamera(32,1,.01,100);group.rotation.y=baseYaw;scene.add(group);group.add(characterGroup);
+  const scene=new THREE.Scene(),group=new THREE.Group(),characterGroup=new THREE.Group(),camera=new THREE.PerspectiveCamera(32,1,.15,100);group.rotation.y=baseYaw;scene.add(group);group.add(characterGroup);
   const lighting=installCharacterLights(scene,renderer);
   const budget=createRenderBudget();budget.configure({mode:localStorage.getItem('snowRenderMode')||'adaptive'});
   let budgetRatio=0;
@@ -46,7 +46,19 @@ export async function createSnowbreakRenderer(canvas,runtime,{isCurrent=()=>true
     frame={scale:THREE.MathUtils.clamp(value.scale,.3,4),x:THREE.MathUtils.clamp(value.x,-1.5,1.5),y:THREE.MathUtils.clamp(value.y,-1.5,1.5),yaw:((value.yaw+180)%360+360)%360-180,pitch:THREE.MathUtils.clamp(value.pitch,-65,65),roll:THREE.MathUtils.clamp(value.roll,-45,45),stretchX:THREE.MathUtils.clamp(value.stretchX,.65,1.5),stretchY:THREE.MathUtils.clamp(value.stretchY,.65,1.5)};
     orient();fit();return {...frame};
   }
-  function correctFacing(){if(!facingReference)return;group.rotation.y=baseYaw;group.updateMatrixWorld(true);const q=facingReference.bone.getWorldQuaternion(new THREE.Quaternion()),v=facingReference.axis.clone().applyQuaternion(q);if(Math.hypot(v.x,v.z)>.1)autoYaw=facingReference.heading-Math.atan2(v.x,v.z);orient();}
+  function correctFacing(){
+    if(root){
+      group.rotation.y=baseYaw;group.updateMatrixWorld(true);
+      const lArm=root.getObjectByName('Bip001-L-UpperArm'),rArm=root.getObjectByName('Bip001-R-UpperArm');
+      if(lArm&&rArm){
+        const lr=lArm.getWorldPosition(new THREE.Vector3()).sub(rArm.getWorldPosition(new THREE.Vector3()));
+        const fwd=new THREE.Vector3().crossVectors(lr,new THREE.Vector3(0,1,0));
+        if(Math.hypot(fwd.x,fwd.z)>.02){autoYaw=-Math.atan2(fwd.x,fwd.z);orient();return;}
+      }
+    }
+    if(!facingReference)return;
+    group.rotation.y=baseYaw;group.updateMatrixWorld(true);const q=facingReference.bone.getWorldQuaternion(new THREE.Quaternion()),v=facingReference.axis.clone().applyQuaternion(q);if(Math.hypot(v.x,v.z)>.1)autoYaw=facingReference.heading-Math.atan2(v.x,v.z);orient();
+  }
   function faceViewer(){frame.yaw=0;correctFacing();fit();return {...frame};}
   function prepareMeshes(part){part.traverse(m=>{if(m.isBone)m.userData.bindLocalQuaternion=m.quaternion.toArray();if(!m.isMesh)return;geometries.add(m.geometry);for(const old of Array.isArray(m.material)?m.material:[m.material]){materials.add(old);for(const v of Object.values(old))if(v?.isTexture)textures.add(v);}
     const name=m.material.name,map=maps.get(name)||null,state=states.get(name)||{};m.userData.snowbreakSurfaceKey='surface_'+surfaceSequence++;m.userData.snowbreakMaterialName=name;m.userData.previewMap=map;
@@ -64,7 +76,9 @@ export async function createSnowbreakRenderer(canvas,runtime,{isCurrent=()=>true
     const t=Math.tan(THREE.MathUtils.degToRad(16));let distance=Math.max(size.y/(2*t),size.x/(2*t*camera.aspect))*1.25+size.z;
     if(framingBounds){distance=0;for(const x of [box.min.x,box.max.x])for(const y of [box.min.y,box.max.y])for(const z of [box.min.z,box.max.z])distance=Math.max(distance,z-c.z+Math.max(Math.abs(x-c.x)/(t*camera.aspect),Math.abs(y-c.y)/t)*1.12);}
     const editableScene=runtime.getAsset('localScene')?.data.schema==='snowbreak-local-scene/2';
-    camera.position.copy(c).add(new THREE.Vector3(0,0,distance));camera.lookAt(c);camera.zoom=sceneEnvelope&&!editableScene?1.05:frame.scale;camera.setViewOffset(w,h,sceneEnvelope&&!editableScene?0:-frame.x*w,sceneEnvelope&&!editableScene?0:-frame.y*h,w,h);camera.updateProjectionMatrix();
+    const hasRoom=!!localScene?.snapshot?.().available;
+    const lockFrame=!!sceneEnvelope&&hasRoom&&!editableScene;
+    camera.position.copy(c).add(new THREE.Vector3(0,0,distance));camera.lookAt(c);camera.zoom=lockFrame?1.05:frame.scale;camera.setViewOffset(w,h,lockFrame?0:-frame.x*w,lockFrame?0:-frame.y*h,w,h);camera.updateProjectionMatrix();
     camera.projectionMatrix.elements[0]*=frame.stretchX;camera.projectionMatrix.elements[5]*=frame.stretchY;camera.projectionMatrixInverse.copy(camera.projectionMatrix).invert();localScene?.updateView(camera,c);
   }
   try{
@@ -78,7 +92,7 @@ export async function createSnowbreakRenderer(canvas,runtime,{isCurrent=()=>true
         if(typeof item.name!=='string'||item.name.length>256||states.has(item.name))throw new Error('Invalid material identity');
         const state=item.renderState||{};if(state.alphaCutoff!==undefined&&(!Number.isFinite(state.alphaCutoff)||state.alphaCutoff<0||state.alphaCutoff>1))throw new Error('Invalid material alpha');
         if(state.doubleSided!==undefined&&typeof state.doubleSided!=='boolean')throw new Error('Invalid material sidedness');states.set(item.name,state);
-        if(!item.diffuseAssetId)continue;
+        if(state.opacity===0||!item.diffuseAssetId)continue;
         const resource=runtime.getAsset('texture_'+item.diffuseAssetId);if(resource?.kind!=='texture')throw new Error('Missing local diffuse texture');
         let texture=loaded.get(item.diffuseAssetId);
         if(!texture){const url=URL.createObjectURL(new Blob([resource.bytes],{type:resource.data?.mime||'image/png'}));try{texture=await new THREE.TextureLoader().loadAsync(url);}finally{URL.revokeObjectURL(url);}const limit=textureBudget.limitFor(item.diffuseAssetId);if(texture.image.width>limit||texture.image.height>limit){const image=document.createElement('canvas'),ratio=Math.min(limit/texture.image.width,limit/texture.image.height);image.width=Math.round(texture.image.width*ratio);image.height=Math.round(texture.image.height*ratio);image.getContext('2d').drawImage(texture.image,0,0,image.width,image.height);const decoded=texture.image;texture.image=image;decoded.src='';texture.needsUpdate=true;}texture.colorSpace=THREE.SRGBColorSpace;texture.anisotropy=renderer.capabilities.getMaxAnisotropy();texture.flipY=false;loaded.set(item.diffuseAssetId,texture);textures.add(texture);}
@@ -154,7 +168,7 @@ export async function createSnowbreakRenderer(canvas,runtime,{isCurrent=()=>true
       }
     }
     const touchBindings=validateTouchBindings(catalog);
-    function selectSample(id){const sample=samples.get(id);if(!sample)throw new Error('Unknown sample');activeOverlay=sample.overlay?(poseMode==='sample'&&activeOverlay?activeOverlay:{bindings:poseMode==='standby'?standbyBindings:selectedBindings,duration:poseMode==='standby'?standbyDuration:selectedDuration,time:sampleTime,envelope:sceneEnvelope}):null;selectedId=id;selectedBindings=sample.bindings;selectedDuration=sample.duration;const frameSample=samples.get(sample.sceneOf)||sample;const nextEnvelope=sample.overlay?activeOverlay.envelope:frameSample.sceneFraming?framingByClip.get(frameSample.sourceSha256):null;if(sample.sceneFraming&&!nextEnvelope)throw new Error('Scene framing envelope missing');const sourceYaw=localScene.setAnchor?.(frameSample.id??id);let refit=sceneEnvelope!==nextEnvelope;if(sourceYaw!==null&&sourceYaw!==undefined){const yaw=-Math.PI/2+THREE.MathUtils.degToRad(sourceYaw);refit ||=Math.abs(baseYaw-yaw)>1e-8;baseYaw=yaw;autoYaw=0;orient();}sceneEnvelope=nextEnvelope;seek(0);if(refit)fit();return {id,label:sample.label,duration:sample.duration};}
+    function selectSample(id){const sample=samples.get(id);if(!sample)throw new Error('Unknown sample');activeOverlay=sample.overlay?(poseMode==='sample'&&activeOverlay?activeOverlay:{bindings:poseMode==='standby'?standbyBindings:selectedBindings,duration:poseMode==='standby'?standbyDuration:selectedDuration,time:sampleTime,envelope:sceneEnvelope}):null;selectedId=id;selectedBindings=sample.bindings;selectedDuration=sample.duration;const frameSample=samples.get(sample.sceneOf)||sample;const nextEnvelope=sample.overlay?activeOverlay.envelope:frameSample.sceneFraming?framingByClip.get(frameSample.sourceSha256):null;if(sample.sceneFraming&&!nextEnvelope)throw new Error('Scene framing envelope missing');const sourceYaw=localScene.setAnchor?.(frameSample.id??id);let refit=sceneEnvelope!==nextEnvelope;if(sourceYaw!==null&&sourceYaw!==undefined){const yaw=-Math.PI/2+THREE.MathUtils.degToRad(sourceYaw);refit ||=Math.abs(baseYaw-yaw)>1e-8;baseYaw=yaw;autoYaw=0;orient();}sceneEnvelope=nextEnvelope;seek(0);if(!localScene.snapshot().available&&frameSample.sceneFraming){correctFacing();refit=true;}if(refit)fit();return {id,label:sample.label,duration:sample.duration};}
     function seek(seconds,list=selectedBindings,length=selectedDuration){if(disposed||!Number.isFinite(seconds))return;const overlay=activeOverlay&&list===selectedBindings?activeOverlay:null;if(overlay&&overlay.duration>0)seek((overlay.time+seconds)%overlay.duration,overlay.bindings,overlay.duration);const previousMode=poseMode;activeFramingHash=list[0]?.clip?.generatorMetadata?.sourceSha256||null;poseMode=list===standbyBindings&&standbyDuration>0?'standby':'sample';sampleTime=Math.max(0,Math.min(length,seconds));for(const {bone,track,clip:c} of list){const f=sampleTime*c.fps,lo=Math.min(Math.floor(f),c.frames-1),hi=Math.min(lo+1,c.frames-1),t=f-lo,a=track.keys[lo],b=track.keys[hi];if(!overlay||!bodyBoneSet.has(bone))bone.position.set(THREE.MathUtils.lerp(a[0],b[0],t),THREE.MathUtils.lerp(a[1],b[1],t),THREE.MathUtils.lerp(a[2],b[2],t));bone.quaternion.copy(q0.fromArray(a,3).slerp(q1.fromArray(b,3),t));if(!overlay||!bodyBoneSet.has(bone))bone.scale.set(THREE.MathUtils.lerp(a[7],b[7],t),THREE.MathUtils.lerp(a[8],b[8],t),THREE.MathUtils.lerp(a[9],b[9],t));}morphCurves.apply((list.find(binding=>!bodyBoneSet.has(binding.bone))||list[0])?.clip,sampleTime);if(rootLock){root.position.x=root.position.z=0;group.updateMatrixWorld(true);const point=root.getObjectByName(rootLock.bone).getWorldPosition(new THREE.Vector3()).applyMatrix4(root.matrixWorld.clone().invert());root.position.x=rootLock.reference[0]-point.x;root.position.z=rootLock.reference[1]-point.z;}group.updateMatrixWorld(true);lastSkeletonUpdates=skeletons.length;for(const skeleton of skeletons)skeleton.update();}
     group.updateMatrixWorld(true);const facingBone=root.getObjectByName('Bip001-Pelvis')||root.getObjectByName('Bip001');
     if(facingBone){const q=facingBone.getWorldQuaternion(new THREE.Quaternion());const axis=[new THREE.Vector3(1,0,0),new THREE.Vector3(0,1,0),new THREE.Vector3(0,0,1)].sort((a,b)=>{const av=a.clone().applyQuaternion(q),bv=b.clone().applyQuaternion(q);return Math.hypot(bv.x,bv.z)-Math.hypot(av.x,av.z);})[0];const v=axis.clone().applyQuaternion(q);facingReference={bone:facingBone,axis,heading:Math.atan2(v.x,v.z)};}

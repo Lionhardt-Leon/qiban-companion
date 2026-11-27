@@ -75,9 +75,7 @@ enum DialogueMotion {
         ("enya_yuki_Peace_hand", "恩雅举手比 V 手势"),
         ("enya_yuki_dance_90bpm", "恩雅站立全身舞蹈，90 BPM，只适用于站立看板娘"),
         ("enya_yuki_dance_120bpm", "恩雅站立全身舞蹈，120 BPM，只适用于站立看板娘"),
-        ("enya_yuki_f_vibe_dance_60_bpm_002", "恩雅站立全身舞蹈，60 BPM，只适用于站立看板娘"),
-        ("snowbreak_mmd_houru", "通用动作 · 厚乳展示动作"),
-        ("universal_mmd_houru", "通用动作 · 厚乳展示动作")
+        ("enya_yuki_f_vibe_dance_60_bpm_002", "恩雅站立全身舞蹈，60 BPM，只适用于站立看板娘")
     ] + fennyScenes.map{(id:$0.id,meaning:$0.meaning)} + BodyCommand.allCases.map{(id:$0.rawValue,meaning:$0.label+"；由播放器直接控制并提供身体状态回执")} + BodyGesture.catalog
 
     static func allowed(_ ids: [String]) -> [String] {

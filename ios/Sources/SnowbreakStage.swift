@@ -2,11 +2,14 @@ import SwiftUI
 import WebKit
 
 struct SnowbreakLibrary {
-    static let supportedCharacters = ["Enya","Fenny","Katya","Cherno","Longyan","Nerida","Mia","Clarina","Augusta","Qingxiao"]
+    static let supportedCharacters = ["Enya","Fenny","Katya","Cherno","Longyan","Nerida","Mia","Clarina"]
     let directory: URL
     init(directory: URL? = nil) {
         self.directory = directory ?? FileManager.default.urls(for:.applicationSupportDirectory,in:.userDomainMask)[0]
             .appendingPathComponent(AppIdentity.storageNamespace+"/SnowbreakLibrary",isDirectory:true)
+        for deprecated in ["Augusta.snowbreak","Qingxiao.snowbreak","universal-motions.json"] {
+            try? FileManager.default.removeItem(at: self.directory.appendingPathComponent(deprecated))
+        }
     }
     var current: URL { directory.appendingPathComponent("current.snowbreak") }
     var universalMotionsURL: URL { directory.appendingPathComponent("universal-motions.json") }
@@ -51,8 +54,8 @@ struct SnowbreakLibrary {
         return merged
     }
     func stage(_ data: Data) throws -> URL {
-        guard (22...128*1024*1024).contains(data.count), data.prefix(4) == Data([0x50,0x4b,3,4]) else {
-            throw CompanionError.message("请选择完整的角色 .snowbreak 素材包（不超过128MB）。")
+        guard (22...256*1024*1024).contains(data.count), data.prefix(4) == Data([0x50,0x4b,3,4]) else {
+            throw CompanionError.message("请选择完整的角色 .snowbreak 素材包（不超过256MB）。")
         }
         try FileManager.default.createDirectory(at:directory,withIntermediateDirectories:true)
         let url = directory.appendingPathComponent("staged-\(UUID().uuidString).snowbreak")
@@ -82,7 +85,7 @@ final class SnowbreakScheme: NSObject, WKURLSchemeHandler {
         guard url.path == "/package/"+name,
               name == "current.snowbreak" || name.range(of:"^staged-[A-Fa-f0-9-]{36}\\.snowbreak$",options:.regularExpression) != nil else { throw URLError(.badURL) }
         let file = library.directory.appendingPathComponent(name)
-        guard let size = try file.resourceValues(forKeys:[.fileSizeKey]).fileSize,size <= 128*1024*1024 else { throw URLError(.dataLengthExceedsMaximum) }
+        guard let size = try file.resourceValues(forKeys:[.fileSizeKey]).fileSize,size <= 256*1024*1024 else { throw URLError(.dataLengthExceedsMaximum) }
         return (try Data(contentsOf:file),"application/octet-stream")
     }
     func webView(_ webView:WKWebView,start urlSchemeTask:WKURLSchemeTask) {
@@ -115,8 +118,6 @@ struct SnowbreakTouchEvent {
         case "Nerida": return "奈莉德 · 热沙激浪"
         case "Mia": return "米娅 · 星空魅影"
         case "Clarina": return "克罗瑞娜 · 绯月"
-        case "Augusta": return "奥古斯塔"
-        case "Qingxiao": return "清宵"
         default: return "恩雅护士"
         }
     }
@@ -189,8 +190,11 @@ struct SnowbreakTouchEvent {
         return try CameraFrame(jpeg:data,source:.selfPortrait)
     }
     func selectVariant(mode:String? = nil,outfit:String? = nil) {
-        let id=(mode ?? companionMode)+"_"+(outfit ?? companionOutfit)
+        let nextMode = mode ?? companionMode
+        let nextOutfit = outfit ?? companionOutfit
+        let id = nextMode + "_" + nextOutfit
         guard ready,variantIDs.contains(id) else { return }
+        companionMode = nextMode; companionOutfit = nextOutfit
         interactionRevision += 1;activeAction = nil;ready = false;send(["type":"variant","id":id])
     }
 
@@ -215,7 +219,7 @@ struct SnowbreakTouchEvent {
             NSFileCoordinator().coordinate(readingItemAt:url,options:[],error:&coordinationError) { file in
                 do {
                     let size = try file.resourceValues(forKeys:[.fileSizeKey]).fileSize ?? Int.max
-                    guard size <= 128*1024*1024 else { throw CompanionError.message("角色包超过128MB。") }
+                    guard size <= 256*1024*1024 else { throw CompanionError.message("角色包超过256MB。") }
                     data = try Data(contentsOf:file)
                 } catch { readError = error }
             }
@@ -296,7 +300,7 @@ struct SnowbreakTouchEvent {
                 for (k,v) in rawLabels { labelMap["snowbreak_" + k] = v }
                 sampleLabels = labelMap
                 if identity == "Enya" || identity == "Fenny" {
-                    actions = ["head","left","right","home_login","home_invite","home_shy","home_check","home_kiss","home_jealous","home_marry","home_sigh","home_stage","home_stand","mmd_houru","show_02","show_03","show_04","show_05","sequence","idle_01","idle_02"].filter { samples.contains($0) }.map { "snowbreak_"+$0 }
+                    actions = ["head","left","right","home_login","home_invite","home_shy","home_check","home_kiss","home_jealous","home_marry","home_sigh","home_stage","home_stand","show_02","show_03","show_04","show_05","sequence","idle_01","idle_02"].filter { samples.contains($0) }.map { "snowbreak_"+$0 }
                     if identity == "Fenny" {actions += DialogueMotion.fennyScenes.map(\.id).filter{samples.contains(String($0.dropFirst("snowbreak_".count)))}}
                 } else {
                     actions = samples.filter { !$0.contains("_reaction_") && $0.range(of:"^[a-zA-Z0-9_-]{1,64}$",options:.regularExpression) != nil }.map { "snowbreak_" + $0 }
@@ -427,14 +431,14 @@ struct SnowbreakImportView:View {
         NavigationStack {
             Form {
                 Section("3D 角色皮肤 · 本地导入") {
-                    Text("支持导入恩雅、芬妮、凯茜娅、琴诺、胧嫣、奈莉德、米娅、克罗瑞娜、奥古斯塔、清宵等 .snowbreak 角色皮肤包。可用模式、动作、场景和原声由素材包决定。")
+                    Text("支持导入恩雅、芬妮、凯茜娅、琴诺、胧嫣、奈莉德、米娅、克罗瑞娜等 .snowbreak 角色皮肤包。可用模式、动作、场景和原声由素材包决定。")
                     Button("选择角色皮肤包 (.snowbreak)") { picking = true }.accessibilityIdentifier("importSnowbreak")
                     Button("App 文件夹") { local = true }
                     if stage.library.hasCurrent { Text("已保存角色素材，下次启动会从本机加载。") }
                     if let error = stage.error { Text(error).foregroundStyle(.red) }
                 }
                 Section("通用 3D 动作包") {
-                    Text("导入 .qmotion 通用动作包后，恩雅、芬妮、奥古斯塔、清宵等所有 3D 角色均可使用该动作。")
+                    Text("导入 .qmotion 通用动作包后，所有已导入的 3D 角色均可使用该动作。")
                     Button("导入通用动作包 (.qmotion)") { pickingMotion = true }
                     if stage.library.hasUniversalMotions { Text("已安装通用 3D 动作包。").foregroundStyle(.secondary) }
                     if let notice = stage.notice, notice.contains("通用动作") { Text(notice).foregroundStyle(.secondary) }
