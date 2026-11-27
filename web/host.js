@@ -40,8 +40,8 @@ const emit=message=>{
 const text=value=>{status.textContent=value;status.hidden=!value;};
 function cleanup(){interactionDepth=0;window.__snowbreakMigration=null;pausedScene=null;modelEditor?.dispose();modelEditor=null;danceControls.close();learned=null;finishPaint.hidden=true;presentation?.dispose();lighting?.dispose();editor?.dispose();adapter?.stop('renderer-close');voices?.dispose();display?.dispose();void runtime?.dispose();lighting=presentation=editor=adapter=voices=display=runtime=null;editorHost.replaceChildren();}
 
-function load(url,id,variant){const ticket=++generation;const task=loading.catch(()=>{}).then(()=>ticket===generation?performLoad(url,id,variant,ticket):undefined);loading=task;return task;}
-async function performLoad(url,id,variant,ticket){
+function load(url,id,variant,preferredVariant){const ticket=++generation;const task=loading.catch(()=>{}).then(()=>ticket===generation?performLoad(url,id,variant,ticket,preferredVariant):undefined);loading=task;return task;}
+async function performLoad(url,id,variant,ticket,preferredVariant){
   nonce=id;paused=false;canvas.dataset.snowbreakPaused='false';
   if(variant&&collection?.manifest?.characterId){try{localStorage.setItem(collection.manifest.characterId.toLowerCase()+'-collection-selection',variant);}catch{}}
   cleanup();text('正在加载本地角色…');
@@ -54,6 +54,10 @@ async function performLoad(url,id,variant,ticket){
       const streamMatch=typeof url==='string'?url.match(/^companion-snowbreak:\/\/local\/package\/([A-Za-z0-9._-]+)$/):null;
       if(streamMatch){opened=await openStreamingSkinArchive(streamMatch[1]);}
       else{const response=await fetch(url);if(!response.ok)throw new Error('本地角色包读取失败');opened=await openSkinArchive(new Uint8Array(await response.arrayBuffer()));}
+      if(preferredVariant&&opened.variants?.some(v=>v.id===preferredVariant)&&opened.selection?.id!==preferredVariant){
+        void opened.runtime.dispose();
+        opened=await opened.selectVariant(preferredVariant);
+      }
     }
     if(!/^[A-Za-z0-9_-]{1,64}$/.test(opened.manifest.characterId))throw new Error('不支持的本地角色包');
     nextDisplay=await createSnowbreakRenderer(canvas,opened.runtime,{isCurrent:()=>ticket===generation,universalMotions,performanceMode:hardwareBudget.mode||null});
@@ -170,7 +174,7 @@ async function command(value){
     return;
   }
   if(value.type==='dispose'){generation++;cleanup();return;}
-  if(value.type==='load')return load(value.url,value.nonce);
+  if(value.type==='load')return load(value.url,value.nonce,null,value.preferredVariant||null);
   if(value.type==='variant'){if(!collection?.variants.some(v=>v.id===value.id))return;return load(null,nonce,value.id);}
   if(value.type==='voiceLanguage'){
     if(!['zh','ja'].includes(value.language))throw new Error('不支持的原声语言');originalLanguage=value.language==='ja'?'Japanese':'Chinese';

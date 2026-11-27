@@ -24,8 +24,12 @@ struct CompanionHome: View {
     @State private var arPlacementMode = false
     @State private var arVisionAttach = false
     @State private var cleanDeskMode = false
+    @State private var lastNormalCharacterID: String?
     @State private var lastPinchScale: CGFloat = 1
     @State private var lastRotateAngle: Angle = .zero
+    private var isHeimdallQ: Bool { snowbreak.characterID == "HeimdallQ" }
+    private var hasHeimdallQPack: Bool { snowbreak.savedCharacters.contains("HeimdallQ") }
+    private var isChibiActive: Bool { isHeimdallQ || proportionMode == "chibi" }
     private var orientationMode: AppOrientationMode { AppOrientationMode(rawValue: orientationModeRaw) ?? .auto }
     @State private var preparingSend = false
     @State private var photoPicker = false
@@ -174,8 +178,8 @@ struct CompanionHome: View {
                             else if isSnowbreak {
                                 ForEach(snowbreak.savedCharacters,id:\.self){id in Button("切换到\(SnowbreakStage.displayName(for: id))"){snowbreak.selectCharacter(id)}}
                                 Section("形态与比例") {
-                                    Button(proportionMode == "normal" ? "✓ 1:1 原比例" : "1:1 原比例") { setProportion("normal") }
-                                    Button(proportionMode == "chibi" ? "✓ Q版大头身" : "Q版大头身") { setProportion("chibi") }
+                                    Button(!isChibiActive ? "✓ 1:1 原比例" : "1:1 原比例") { toggleChibiMode(wantChibi: false) }
+                                    Button(isChibiActive ? "✓ 海姆达尔 Q版小人" : (hasHeimdallQPack ? "海姆达尔 Q版小人（官方小人）" : "Q版大头身（导入海姆达尔包享官方小人）")) { toggleChibiMode(wantChibi: true) }
                                 }
                                 if snowbreak.availableModes.count > 1 {
                                     Section("陪伴模式") {
@@ -184,9 +188,9 @@ struct CompanionHome: View {
                                     }
                                 }
                                 if snowbreak.availableOutfits.count > 1 {
-                                    Section("服饰／形态") {
+                                    Section(isHeimdallQ ? "切换海姆达尔 Q版小人" : "服饰／形态") {
                                         ForEach(snowbreak.availableOutfits, id:\.self) { outfit in
-                                            let title = outfit == "underwear" ? "婚纱内衣版" : outfit == "nude" ? "果体版" : outfit == "lv2" ? "Lv2 形态" : (snowbreak.characterID == "Fenny" ? "原婚纱" : "正常服饰")
+                                            let title = outfitDisplayLabel(outfit)
                                             Button(snowbreak.companionOutfit == outfit ? "✓ \(title)" : title) { snowbreak.selectVariant(outfit:outfit) }
                                         }
                                     }
@@ -250,8 +254,8 @@ struct CompanionHome: View {
                             }
                             if isSnowbreak {
                                 Divider()
-                                Button(proportionMode == "chibi" ? "切换回 1:1 原比例" : "切换为 Q版大头身") {
-                                    setProportion(proportionMode == "chibi" ? "normal" : "chibi")
+                                Button(isChibiActive ? "切换回 1:1 原比例" : "切换为海姆达尔 Q版小人") {
+                                    toggleChibiMode(wantChibi: !isChibiActive)
                                 }
                             }
                             Divider()
@@ -301,7 +305,7 @@ struct CompanionHome: View {
             }
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {
-            if !cleanDeskMode { composer }
+            if !cleanDeskMode && !(isSnowbreak && ar.active && (!ar.placed || arPlacementMode)) { composer }
         }
         .fullScreenCover(item: $sheet, onDismiss: {
             resumeStage()
@@ -380,7 +384,13 @@ struct CompanionHome: View {
         .onChange(of:engine) { _ in clearTouches();pendingMotionRevision = nil;nativeEditing = false;resumeStage() }
         .onChange(of:nativePresentation) { value in stage.setPresentation(value);value.save() }
         .onChange(of:showBackground) { value in snowbreak.sceneVisible(value) }
-        .onChange(of:snowbreak.ready) { ready in if !ready {clearTouches();waitingBodyAction=nil};if ready {store.activateCompanion(modelKey);snowbreak.sceneVisible(showBackground);snowbreak.setVoice(snowbreakVoice);snowbreak.setOriginalLanguage(store.archive.settings.speech?.language ?? "zh");snowbreak.setTouchPolicy(touchAI && !store.archive.settings.endpoint.isEmpty);snowbreak.setDeferredFeedback(deferredInteraction);snowbreak.setProportionMode(proportionMode);if ar.active { snowbreak.setARMode(true, hideRoom: ar.roomHidden) };greetIfReady() } }
+        .onChange(of: arPlacementMode) { placing in
+            ar.setShowReticle(!ar.placed || placing)
+        }
+        .onChange(of: ar.placed) { placed in
+            ar.setShowReticle(!placed || arPlacementMode)
+        }
+        .onChange(of:snowbreak.ready) { ready in if !ready {clearTouches();waitingBodyAction=nil};if ready {store.activateCompanion(modelKey);snowbreak.sceneVisible(showBackground);snowbreak.setVoice(snowbreakVoice);snowbreak.setOriginalLanguage(store.archive.settings.speech?.language ?? "zh");snowbreak.setTouchPolicy(touchAI && !store.archive.settings.endpoint.isEmpty);snowbreak.setDeferredFeedback(deferredInteraction);snowbreak.setProportionMode(isHeimdallQ ? "normal" : proportionMode);if ar.active { snowbreak.setARMode(true, hideRoom: ar.roomHidden) };greetIfReady() } }
         .onChange(of:snowbreak.characterID){_ in clearTouches();waitingBodyAction=nil;pendingMotionRevision=nil;speech.stop();store.activateCompanion(modelKey)}
         .onChange(of:snowbreakVoice) { value in snowbreak.setVoice(value) }
         .onChange(of:stage.name){_ in greetIfReady()}
@@ -440,7 +450,42 @@ struct CompanionHome: View {
     }
     private func setProportion(_ mode: String) {
         proportionMode = mode == "chibi" ? "chibi" : "normal"
-        snowbreak.setProportionMode(proportionMode)
+        snowbreak.setProportionMode(isHeimdallQ ? "normal" : proportionMode)
+    }
+    private func outfitDisplayLabel(_ outfit: String) -> String {
+        if let custom = snowbreak.variantLabels[snowbreak.companionMode + "_" + outfit] { return custom }
+        return outfit == "underwear" ? "婚纱内衣版" : outfit == "nude" ? "果体版" : outfit == "lv2" ? "Lv2 形态" : (snowbreak.characterID == "Fenny" ? "原婚纱" : "正常服饰")
+    }
+    private func preferredChibiVariant(for characterID: String) -> String? {
+        switch characterID {
+        case "Fenny": return "standing_fenny_starshine"
+        case "Katya": return "standing_katya"
+        case "Longyan": return "standing_longyan"
+        default: return nil
+        }
+    }
+    private func toggleChibiMode(wantChibi: Bool) {
+        if wantChibi {
+            if hasHeimdallQPack {
+                if !isHeimdallQ {
+                    lastNormalCharacterID = snowbreak.characterID
+                    proportionMode = "normal"
+                    snowbreak.selectCharacter("HeimdallQ", preferredVariant: preferredChibiVariant(for: snowbreak.characterID))
+                }
+            } else {
+                setProportion("chibi")
+            }
+        } else {
+            proportionMode = "normal"
+            if isHeimdallQ {
+                let target = lastNormalCharacterID ?? snowbreak.savedCharacters.first(where: { $0 != "HeimdallQ" })
+                if let target {
+                    snowbreak.selectCharacter(target)
+                }
+            } else {
+                snowbreak.setProportionMode("normal")
+            }
+        }
     }
     private var arPlacementOverlay: some View {
         ZStack {
@@ -448,6 +493,7 @@ struct CompanionHome: View {
                 .onTapGesture(coordinateSpace: .local) { point in
                     ar.placeAtScreenPoint(point)
                     arPlacementMode = false
+                    ar.setShowReticle(false)
                 }
                 .gesture(
                     MagnificationGesture()
@@ -467,32 +513,11 @@ struct CompanionHome: View {
                         }
                         .onEnded { _ in lastRotateAngle = .zero }
                 )
-            VStack(spacing: 12) {
-                Spacer()
-                if !ar.placed {
-                    Image(systemName: "viewfinder")
-                        .font(.system(size: 42, weight: .ultraLight))
-                        .foregroundStyle(.white.opacity(0.85))
-                }
-                VStack(spacing: 8) {
-                    Text(ar.statusHint.isEmpty ? "点桌面／地面重放 · 双指缩放与旋转" : ar.statusHint)
-                        .font(.caption).foregroundStyle(.white).multilineTextAlignment(.center)
-                    HStack(spacing: 10) {
-                        Button("立即放置面前") {
-                            ar.placeInFront()
-                            arPlacementMode = false
-                        }.font(.caption.bold()).padding(.horizontal, 14).padding(.vertical, 7)
-                            .background(.white, in: Capsule()).foregroundStyle(.black)
-                        if ar.placed {
-                            Button("完成调整") { arPlacementMode = false }
-                                .font(.caption).padding(.horizontal, 14).padding(.vertical, 7)
-                                .background(.ultraThinMaterial, in: Capsule()).foregroundStyle(.white)
-                        }
-                    }
-                }
-                .padding(.horizontal, 16).padding(.vertical, 10)
-                .background(.black.opacity(0.55), in: RoundedRectangle(cornerRadius: 18))
-                .padding(.bottom, 120)
+            if !ar.placed {
+                Image(systemName: "viewfinder")
+                    .font(.system(size: 38, weight: .ultraLight))
+                    .foregroundStyle(.white.opacity(0.65))
+                    .allowsHitTesting(false)
             }
         }
     }
@@ -501,18 +526,19 @@ struct CompanionHome: View {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 8) {
                     arPill("xmark", title: "退出AR", active: false) { toggleAR() }
-                    arPill(proportionMode == "chibi" ? "face.smiling.inverse" : "figure.stand",
-                           title: proportionMode == "chibi" ? "Q版大头" : "1:1原比",
-                           active: proportionMode == "chibi") {
-                        setProportion(proportionMode == "chibi" ? "normal" : "chibi")
+                    arPill(isChibiActive ? "face.smiling.inverse" : "figure.stand",
+                           title: isHeimdallQ ? "海姆达尔Q" : (proportionMode == "chibi" ? "Q版大头" : "1:1原比"),
+                           active: isChibiActive) {
+                        toggleChibiMode(wantChibi: !isChibiActive)
                     }
                     arPill("cube.transparent",
                            title: ar.scalePreset.label,
                            active: ar.scalePreset == .realScale) {
                         ar.setScalePreset(ar.scalePreset == .tabletop ? .realScale : .tabletop)
                     }
-                    arPill("scope", title: arPlacementMode ? "完成调整" : "放置/缩放", active: arPlacementMode) {
+                    arPill("scope", title: arPlacementMode || !ar.placed ? "调整中" : "放置/调高", active: arPlacementMode || !ar.placed) {
                         arPlacementMode.toggle()
+                        ar.setShowReticle(!ar.placed || arPlacementMode)
                     }
                     Menu {
                         if !snowbreak.universalARActions.isEmpty {
@@ -529,9 +555,9 @@ struct CompanionHome: View {
                             }
                         }
                         if snowbreak.availableOutfits.count > 1 {
-                            Section("服饰／形态") {
+                            Section(isHeimdallQ ? "切换海姆达尔 Q版小人" : "服饰／形态") {
                                 ForEach(snowbreak.availableOutfits, id: \.self) { outfit in
-                                    let title = outfit == "underwear" ? "婚纱内衣版" : outfit == "nude" ? "果体版" : outfit == "lv2" ? "Lv2 形态" : (snowbreak.characterID == "Fenny" ? "原婚纱" : "正常服饰")
+                                    let title = outfitDisplayLabel(outfit)
                                     Button(snowbreak.companionOutfit == outfit ? "✓ \(title)" : title) { snowbreak.selectVariant(outfit: outfit) }
                                 }
                             }
@@ -594,6 +620,47 @@ struct CompanionHome: View {
                     arPill("eye", title: "纯净", active: false) { cleanDeskMode = true }
                 }.padding(.horizontal, 14)
             }.padding(.top, 8)
+            if !ar.placed || arPlacementMode {
+                VStack(spacing: 8) {
+                    Text(ar.statusHint.isEmpty ? "点地面／桌面重放 · 双指缩放旋转 · 可微调贴地高度" : ar.statusHint)
+                        .font(.caption2).foregroundStyle(.white).multilineTextAlignment(.center)
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 8) {
+                            Button(ar.placed ? "完成调整" : "确认放置") {
+                                if !ar.placed { ar.confirmCurrentPlacement() }
+                                arPlacementMode = false
+                                ar.setShowReticle(false)
+                            }
+                            .font(.caption.bold()).padding(.horizontal, 14).padding(.vertical, 7)
+                            .background(.white, in: Capsule()).foregroundStyle(.black)
+
+                            Button("自动吸地") { ar.snapToDetectedFloor() }
+                                .font(.caption.weight(.medium)).padding(.horizontal, 11).padding(.vertical, 7)
+                                .background(Color.teal.opacity(0.75), in: Capsule()).foregroundStyle(.white)
+
+                            Button("降落 ↓") { ar.adjustHeight(delta: -0.06) }
+                                .font(.caption).padding(.horizontal, 10).padding(.vertical, 7)
+                                .background(.ultraThinMaterial, in: Capsule()).foregroundStyle(.white)
+
+                            Button("抬高 ↑") { ar.adjustHeight(delta: 0.06) }
+                                .font(.caption).padding(.horizontal, 10).padding(.vertical, 7)
+                                .background(.ultraThinMaterial, in: Capsule()).foregroundStyle(.white)
+
+                            Button("缩小 -") { ar.adjustScale(factor: 0.85) }
+                                .font(.caption).padding(.horizontal, 10).padding(.vertical, 7)
+                                .background(.ultraThinMaterial, in: Capsule()).foregroundStyle(.white)
+
+                            Button("放大 +") { ar.adjustScale(factor: 1.18) }
+                                .font(.caption).padding(.horizontal, 10).padding(.vertical, 7)
+                                .background(.ultraThinMaterial, in: Capsule()).foregroundStyle(.white)
+                        }
+                    }
+                }
+                .padding(.horizontal, 12).padding(.vertical, 9)
+                .background(.black.opacity(0.62), in: RoundedRectangle(cornerRadius: 16))
+                .overlay(RoundedRectangle(cornerRadius: 16).stroke(.white.opacity(0.2)))
+                .padding(.horizontal, 14)
+            }
             Spacer()
         }
     }

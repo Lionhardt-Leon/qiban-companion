@@ -3,9 +3,15 @@ import {validateSkinManifest,createSkinRuntime} from './skin-runtime.js';
 import {createVerifiedAssetAdapter} from './asset-adapter.js';
 function parseCollection(input,expectedNames){
   let variants=null;
-  if(input.schema==='snowbreak-collection/1'){
-    if(!/^[A-Za-z0-9_-]{1,64}$/.test(input.characterId)||!Array.isArray(input.variants)||![1,2,4].includes(input.variants.length))throw new Error('Invalid character collection');
-    const ids=new Set();variants=input.variants.map(v=>{if(!['standing','interaction'].includes(v.mode)||!['normal','nude','underwear','lv2'].includes(v.outfit)||v.id!==v.mode+'_'+v.outfit||ids.has(v.id))throw new Error('Invalid collection variant');ids.add(v.id);return {...v,manifest:validateSkinManifest(v.manifest)};});
+  if(input.schema==='snowbreak-collection/1'||input.schema==='snowbreak-chibi-collection/1'){
+    const isChibiCol=input.schema==='snowbreak-chibi-collection/1';
+    if(!/^[A-Za-z0-9_-]{1,64}$/.test(input.characterId)||!Array.isArray(input.variants)||(isChibiCol?(input.variants.length<1||input.variants.length>16):![1,2,4].includes(input.variants.length)))throw new Error('Invalid character collection');
+    const ids=new Set();variants=input.variants.map(v=>{
+      const validOutfit=isChibiCol?/^[a-z0-9_]{1,32}$/.test(v.outfit):['normal','nude','underwear','lv2'].includes(v.outfit);
+      const validMode=isChibiCol?v.mode==='standing':['standing','interaction'].includes(v.mode);
+      if(!validMode||!validOutfit||v.id!==v.mode+'_'+v.outfit||ids.has(v.id))throw new Error('Invalid collection variant');
+      ids.add(v.id);return {...v,manifest:validateSkinManifest(v.manifest)};
+    });
     if(!ids.has(input.defaultVariant)||variants.some(v=>v.manifest.characterId!==input.characterId))throw new Error('Invalid collection default');
   }
   const manifests=variants?variants.map(v=>v.manifest):[validateSkinManifest(input)];
@@ -28,7 +34,7 @@ export async function openStreamingSkinArchive(packageName){
   async function selectVariant(id){
     const selected=variants?.find(v=>v.id===id);if(variants&&!selected)throw new Error('Variant unavailable');
     const manifest=selected?.manifest||manifests[0],runtime=createSkinRuntime(createVerifiedAssetAdapter(readRemoteAsset));
-    await runtime.load(manifest);return {runtime,manifest,selection:selected?{id:selected.id,mode:selected.mode,outfit:selected.outfit}:null,variants:variants?.map(({id,mode,outfit})=>({id,mode,outfit}))||[],selectVariant};
+    await runtime.load(manifest);return {runtime,manifest,selection:selected?{id:selected.id,mode:selected.mode,outfit:selected.outfit,...(selected.label?{label:selected.label}:{})}:null,variants:variants?.map(({id,mode,outfit,label})=>({id,mode,outfit,...(label?{label}:{})}))||[],selectVariant};
   }
   let saved;try{saved=localStorage.getItem(input.characterId.toLowerCase()+'-collection-selection');}catch{}
   return selectVariant(variants?.some(v=>v.id===saved)?saved:input.defaultVariant);
@@ -48,7 +54,7 @@ export async function openSkinArchive(bytes){
   async function selectVariant(id){
     const selected=variants?.find(v=>v.id===id);if(variants&&!selected)throw new Error('Variant unavailable');
     const manifest=selected?.manifest||manifests[0],runtime=createSkinRuntime(createVerifiedAssetAdapter(async assetId=>readEntry('assets/'+assetId)));
-    await runtime.load(manifest);return {runtime,manifest,selection:selected?{id:selected.id,mode:selected.mode,outfit:selected.outfit}:null,variants:variants?.map(({id,mode,outfit})=>({id,mode,outfit}))||[],selectVariant};
+    await runtime.load(manifest);return {runtime,manifest,selection:selected?{id:selected.id,mode:selected.mode,outfit:selected.outfit,...(selected.label?{label:selected.label}:{})}:null,variants:variants?.map(({id,mode,outfit,label})=>({id,mode,outfit,...(label?{label}:{})}))||[],selectVariant};
   }
   let saved;try{saved=localStorage.getItem(input.characterId.toLowerCase()+'-collection-selection');}catch{}
   return selectVariant(variants?.some(v=>v.id===saved)?saved:input.defaultVariant);

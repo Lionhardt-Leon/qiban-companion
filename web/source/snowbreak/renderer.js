@@ -199,7 +199,7 @@ export async function createSnowbreakRenderer(canvas,runtime,{isCurrent=()=>true
       }
     }
     const touchBindings=validateTouchBindings(catalog);
-    function selectSample(id){const sample=samples.get(id);if(!sample)throw new Error('Unknown sample');activeOverlay=sample.overlay?(poseMode==='sample'&&activeOverlay?activeOverlay:{bindings:poseMode==='standby'?standbyBindings:selectedBindings,duration:poseMode==='standby'?standbyDuration:selectedDuration,time:sampleTime,envelope:sceneEnvelope}):null;selectedId=id;selectedBindings=sample.bindings;selectedDuration=sample.duration;const frameSample=samples.get(sample.sceneOf)||sample;const nextEnvelope=sample.overlay?activeOverlay.envelope:frameSample.sceneFraming?framingByClip.get(frameSample.sourceSha256):null;if(sample.sceneFraming&&!nextEnvelope)throw new Error('Scene framing envelope missing');const sourceYaw=localScene.setAnchor?.(frameSample.id??id);let refit=sceneEnvelope!==nextEnvelope;if(sourceYaw!==null&&sourceYaw!==undefined){const yaw=-Math.PI/2+THREE.MathUtils.degToRad(sourceYaw);refit ||=Math.abs(baseYaw-yaw)>1e-8;baseYaw=yaw;autoYaw=0;orient();}sceneEnvelope=nextEnvelope;seek(0);if(!localScene.snapshot().available&&frameSample.sceneFraming){correctFacing();refit=true;}if(refit)fit();return {id,label:sample.label,duration:sample.duration};}
+    function selectSample(id){const sample=samples.get(id);if(!sample)throw new Error('Unknown sample');activeOverlay=sample.overlay?(poseMode==='sample'&&activeOverlay?activeOverlay:{bindings:poseMode==='standby'?standbyBindings:selectedBindings,duration:poseMode==='standby'?standbyDuration:selectedDuration,time:sampleTime,envelope:sceneEnvelope}):null;selectedId=id;selectedBindings=sample.bindings;selectedDuration=sample.duration;const frameSample=samples.get(sample.sceneOf)||sample;const nextEnvelope=sample.overlay?activeOverlay.envelope:frameSample.sceneFraming?framingByClip.get(frameSample.sourceSha256):null;if(sample.sceneFraming&&!nextEnvelope)throw new Error('Scene framing envelope missing');const sourceYaw=localScene.setAnchor?.(frameSample.id??id);let refit=sceneEnvelope!==nextEnvelope;if(sourceYaw!==null&&sourceYaw!==undefined){const yaw=-Math.PI/2+THREE.MathUtils.degToRad(sourceYaw);refit ||=Math.abs(baseYaw-yaw)>1e-8;baseYaw=yaw;autoYaw=0;orient();}sceneEnvelope=nextEnvelope;seek(0);if(arActive)arGroundDirty=true;if(!localScene.snapshot().available&&frameSample.sceneFraming){correctFacing();refit=true;}if(refit)fit();return {id,label:sample.label,duration:sample.duration};}
     function seek(seconds,list=selectedBindings,length=selectedDuration){if(disposed||!Number.isFinite(seconds))return;const overlay=activeOverlay&&list===selectedBindings?activeOverlay:null;if(overlay&&overlay.duration>0)seek((overlay.time+seconds)%overlay.duration,overlay.bindings,overlay.duration);const previousMode=poseMode;activeFramingHash=list[0]?.clip?.generatorMetadata?.sourceSha256||null;poseMode=list===standbyBindings&&standbyDuration>0?'standby':'sample';sampleTime=Math.max(0,Math.min(length,seconds));for(const {bone,track,clip:c} of list){const f=sampleTime*c.fps,lo=Math.min(Math.floor(f),c.frames-1),hi=Math.min(lo+1,c.frames-1),t=f-lo,a=track.keys[lo],b=track.keys[hi];if(!overlay||!bodyBoneSet.has(bone))bone.position.set(THREE.MathUtils.lerp(a[0],b[0],t),THREE.MathUtils.lerp(a[1],b[1],t),THREE.MathUtils.lerp(a[2],b[2],t));bone.quaternion.copy(q0.fromArray(a,3).slerp(q1.fromArray(b,3),t));if(!overlay||!bodyBoneSet.has(bone))bone.scale.set(THREE.MathUtils.lerp(a[7],b[7],t),THREE.MathUtils.lerp(a[8],b[8],t),THREE.MathUtils.lerp(a[9],b[9],t));}morphCurves.apply((list.find(binding=>!bodyBoneSet.has(binding.bone))||list[0])?.clip,sampleTime);if(rootLock){root.position.x=root.position.z=0;group.updateMatrixWorld(true);const point=root.getObjectByName(rootLock.bone).getWorldPosition(new THREE.Vector3()).applyMatrix4(root.matrixWorld.clone().invert());root.position.x=rootLock.reference[0]-point.x;root.position.z=rootLock.reference[1]-point.z;}group.updateMatrixWorld(true);lastSkeletonUpdates=skeletons.length;for(const skeleton of skeletons)skeleton.update();}
     group.updateMatrixWorld(true);const facingBone=root.getObjectByName('Bip001-Pelvis')||root.getObjectByName('Bip001');
     if(facingBone){const q=facingBone.getWorldQuaternion(new THREE.Quaternion());const axis=[new THREE.Vector3(1,0,0),new THREE.Vector3(0,1,0),new THREE.Vector3(0,0,1)].sort((a,b)=>{const av=a.clone().applyQuaternion(q),bv=b.clone().applyQuaternion(q);return Math.hypot(bv.x,bv.z)-Math.hypot(av.x,av.z);})[0];const v=axis.clone().applyQuaternion(q);facingReference={bone:facingBone,axis,heading:Math.atan2(v.x,v.z)};}
@@ -254,16 +254,47 @@ export async function createSnowbreakRenderer(canvas,runtime,{isCurrent=()=>true
     }
     function computeArGroundOffset(){
       restoreChibi();
+      const prevPos=characterGroup.position.clone();
+      const prevScale=characterGroup.scale.clone();
+      characterGroup.position.set(0,0,0);
+      characterGroup.scale.setScalar(1);
       group.updateMatrixWorld(true);
-      const box=new THREE.Box3();
-      root.traverse(m=>{if(m.isSkinnedMesh){m.skeleton.update();m.computeBoundingBox();if(m.boundingBox)box.union(m.boundingBox.clone().applyMatrix4(m.matrixWorld));}});
-      const localMin=box.isEmpty()?0:box.min.y;
-      return Number.isFinite(localMin)?-localMin:0;
+      let minY=Infinity;
+      const v=new THREE.Vector3();
+      root.traverse(m=>{
+        if(!m.isSkinnedMesh||!m.geometry?.attributes?.position)return;
+        m.skeleton.update();
+        const count=m.geometry.attributes.position.count;
+        const stride=Math.max(1,Math.floor(count/900));
+        for(let i=0;i<count;i+=stride){
+          m.getVertexPosition(i,v).applyMatrix4(m.matrixWorld);
+          if(Number.isFinite(v.y)&&v.y<minY)minY=v.y;
+        }
+      });
+      if(!Number.isFinite(minY)){
+        const box=new THREE.Box3().setFromObject(root);
+        minY=box.isEmpty()?0:box.min.y;
+      }
+      characterGroup.position.copy(prevPos);
+      characterGroup.scale.copy(prevScale);
+      group.updateMatrixWorld(true);
+      return Number.isFinite(minY)?-minY:0;
+    }
+    let arGroundDirty=false;
+    function regroundAR(){
+      if(!arActive||disposed)return;
+      arBaseOffsetY=computeArGroundOffset();
+      characterGroup.position.set(0,arBaseOffsetY,0);
+      characterGroup.scale.setScalar(1);
+      shadowCatcher.position.set(0,0,0);
+      orient();
+      arGroundDirty=false;
     }
     function setARMode(enabled,{hideRoom=true}={}){
       const next=!!enabled;
       if(next===arActive){
         if(next&&hideRoom!==arRoomHidden){arRoomHidden=!!hideRoom;if(localScene?.snapshot?.().available){localScene.setVisible(!arRoomHidden);localScene.setRoomVisible(!arRoomHidden);}}
+        if(next)regroundAR();
         return arState();
       }
       arActive=next;
@@ -276,17 +307,16 @@ export async function createSnowbreakRenderer(canvas,runtime,{isCurrent=()=>true
         camera.matrixAutoUpdate=false;
         camera.clearViewOffset?.();
         camera.zoom=1;
-        arBaseOffsetY=computeArGroundOffset();
-        characterGroup.position.set(0,arBaseOffsetY,0);
-        characterGroup.scale.setScalar(1);
         shadowCatcher.position.set(0,0,0);
         shadowCatcher.visible=true;
-        orient();
+        regroundAR();
+        arGroundDirty=true;
         const arBox=new THREE.Box3(new THREE.Vector3(-0.9,0,-0.9),new THREE.Vector3(0.9,1.8,0.9));
         lighting.frame(arBox);
       }else{
         camera.matrixAutoUpdate=true;
         shadowCatcher.visible=false;
+        arGroundDirty=false;
         if(arSavedScene!==null){localScene?.setVisible?.(arSavedScene);arSavedScene=null;}
         if(arSavedRoom!==null){localScene?.setRoomVisible?.(arSavedRoom);arSavedRoom=null;}
         if(arSavedLighting){try{lighting.set({exposure:arSavedLighting.exposure,warmth:arSavedLighting.warmth});}catch{}arSavedLighting=null;}
@@ -319,7 +349,7 @@ export async function createSnowbreakRenderer(canvas,runtime,{isCurrent=()=>true
       }
     }
     const arState=()=>({active:arActive,roomHidden:arRoomHidden,shadowCatcher:shadowCatcher.visible,groundOffsetY:arBaseOffsetY,proportionMode,chibiBlend});
-    fit();await renderer.compileAsync(scene,camera);checkCurrent();addEventListener('resize',fit);renderer.setAnimationLoop(()=>{if(canvas.dataset.snowbreakPaused==='true'||document.hidden){budget.resetClock();return;}if(!budget.begin())return;const ratio=budget.ratio(canvas.clientWidth||innerWidth,canvas.clientHeight||innerHeight,devicePixelRatio||1);if(Math.abs(ratio-budgetRatio)>.02){budgetRatio=ratio;fit();}restoreChibi();embodiment.restore();sceneInteractions.restore();senses.restore();onFrame?.();embodiment.tick();sceneInteractions.tick();senses.tick();applyChibi();surfaceOverlay.update();postFx.render(scene,camera);});
+    fit();await renderer.compileAsync(scene,camera);checkCurrent();addEventListener('resize',fit);renderer.setAnimationLoop(()=>{if(canvas.dataset.snowbreakPaused==='true'||document.hidden){budget.resetClock();return;}if(!budget.begin())return;const ratio=budget.ratio(canvas.clientWidth||innerWidth,canvas.clientHeight||innerHeight,devicePixelRatio||1);if(Math.abs(ratio-budgetRatio)>.02){budgetRatio=ratio;fit();}restoreChibi();embodiment.restore();sceneInteractions.restore();senses.restore();onFrame?.();embodiment.tick();sceneInteractions.tick();senses.tick();if(arActive&&arGroundDirty)regroundAR();applyChibi();surfaceOverlay.update();postFx.render(scene,camera);});
     const materialState=()=>{const result=[];root.traverse(m=>{if(m.isMesh)result.push({name:m.userData.snowbreakMaterialName,textured:!!m.userData.previewMap,normalMapped:!!m.material.normalMap,diffuseSize:m.material.map?[m.material.map.image.width,m.material.map.image.height]:null,normalSize:m.material.normalMap?[m.material.normalMap.image.width,m.material.normalMap.image.height]:null,anisotropy:m.material.map?.anisotropy||0,profile:m.material.userData.profile,alphaTest:m.material.alphaTest});});return result;};
     const setTexturePreview=enabled=>root.traverse(m=>{if(m.isMesh){m.material.map=enabled?m.userData.previewMap:null;m.material.color.set(m.material.map?0xffffff:0xcac7c3);m.material.needsUpdate=true;}});
     const faceCandidateState=()=>({available:!!faceRoot,visible:!!faceRoot?.visible,originalAssemblyVerified:false});

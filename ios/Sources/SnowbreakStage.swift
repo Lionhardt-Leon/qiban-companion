@@ -5,7 +5,7 @@ import Compression
 struct SnowbreakLibrary {
     static let maxPackageBytes = 1024 * 1024 * 1024 // 1 GB compressed (ready for interactive rooms)
     static let maxDecodedBytes = 1536 * 1024 * 1024 // 1.5 GB decoded
-    static let supportedCharacters = ["Enya","Fenny","Katya","Cherno","Longyan","Nerida","Mia","Clarina"]
+    static let supportedCharacters = ["Enya","Fenny","Katya","Cherno","Longyan","Nerida","Mia","Clarina","HeimdallQ"]
     let directory: URL
     init(directory: URL? = nil) {
         self.directory = directory ?? FileManager.default.urls(for:.applicationSupportDirectory,in:.userDomainMask)[0]
@@ -296,6 +296,7 @@ struct SnowbreakTouchEvent {
         case "Nerida": return "奈莉德 · 热沙激浪"
         case "Mia": return "米娅 · 星空魅影"
         case "Clarina": return "克罗瑞娜 · 绯月"
+        case "HeimdallQ": return "海姆达尔 · Q版小人"
         default: return "恩雅护士"
         }
     }
@@ -329,11 +330,22 @@ struct SnowbreakTouchEvent {
     @Published private(set) var companionMode = "standing"
     @Published private(set) var companionOutfit = "normal"
     @Published private(set) var variantIDs:[String] = []
+    @Published private(set) var variantLabels:[String:String] = [:]
+    private var pendingPreferredVariant: String?
     @Published private(set) var bodyActions:[String] = []
     @Published private(set) var bodyState = BodyState()
-    var outfitLabel:String {companionOutfit == "underwear" ? "婚纱内衣版":companionOutfit == "nude" ? "果体版":companionOutfit == "lv2" ? "Lv2 形态":characterID == "Fenny" ? "原婚纱":"正常服饰"}
+    var outfitLabel:String {
+        if let custom = variantLabels[companionMode + "_" + companionOutfit] { return custom }
+        return companionOutfit == "underwear" ? "婚纱内衣版":companionOutfit == "nude" ? "果体版":companionOutfit == "lv2" ? "Lv2 形态":characterID == "Fenny" ? "原婚纱":"正常服饰"
+    }
     var availableModes:[String] { ["standing","interaction"].filter { m in variantIDs.contains { $0.hasPrefix(m+"_") } } }
-    var availableOutfits:[String] { ["normal","nude","underwear","lv2"].filter { o in variantIDs.contains(companionMode+"_"+o) } }
+    var availableOutfits:[String] {
+        if characterID == "HeimdallQ" {
+            let prefix = companionMode + "_"
+            return variantIDs.filter { $0.hasPrefix(prefix) }.map { String($0.dropFirst(prefix.count)) }
+        }
+        return ["normal","nude","underwear","lv2"].filter { o in variantIDs.contains(companionMode+"_"+o) }
+    }
     var dialogueActions:[String] {
         guard ready else{return []}
         var result=actions+bodyActions
@@ -471,7 +483,9 @@ struct SnowbreakTouchEvent {
         guard let file = file else { error = "请在设置中导入本地角色 .snowbreak 包。";return }
         applyHardwareBudget()
         pushUniversalMotions()
-        send(["type":"load","url":"companion-snowbreak://local/package/"+file.lastPathComponent,"nonce":nonce])
+        var payload:[String:Any] = ["type":"load","url":"companion-snowbreak://local/package/"+file.lastPathComponent,"nonce":nonce]
+        if let pref = pendingPreferredVariant { payload["preferredVariant"] = pref; pendingPreferredVariant = nil }
+        send(payload)
     }
     private func send(_ value:[String:Any]) {
         guard pageReady,let data = try? JSONSerialization.data(withJSONObject:value),let json = String(data:data,encoding:.utf8) else { return }
@@ -506,7 +520,19 @@ struct SnowbreakTouchEvent {
                 characterID=identity;savedCharacters=library.savedCharacters
                 let variants = body["variants"] as? [[String:String]] ?? []
                 let allowedVariants: Set<String> = ["standing_normal","standing_nude","standing_underwear","standing_lv2","interaction_normal","interaction_nude","interaction_underwear","interaction_lv2"]
-                variantIDs = variants.compactMap { v in guard let id=v["id"],allowedVariants.contains(id) else { return nil };return id }
+                var vIDs: [String] = []
+                var vLabels: [String:String] = [:]
+                for v in variants {
+                    guard let id = v["id"] else { continue }
+                    let ok = identity == "HeimdallQ"
+                        ? id.range(of: "^standing_[a-z0-9_]{1,32}$", options: .regularExpression) != nil
+                        : allowedVariants.contains(id)
+                    guard ok else { continue }
+                    vIDs.append(id)
+                    if let lbl = v["label"], !lbl.isEmpty { vLabels[id] = lbl }
+                }
+                variantIDs = vIDs
+                variantLabels = vLabels
                 if let selected=body["selection"] as? [String:String] { companionMode=selected["mode"] ?? "standing";companionOutfit=selected["outfit"] ?? "normal" }
                 else {companionMode = body["stance"] as? String == "standing" ? "standing":"interaction";companionOutfit = "normal"}
                 let samples = body["samples"] as? [String] ?? []
@@ -586,9 +612,15 @@ struct SnowbreakTouchEvent {
     func officialTouchPoints(){send(["type":"officialTouchPoints"])}
     func sceneVisible(_ value:Bool) { send(["type":"scene","visible":value]) }
     func gaze(x:CGFloat,y:CGFloat) { if ready { send(["type":"gaze","x":Double(x),"y":Double(y)]) } }
-    func selectCharacter(_ identity:String){
-        guard SnowbreakLibrary.supportedCharacters.contains(identity),identity != characterID else{return}
-        do {let file=library.savedFile(identity);guard FileManager.default.fileExists(atPath:file.path) else{return};interactionRevision+=1;pause();paused=false;schemeHandler?.clearCache();staged=try library.stageFile(file);nonce=UUID().uuidString;ready=false;error=nil;loadSelected()}catch{self.error=error.localizedDescription}
+    func selectCharacter(_ identity:String, preferredVariant:String? = nil){
+        guard SnowbreakLibrary.supportedCharacters.contains(identity) else{return}
+        if identity == characterID {
+            if let pref = preferredVariant, pref.hasPrefix(companionMode + "_") {
+                selectVariant(outfit: String(pref.dropFirst((companionMode + "_").count)))
+            }
+            return
+        }
+        do {let file=library.savedFile(identity);guard FileManager.default.fileExists(atPath:file.path) else{return};interactionRevision+=1;pause();paused=false;schemeHandler?.clearCache();staged=try library.stageFile(file);pendingPreferredVariant=preferredVariant;nonce=UUID().uuidString;ready=false;error=nil;loadSelected()}catch{self.error=error.localizedDescription}
     }
     func editLighting() { send(["type":"lightingEdit"]) }
     func editFrame() { interactionRevision += 1;isEditing=true;send(["type":"frameEdit"]) }
@@ -669,7 +701,7 @@ struct SnowbreakImportView:View {
         NavigationStack {
             Form {
                 Section("3D 角色皮肤 · 本地导入") {
-                    Text("支持导入恩雅、芬妮、凯茜娅、琴诺、胧嫣、奈莉德、米娅、克罗瑞娜等 .snowbreak 角色皮肤包。可用模式、动作、场景和原声由素材包决定。")
+                    Text("支持导入恩雅、芬妮、凯茜娅、琴诺、胧嫣、奈莉德、米娅、克罗瑞娜及「海姆达尔向前冲 Q版小人合集」等 .snowbreak 角色包。可用模式、动作、场景和原声由素材包决定。")
                     Button("选择角色皮肤包 (.snowbreak)") { picking = true }.accessibilityIdentifier("importSnowbreak")
                     Button("App 文件夹") { local = true }
                     if stage.library.hasCurrent { Text("已保存角色素材，下次启动会从本机加载。") }
