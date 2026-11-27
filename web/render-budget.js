@@ -9,8 +9,8 @@ export function createRenderBudget({now=()=>performance.now()}={}){
   return thermal==='critical'?20:lowPower||thermal==='serious'?30:60;
  };
  function ratio(w,h,dpr){
-  const cap=mode==='quality'?6000000:mode==='battery'?1400000:3000000;
-  const budget=mode==='quality'?(thermal==='critical'?2000000:cap):(thermal==='critical'?1000000:thermal==='serious'?1600000:cap);
+  const cap=mode==='quality'?9000000:mode==='battery'?1400000:4500000;
+  const budget=mode==='quality'?(thermal==='critical'?3000000:cap):(thermal==='critical'?1200000:thermal==='serious'?2200000:cap);
   const s=mode==='quality'?1:scale;
   return Math.max(.5,Math.min(dpr||1,3,Math.sqrt(budget/Math.max(1,w*h)))*s);
  }
